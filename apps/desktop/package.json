@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "dependencies": {
     "@crypto-control/core": "*",
+    "@crypto-control/coinbase-sync": "*",
     "@crypto-control/database": "*",
     "@crypto-control/market-data": "*"
   },

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { FullCryptoControlAPI, CreateTransactionInput } from "@crypto-control/core";
+import type { FullCryptoControlAPI, CreateTransactionInput, CoinbaseCredentials } from "@crypto-control/core";
 
 const cryptoControl: FullCryptoControlAPI = {
   assets: {
@@ -23,7 +23,13 @@ const cryptoControl: FullCryptoControlAPI = {
   settings: {
     get: (key: string) => ipcRenderer.invoke("settings:get", key),
     update: (key: string, value: string) => ipcRenderer.invoke("settings:update", key, value),
-  }
+  },
+  coinbase: {
+    connect: (credentials: CoinbaseCredentials) => ipcRenderer.invoke("coinbase:connect", credentials),
+    disconnect: () => ipcRenderer.invoke("coinbase:disconnect"),
+    getStatus: () => ipcRenderer.invoke("coinbase:get-status"),
+    sync: () => ipcRenderer.invoke("coinbase:sync"),
+  },
 };
 
 contextBridge.exposeInMainWorld("cryptoControl", cryptoControl);

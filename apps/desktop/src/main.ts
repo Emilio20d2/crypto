@@ -246,6 +246,62 @@ function setupIpcHandlers() {
       });
     return null;
   }));
+
+  // Coinbase sync handlers
+  const { CoinbaseCredentialsManager, CoinbaseClient, CoinbaseSyncService } =
+    require("@crypto-control/coinbase-sync") as typeof import("@crypto-control/coinbase-sync");
+
+  const credsMgr = new CoinbaseCredentialsManager();
+
+  ipcMain.handle("coinbase:connect", withResult(async (_, creds: { apiKeyName: string; privateKeyPem: string }) => {
+    if (!creds?.apiKeyName || !creds?.privateKeyPem) {
+      throw new Error("Se requieren apiKeyName y privateKeyPem");
+    }
+    // Test the connection before saving credentials
+    const client = new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem);
+    await client.testConnection();
+    // Only save after successful connection test
+    credsMgr.saveCredentials(creds);
+    return { connected: true };
+  }));
+
+  ipcMain.handle("coinbase:disconnect", withResult(async () => {
+    credsMgr.deleteCredentials();
+    return null;
+  }));
+
+  ipcMain.handle("coinbase:get-status", withResult(async () => {
+    const connected = credsMgr.hasCredentials();
+    const syncDb = getDb();
+    const syncService = connected
+      ? (() => {
+          const c = credsMgr.getCredentials()!;
+          return new CoinbaseSyncService(syncDb, schema, new CoinbaseClient(c.apiKeyName, c.privateKeyPem));
+        })()
+      : null;
+
+    const syncStatus = syncService ? syncService.getStatus() : {
+      lastSyncAt: null,
+      lastSyncItemsProcessed: null,
+      lastSyncStatus: null,
+      lastSyncError: null,
+    };
+
+    return {
+      connected,
+      ...syncStatus,
+    };
+  }));
+
+  ipcMain.handle("coinbase:sync", withResult(async () => {
+    const creds = credsMgr.getCredentials();
+    if (!creds) throw new Error("No hay credenciales de Coinbase. Conéctate primero.");
+
+    const syncDb = getDb();
+    const client = new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem);
+    const syncService = new CoinbaseSyncService(syncDb, schema, client);
+    return await syncService.syncWithErrorHandling();
+  }));
 }
 
 function createWindow() {

@@ -5,6 +5,7 @@ import { Portfolio } from "./pages/Portfolio";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Operaciones } from "./pages/Operaciones";
 import { Mercado } from "./pages/Mercado";
+import { Coinbase } from "./pages/Coinbase";
 import logoUrl from "./assets/logo.png";
 
 const queryClient = new QueryClient({
@@ -28,6 +29,7 @@ function Layout({ children }: { children: ReactNode }) {
           <NavLink to="/" className={({ isActive }) => isActive ? "nav-link active" : "nav-link"}>Cartera</NavLink>
           <NavLink to="/mercado" className={({ isActive }) => isActive ? "nav-link active" : "nav-link"}>Mercado</NavLink>
           <NavLink to="/operaciones" className={({ isActive }) => isActive ? "nav-link active" : "nav-link"}>Operaciones</NavLink>
+          <NavLink to="/coinbase" className={({ isActive }) => isActive ? "nav-link active" : "nav-link"}>Coinbase</NavLink>
         </nav>
       </aside>
       <main className="main-content">
@@ -47,6 +49,7 @@ export default function App() {
               <Route path="/" element={<Portfolio />} />
               <Route path="/mercado" element={<Mercado />} />
               <Route path="/operaciones" element={<Operaciones />} />
+              <Route path="/coinbase" element={<Coinbase />} />
             </Routes>
           </ErrorBoundary>
         </Layout>
