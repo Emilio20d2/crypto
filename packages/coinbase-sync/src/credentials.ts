@@ -1,4 +1,5 @@
-import { execFileSync, spawnSync } from "child_process";
+import { spawnSync } from "child_process";
+import * as path from "path";
 import type { CoinbaseCredentials } from "./types";
 
 // New CDP-specific keychain service names
@@ -13,48 +14,45 @@ const LEGACY_SERVICE          = "crypto-control-coinbase";
 const LEGACY_ACCT_KEY_NAME    = "api-key-name";
 const LEGACY_ACCT_PRIVATE_KEY = "private-key-pem";
 
-function keychainGet(service: string, account: string): string | null {
-  try {
-    const result = execFileSync(
-      "security",
-      ["find-generic-password", "-s", service, "-a", account, "-w"],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
-    ).trim();
-    return result || null;
-  } catch {
-    return null;
+// Compiled Swift helper: reads/writes Keychain without putting secrets in args
+function helperPath(): string {
+  if (process.env["KEYCHAIN_HELPER_PATH"]) {
+    return process.env["KEYCHAIN_HELPER_PATH"];
   }
+  // In production the binary is alongside the app resources;
+  // in development it lives next to this package under apps/desktop/bin/
+  return path.resolve(
+    __dirname,
+    "../../../apps/desktop/bin/keychain-helper"
+  );
 }
 
 function keychainSet(service: string, account: string, value: string): void {
-  try {
-    execFileSync(
-      "security",
-      ["delete-generic-password", "-s", service, "-a", account],
-      { stdio: "ignore" }
-    );
-  } catch {}
-
-  // Use -i so the value is never visible in process arguments
   const result = spawnSync(
-    "security",
-    ["add-generic-password", "-s", service, "-a", account, "-i"],
-    { input: value, stdio: ["pipe", "ignore", "ignore"] }
+    helperPath(),
+    ["set", service, account],
+    { input: value, stdio: ["pipe", "ignore", "pipe"], encoding: "utf8" }
   );
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    throw new Error(`security add-generic-password failed with status ${result.status}`);
+    throw new Error(
+      `keychain-helper set failed (status ${result.status}): ${result.stderr?.trim()}`
+    );
   }
 }
 
+function keychainGet(service: string, account: string): string | null {
+  const result = spawnSync(
+    helperPath(),
+    ["get", service, account],
+    { stdio: ["ignore", "pipe", "ignore"], encoding: "utf8" }
+  );
+  if (result.status !== 0 || !result.stdout) return null;
+  return result.stdout || null;
+}
+
 function keychainDelete(service: string, account: string): void {
-  try {
-    execFileSync(
-      "security",
-      ["delete-generic-password", "-s", service, "-a", account],
-      { stdio: "ignore" }
-    );
-  } catch {}
+  spawnSync(helperPath(), ["delete", service, account], { stdio: "ignore" });
 }
 
 export interface ExtendedCoinbaseCredentials extends CoinbaseCredentials {
@@ -71,7 +69,6 @@ export class CoinbaseCredentialsManager {
   }
 
   getCredentials(): CoinbaseCredentials | null {
-    // Try new CDP location first
     const apiKeyName    = keychainGet(CDP_SERVICE, ACCT_KEY_NAME);
     const privateKeyPem = keychainGet(CDP_SERVICE, ACCT_PRIVATE);
 
@@ -104,7 +101,7 @@ export class CoinbaseCredentialsManager {
   }
 
   getKeyInfo(): { keyDisplayName: string; algorithm: string } | null {
-    const keyName    = keychainGet(CDP_SERVICE, ACCT_KEY_NAME);
+    const keyName = keychainGet(CDP_SERVICE, ACCT_KEY_NAME);
     if (!keyName) return null;
 
     const display   = keychainGet(CDP_SERVICE, ACCT_DISPLAY)   ?? `••••${keyName.slice(-4)}`;
