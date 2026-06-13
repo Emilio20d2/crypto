@@ -21,7 +21,7 @@ function setupDatabase() {
     // La carpeta de migraciones en empaquetado estará junto al asar o en app.getAppPath()
     const migrationsPath = app.isPackaged 
       ? path.join(process.resourcesPath, "migrations") 
-      : path.join(__dirname, "../../database/drizzle");
+      : path.join(__dirname, "../../../packages/database/drizzle");
     
     // Fallback if the path exists, else we skip (e.g. during test without migrations copied)
     if (fs.existsSync(migrationsPath)) {
