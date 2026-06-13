@@ -82,7 +82,7 @@ describe("Operaciones UI", () => {
   test("muestra historial vacío cuando no hay operaciones", async () => {
     renderWithQuery(<Operaciones />);
     await waitFor(() => {
-      expect(screen.getByText(/Todavía no hay operaciones/i)).toBeInTheDocument();
+      expect(screen.getByText(/Sin operaciones registradas/i)).toBeInTheDocument();
     });
   });
 });

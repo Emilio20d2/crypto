@@ -1,16 +1,21 @@
+/* ─── Mercado — layout específico ──────────────────────────────── */
+
 .mercado-layout {
   display: flex;
   gap: 24px;
-  height: calc(100vh - 140px);
+  height: calc(100vh - 120px);
+  min-height: 0;
 }
 
 .mercado-sidebar {
-  width: 320px;
+  width: 260px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  border-right: 1px solid var(--border-color);
-  padding-right: 24px;
+  gap: 12px;
+  border-right: 1px solid var(--border);
+  padding-right: 20px;
+  overflow: hidden;
 }
 
 .mercado-main {
@@ -20,116 +25,149 @@
   min-width: 0;
 }
 
+/* Input de búsqueda — hereda estilos de .form-group input pero sin wrapper */
 .search-input {
   width: 100%;
-  padding: 12px 16px;
-  border: 1px solid var(--border-color);
+  height: var(--h-input);
+  padding: 0 12px;
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  font-size: 1rem;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  outline: none;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+  font-family: inherit;
 }
+.search-input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(50, 124, 255, 0.12);
+}
+.search-input::placeholder { color: var(--text-muted); }
 
+/* Lista de activos */
 .asset-list {
   flex: 1;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
+  min-height: 0;
 }
 
 .asset-item {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
+  gap: 10px;
+  padding: 10px 12px;
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: background-color 0.2s;
+  transition: background-color var(--t-fast);
   border: 1px solid transparent;
 }
 
-.asset-item:hover {
-  background-color: var(--surface-hover);
-}
+.asset-item:hover { background: var(--bg-subtle); }
 
 .asset-item.selected {
-  background-color: var(--brand-light);
-  border-color: var(--brand-primary);
+  background: var(--color-primary-light);
+  border-color: var(--color-primary);
 }
 
-.asset-info {
+.asset-info { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.asset-name  { font-weight: 600; font-size: 0.875rem; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.asset-symbol { font-size: 0.78rem; color: var(--text-secondary); }
+
+/* Variación precio */
+.asset-change { font-size: 0.78rem; font-weight: 600; }
+.asset-change.positive { color: var(--color-success-text); }
+.asset-change.negative { color: var(--color-danger); }
+
+/* Precio en la cabecera */
+.market-header {
   display: flex;
-  flex-direction: column;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 20px;
 }
 
-.asset-name {
-  font-weight: 600;
+.market-header h2 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.current-price {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.current-price .price-value {
+  font-size: 1.75rem;
+  font-weight: 700;
   color: var(--text-primary);
 }
 
-.asset-symbol {
-  font-size: 0.875rem;
+.error-box {
+  height: 400px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-subtle);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
   color: var(--text-secondary);
+  text-align: center;
 }
 
-.asset-price-info {
-  text-align: right;
-}
-
-.asset-price {
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.asset-change {
-  font-size: 0.875rem;
-  font-weight: 500;
-}
-
-.asset-change.positive {
-  color: #10B981;
-}
-
-.asset-change.negative {
-  color: #EF4444;
-}
-
+/* Selector de periodos */
 .period-selector {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   margin-top: 16px;
+  flex-wrap: wrap;
 }
 
 .period-selector button {
-  padding: 6px 12px;
-  border: 1px solid var(--border-color);
-  background: var(--bg-color);
+  height: var(--h-btn-sm);
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
   border-radius: var(--radius-md);
   cursor: pointer;
   color: var(--text-secondary);
-  font-weight: 500;
+  font-size: 0.8rem;
+  font-weight: 600;
+  font-family: inherit;
+  transition: background-color var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+  outline: none;
 }
 
-.period-selector button:hover {
-  background: var(--surface-hover);
-}
+.period-selector button:hover  { background: var(--bg-hover); border-color: var(--color-primary); color: var(--color-primary); }
+.period-selector button.active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.period-selector button:focus-visible { box-shadow: 0 0 0 3px rgba(50,124,255,0.25); }
 
-.period-selector button.active {
-  background: var(--brand-primary);
-  color: white;
-  border-color: var(--brand-primary);
-}
-
+/* Responsive */
 @media (max-width: 768px) {
   .mercado-layout {
     flex-direction: column;
     height: auto;
   }
+
   .mercado-sidebar {
     width: 100%;
     border-right: none;
     padding-right: 0;
-    border-bottom: 1px solid var(--border-color);
-    padding-bottom: 24px;
-    height: 400px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 16px;
+    max-height: 280px;
+    overflow-y: auto;
   }
+
+  .market-header { flex-direction: column; align-items: flex-start; }
+  .current-price .price-value { font-size: 1.5rem; }
 }

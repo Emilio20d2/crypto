@@ -2,6 +2,8 @@ import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { MarketChart } from "../components/MarketChart";
 import { CryptoLogo } from "../components/CryptoLogo";
+import { Button } from "../components/Button";
+import { EmptyState } from "../components/EmptyState";
 import "../mercado.css";
 
 const PERIODS = ["1h", "24h", "7d", "30d", "1y", "all"] as const;
@@ -11,118 +13,99 @@ export function Mercado() {
   const [selectedAsset, setSelectedAsset] = useState<string>("BTC");
   const [period, setPeriod] = useState<Period>("24h");
   const [search, setSearch] = useState("");
-  
+
   const { data: assetsRes } = useQuery({
-    queryKey: ['assets'],
-    queryFn: () => window.cryptoControl.assets.list()
+    queryKey: ["assets"],
+    queryFn: () => window.cryptoControl.assets.list(),
   });
 
   const { data: priceRes } = useQuery({
-    queryKey: ['market', 'price', selectedAsset],
+    queryKey: ["market", "price", selectedAsset],
     queryFn: () => window.cryptoControl.market.getCurrentPrice({ assetId: selectedAsset, quoteCurrency: "EUR" }),
-    enabled: !!selectedAsset
+    enabled: !!selectedAsset,
   });
 
   const { data: historyRes, isLoading: loadingHistory, refetch: refetchHistory } = useQuery({
-    queryKey: ['market', 'history', selectedAsset, period],
+    queryKey: ["market", "history", selectedAsset, period],
     queryFn: () => window.cryptoControl.market.getHistoricalPrices({ assetId: selectedAsset, period, quoteCurrency: "EUR" }),
-    enabled: !!selectedAsset
+    enabled: !!selectedAsset,
   });
 
   const { data: txsRes } = useQuery({
-    queryKey: ['transactions'],
-    queryFn: () => window.cryptoControl.transactions.list()
+    queryKey: ["transactions"],
+    queryFn: () => window.cryptoControl.transactions.list(),
   });
 
   const assets = useMemo(() => assetsRes?.ok ? assetsRes.data : [], [assetsRes]);
   const currentPrice = priceRes?.ok ? priceRes.data.price : null;
 
-  const filteredAssets = useMemo(() => {
-    return assets.filter((a: { id: string; name: string; symbol: string; }) => 
-      a.name.toLowerCase().includes(search.toLowerCase()) || 
+  const filteredAssets = useMemo(() => assets.filter(
+    (a: { id: string; name: string; symbol: string }) =>
+      a.name.toLowerCase().includes(search.toLowerCase()) ||
       a.symbol.toLowerCase().includes(search.toLowerCase())
-    );
-  }, [assets, search]);
+  ), [assets, search]);
 
-  let variation24h = null;
+  const selectedAssetData = assets.find((a: { id: string; name: string }) => a.id === selectedAsset);
+
+  let variation24h: number | null = null;
   let chartStartTime = 0;
-  if (period === "24h" && historyRes?.ok && historyRes.data && historyRes.data.points.length > 0) {
-    const firstPrice = historyRes.data.points[0].value;
-    const lastPrice = historyRes.data.points[historyRes.data.points.length - 1].value;
-    variation24h = ((lastPrice - firstPrice) / firstPrice) * 100;
+  if (period === "24h" && historyRes?.ok && historyRes.data?.points.length > 0) {
+    const pts = historyRes.data.points;
+    variation24h = ((pts[pts.length - 1].value - pts[0].value) / pts[0].value) * 100;
   }
-  
-  if (historyRes?.ok && historyRes.data && historyRes.data.points.length > 0) {
+  if (historyRes?.ok && historyRes.data?.points.length > 0) {
     chartStartTime = historyRes.data.points[0].time as number;
   }
 
   const operations = useMemo(() => {
     if (!txsRes?.ok || !txsRes.data || !chartStartTime) return [];
-    
-    const ops: { time: import('lightweight-charts').Time; type: string; label: string; color: string }[] = [];
-    
+    const ops: { time: import("lightweight-charts").Time; type: string; label: string; color: string }[] = [];
+
     for (const tx of txsRes.data) {
-      // chartStartTime is in seconds; tx.date is in milliseconds — convert before comparing
       const txTimeSec = Math.floor(tx.date / 1000);
-      if (txTimeSec < chartStartTime - 86400) continue;
+      if (txTimeSec < chartStartTime - 86_400) continue;
 
       for (const leg of tx.legs) {
-        if (leg.assetId === selectedAsset) {
-          // It's related to this asset
-          let type = '';
-          let label = '';
-          let color = '';
-          
-          if (tx.type === 'buy' && leg.legType === 'destination') {
-            type = 'buy';
-            label = `Compra ${leg.amount}`;
-            color = '#10B981'; // green
-          } else if (tx.type === 'sell' && leg.legType === 'source') {
-            type = 'sell';
-            label = `Venta ${leg.amount}`;
-            color = '#EF4444'; // red
-          } else if (tx.type === 'convert' && leg.legType === 'destination') {
-            type = 'buy';
-            label = `Conv. (In) ${leg.amount}`;
-            color = '#3B82F6'; // blue
-          } else if (tx.type === 'convert' && leg.legType === 'source') {
-            type = 'sell';
-            label = `Conv. (Out) ${leg.amount}`;
-            color = '#F59E0B'; // orange
-          }
-          
-          if (type) {
-            ops.push({
-              time: txTimeSec as import('lightweight-charts').Time,
-              type,
-              label,
-              color
-            });
-          }
+        if (leg.assetId !== selectedAsset) continue;
+        let type = "";
+        let label = "";
+        let color = "";
+
+        if (tx.type === "buy" && leg.legType === "destination") {
+          type = "buy"; label = `Compra ${leg.amount}`; color = "#16a34a";
+        } else if (tx.type === "sell" && leg.legType === "source") {
+          type = "sell"; label = `Venta ${Math.abs(leg.amount)}`; color = "#ef4444";
+        } else if (tx.type === "convert" && leg.legType === "destination") {
+          type = "buy"; label = `Conv. (in) ${leg.amount}`; color = "#327cff";
+        } else if (tx.type === "convert" && leg.legType === "source") {
+          type = "sell"; label = `Conv. (out) ${Math.abs(leg.amount)}`; color = "#f59e0b";
         }
+
+        if (type) ops.push({ time: txTimeSec as import("lightweight-charts").Time, type, label, color });
       }
     }
     return ops;
   }, [txsRes, selectedAsset, chartStartTime]);
 
   return (
-    <div className="mercado-page">
+    <div>
       <h1 className="page-title">Mercado</h1>
 
       <div className="mercado-layout">
+        {/* Sidebar con lista de activos */}
         <div className="mercado-sidebar">
-          <input 
-            type="text" 
-            className="search-input" 
-            placeholder="Buscar activo..." 
+          <input
+            type="text"
+            className="search-input"
+            placeholder="Buscar activo..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={e => setSearch(e.target.value)}
           />
           <div className="asset-list">
             {filteredAssets.map((a: { id: string; name: string; symbol: string; logoUrl?: string | null }) => (
               <div
                 key={a.id}
-                className={`asset-item ${selectedAsset === a.id ? 'selected' : ''}`}
+                className={`asset-item ${selectedAsset === a.id ? "selected" : ""}`}
                 onClick={() => setSelectedAsset(a.id)}
               >
                 <CryptoLogo logoUrl={a.logoUrl} symbol={a.symbol} size={28} />
@@ -133,22 +116,23 @@ export function Mercado() {
               </div>
             ))}
             {filteredAssets.length === 0 && (
-              <div style={{ color: "var(--text-secondary)", textAlign: "center", marginTop: "20px" }}>
-                No se encontraron activos
-              </div>
+              <EmptyState title="Sin resultados" description="No hay activos que coincidan con la búsqueda." />
             )}
           </div>
         </div>
 
+        {/* Panel principal */}
         <div className="mercado-main card">
-          <div className="market-header" style={{ marginBottom: "24px" }}>
-            <h2>{assets.find((a: { id: string; name: string; }) => a.id === selectedAsset)?.name || selectedAsset}</h2>
+          <div className="market-header">
+            <h2>{selectedAssetData?.name ?? selectedAsset}</h2>
             {typeof currentPrice === "number" && Number.isFinite(currentPrice) && (
-              <div className="current-price" style={{ display: "flex", alignItems: "baseline", gap: "12px" }}>
-                <h2 style={{ margin: 0 }}>{currentPrice.toLocaleString("es-ES", { style: "currency", currency: "EUR" })}</h2>
+              <div className="current-price">
+                <span className="price-value">
+                  {currentPrice.toLocaleString("es-ES", { style: "currency", currency: "EUR" })}
+                </span>
                 {variation24h !== null && (
-                  <span className={`asset-change ${variation24h >= 0 ? 'positive' : 'negative'}`}>
-                    {variation24h >= 0 ? '+' : ''}{variation24h.toFixed(2)}%
+                  <span className={`asset-change ${variation24h >= 0 ? "positive" : "negative"}`}>
+                    {variation24h >= 0 ? "+" : ""}{variation24h.toFixed(2)}%
                   </span>
                 )}
               </div>
@@ -157,22 +141,24 @@ export function Mercado() {
 
           <div style={{ flex: 1, minHeight: 0 }}>
             {loadingHistory ? (
-              <div className="skeleton" style={{ height: "400px", borderRadius: "var(--radius-md)" }}></div>
+              <div className="skeleton" style={{ height: 400, borderRadius: "var(--radius-md)" }} />
             ) : historyRes?.ok && historyRes.data ? (
-              <MarketChart 
+              <MarketChart
                 data={historyRes.data.points.map((p: { time: number; value: number }) => ({
-                  time: p.time as import('lightweight-charts').Time, 
-                  value: p.value
-                }))} 
+                  time: p.time as import("lightweight-charts").Time,
+                  value: p.value,
+                }))}
                 operations={operations}
                 provider={historyRes.data.provider}
                 isCached={historyRes.data.isCached}
               />
             ) : (
-              <div className="error-box" style={{ height: "400px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <div className="error-box">
                 <div>
-                  <p>No se pudo cargar la gráfica</p>
-                  <button onClick={() => refetchHistory()} style={{ marginTop: "12px" }}>Reintentar</button>
+                  <p style={{ margin: "0 0 12px" }}>No se pudo cargar la gráfica</p>
+                  <Button variant="secondary" onClick={() => refetchHistory()}>
+                    Reintentar
+                  </Button>
                 </div>
               </div>
             )}
@@ -180,7 +166,11 @@ export function Mercado() {
 
           <div className="period-selector">
             {PERIODS.map(p => (
-              <button key={p} className={period === p ? "active" : ""} onClick={() => setPeriod(p)}>
+              <button
+                key={p}
+                className={period === p ? "active" : ""}
+                onClick={() => setPeriod(p)}
+              >
                 {p}
               </button>
             ))}

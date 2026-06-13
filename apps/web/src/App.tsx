@@ -17,24 +17,56 @@ const queryClient = new QueryClient({
   },
 });
 
+const NAV_ITEMS = [
+  { to: "/",            label: "Cartera",    icon: "💼" },
+  { to: "/mercado",     label: "Mercado",    icon: "📈" },
+  { to: "/operaciones", label: "Operaciones",icon: "📋" },
+  { to: "/coinbase",    label: "Coinbase",   icon: "🔗" },
+];
+
 function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="layout">
+      {/* Sidebar — visible en escritorio */}
       <aside className="sidebar">
         <div className="sidebar-logo">
-          <img src={logoUrl} alt="Logo" />
+          <img src={logoUrl} alt="Crypto Control" />
           <span>Crypto Control</span>
         </div>
-        <nav>
-          <NavLink to="/" className={({ isActive }) => isActive ? "nav-link active" : "nav-link"}>Cartera</NavLink>
-          <NavLink to="/mercado" className={({ isActive }) => isActive ? "nav-link active" : "nav-link"}>Mercado</NavLink>
-          <NavLink to="/operaciones" className={({ isActive }) => isActive ? "nav-link active" : "nav-link"}>Operaciones</NavLink>
-          <NavLink to="/coinbase" className={({ isActive }) => isActive ? "nav-link active" : "nav-link"}>Coinbase</NavLink>
+        <nav className="sidebar-nav">
+          {NAV_ITEMS.map(({ to, label, icon }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={to === "/"}
+              className={({ isActive }) => isActive ? "nav-link active" : "nav-link"}
+            >
+              <span style={{ fontSize: "1.1rem" }}>{icon}</span>
+              {label}
+            </NavLink>
+          ))}
         </nav>
       </aside>
+
+      {/* Contenido principal */}
       <main className="main-content">
         {children}
       </main>
+
+      {/* Navegación inferior — solo móvil */}
+      <nav className="mobile-nav">
+        {NAV_ITEMS.map(({ to, label, icon }) => (
+          <NavLink
+            key={to}
+            to={to}
+            end={to === "/"}
+            className={({ isActive }) => isActive ? "mobile-nav-link active" : "mobile-nav-link"}
+          >
+            <span className="mobile-nav-icon">{icon}</span>
+            {label}
+          </NavLink>
+        ))}
+      </nav>
     </div>
   );
 }
@@ -46,10 +78,10 @@ export default function App() {
         <Layout>
           <ErrorBoundary>
             <Routes>
-              <Route path="/" element={<Portfolio />} />
-              <Route path="/mercado" element={<Mercado />} />
+              <Route path="/"            element={<Portfolio />} />
+              <Route path="/mercado"     element={<Mercado />} />
               <Route path="/operaciones" element={<Operaciones />} />
-              <Route path="/coinbase" element={<Coinbase />} />
+              <Route path="/coinbase"    element={<Coinbase />} />
             </Routes>
           </ErrorBoundary>
         </Layout>
