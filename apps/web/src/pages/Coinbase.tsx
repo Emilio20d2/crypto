@@ -27,6 +27,31 @@ function formatDate(ts: number) {
   });
 }
 
+// Map structured error codes to user-friendly messages
+function humanizeError(code: string, message: string, httpStatus?: number): string {
+  const codeMessages: Record<string, string> = {
+    UNAUTHORIZED:             "Credenciales no aceptadas (401). Verifica que la clave no haya sido revocada y que el archivo JSON es el correcto.",
+    INSUFFICIENT_PERMISSIONS: "La clave no tiene permisos suficientes. Asegúrate de que tiene activado el permiso de lectura (can_view).",
+    IP_RESTRICTED:            "Este dispositivo no está en la lista de IPs permitidas para esta API Key. Actualiza la allowlist en Coinbase Developer Platform.",
+    INVALID_JWT_SIGNATURE:    "La firma del JWT no fue aceptada. Verifica que la clave privada corresponde a esta API Key y que el archivo no fue modificado.",
+    CLOCK_SKEW:               "El reloj del sistema puede estar desincronizado. Verifica la fecha y hora del Mac y vuelve a intentarlo.",
+    RATE_LIMITED:             "Demasiadas peticiones (429). Espera unos segundos antes de volver a intentarlo.",
+    NETWORK_ERROR:            "No se pudo conectar con Coinbase. Verifica tu conexión a internet.",
+    KEY_ED25519_INCOMPATIBLE: "Esta clave usa ED25519, incompatible con Coinbase Advanced Trade. Crea una nueva clave ECDSA de solo lectura.",
+    KEY_WRONG_CURVE:          "La clave EC no usa la curva P-256 requerida para ES256. Crea una nueva clave CDP seleccionando ECDSA.",
+    KEY_NOT_EC:               "La clave privada no es EC (ECDSA). Se requiere una clave ECDSA P-256.",
+    PEM_INVALID:              "La clave privada no es un PEM válido. Verifica que el archivo no esté corrupto o modificado.",
+    FIELDS_MISSING:           "El archivo JSON no tiene los campos requeridos. Asegúrate de que sea el archivo oficial de Coinbase Developer Platform.",
+    KEY_NAME_INCOMPLETE:      "El identificador de la clave está incompleto. Se requiere el formato organizations/{org}/apiKeys/{key}.",
+    JSON_INVALID:             "El archivo no contiene JSON válido. Comprueba que no esté corrupto.",
+    JSON_EMPTY:               "El archivo está vacío.",
+  };
+  if (httpStatus) {
+    return codeMessages[code] ?? `${message} (${httpStatus})`;
+  }
+  return codeMessages[code] ?? message;
+}
+
 const STATE_LABEL: Record<ConnectionState, string> = {
   checking:     "Verificando...",
   disconnected: "No conectado",
@@ -68,11 +93,11 @@ export function Coinbase() {
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({
     lastSyncAt: null, lastSyncItemsProcessed: null, lastSyncStatus: null, lastSyncError: null,
   });
-  const [keyInfo, setKeyInfo] = useState<ConnectedKeyInfo | null>(null);
+  const [keyInfo, setKeyInfo]       = useState<ConnectedKeyInfo | null>(null);
   const [importMode, setImportMode] = useState<ImportMode>("none");
-  const [errorMsg, setErrorMsg]   = useState("");
+  const [errorMsg, setErrorMsg]     = useState("");
   const [successMsg, setSuccessMsg] = useState("");
-  const [warnMsg, setWarnMsg]     = useState("");
+  const [warnMsg, setWarnMsg]       = useState("");
 
   const pasteRef = useRef<HTMLTextAreaElement>(null);
 
@@ -83,7 +108,11 @@ export function Coinbase() {
       setConnectionState(connected ? "connected" : "disconnected");
       setSyncStatus({ lastSyncAt, lastSyncItemsProcessed, lastSyncStatus, lastSyncError });
       if (connected && keyDisplayName) {
-        setKeyInfo(prev => ({ ...prev, keyDisplayName, algorithm: algorithm ?? "ES256", permissions: prev?.permissions }));
+        setKeyInfo(prev => ({
+          keyDisplayName,
+          algorithm: algorithm ?? "ES256",
+          permissions: prev?.permissions,
+        }));
       }
     } else {
       setConnectionState("disconnected");
@@ -117,7 +146,8 @@ export function Coinbase() {
     if (data.permissions.canTransfer) extraPerms.push("transferencias");
     if (extraPerms.length > 0) {
       setWarnMsg(
-        `Por seguridad, se recomienda crear una clave exclusivamente de lectura. Esta clave tiene permisos adicionales activados: ${extraPerms.join(", ")}.`
+        `Por seguridad, se recomienda crear una clave exclusivamente de lectura. ` +
+        `Esta clave tiene permisos adicionales activados: ${extraPerms.join(", ")}.`
       );
     }
 
@@ -134,8 +164,8 @@ export function Coinbase() {
     const result = await window.cryptoControl.coinbase.importCredentialsFile();
 
     if (!result.ok) {
-      setConnectionState("disconnected");
-      setErrorMsg(result.error?.message ?? "No se pudo importar el archivo.");
+      setConnectionState("error");
+      setErrorMsg(humanizeError(result.error.code, result.error.message, result.error.httpStatus));
       return;
     }
 
@@ -159,14 +189,14 @@ export function Coinbase() {
     setSuccessMsg("");
     setWarnMsg("");
 
-    // Clear textarea immediately before sending to main process
+    // Clear textarea immediately — before sending to main process
     if (pasteRef.current) pasteRef.current.value = "";
 
     const result = await window.cryptoControl.coinbase.connectFromJson(jsonContent);
 
     if (!result.ok) {
-      setConnectionState("disconnected");
-      setErrorMsg(result.error?.message ?? "No se pudo importar las credenciales.");
+      setConnectionState("error");
+      setErrorMsg(humanizeError(result.error.code, result.error.message, result.error.httpStatus));
       return;
     }
 
@@ -181,6 +211,7 @@ export function Coinbase() {
     setSyncStatus({ lastSyncAt: null, lastSyncItemsProcessed: null, lastSyncStatus: null, lastSyncError: null });
     setSuccessMsg("Coinbase desconectado y credenciales eliminadas.");
     setWarnMsg("");
+    setErrorMsg("");
   };
 
   const handleSync = async () => {
@@ -202,13 +233,13 @@ export function Coinbase() {
       setConnectionState("connected");
     } else {
       setConnectionState("connected");
-      setErrorMsg("Error durante la sincronización. Inténtalo de nuevo.");
+      setErrorMsg(humanizeError(result.error.code, result.error.message, result.error.httpStatus));
       await loadStatus();
     }
   };
 
-  const isBusy = connectionState === "connecting" || connectionState === "syncing" || connectionState === "checking";
-  const isConnected = connectionState === "connected";
+  const isBusy       = connectionState === "connecting" || connectionState === "syncing" || connectionState === "checking";
+  const isConnected  = connectionState === "connected";
   const isDisconnected = connectionState === "disconnected" || connectionState === "error";
 
   return (
@@ -239,8 +270,8 @@ export function Coinbase() {
             </div>
             {keyInfo.permissions && (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <PermissionRow label="Lectura"      active={keyInfo.permissions.canView} />
-                <PermissionRow label="Operaciones"  active={keyInfo.permissions.canTrade} />
+                <PermissionRow label="Lectura"        active={keyInfo.permissions.canView} />
+                <PermissionRow label="Operaciones"    active={keyInfo.permissions.canTrade} />
                 <PermissionRow label="Transferencias" active={keyInfo.permissions.canTransfer} />
               </div>
             )}
@@ -253,7 +284,7 @@ export function Coinbase() {
             Última sincronización:{" "}
             <strong style={{ color: "var(--text-primary)" }}>{formatDate(syncStatus.lastSyncAt)}</strong>
             {syncStatus.lastSyncItemsProcessed !== null && (
-              <> · <strong style={{ color: "var(--text-primary)" }}>{syncStatus.lastSyncItemsProcessed}</strong> operaciones procesadas</>
+              <> · <strong style={{ color: "var(--text-primary)" }}>{syncStatus.lastSyncItemsProcessed}</strong> procesadas</>
             )}
             {syncStatus.lastSyncStatus === "error" && syncStatus.lastSyncError && (
               <div style={{ color: "var(--color-danger)", marginTop: 4 }}>
@@ -289,10 +320,10 @@ export function Coinbase() {
           <p style={{ fontSize: "0.875rem", color: "var(--text-secondary)", marginBottom: 20, lineHeight: 1.6 }}>
             Importa directamente el archivo JSON descargado desde{" "}
             <strong>Coinbase Developer Platform › API Keys</strong>.
-            Crea una clave con el algoritmo <strong>ECDSA</strong> y permisos de <strong>solo lectura</strong>.
+            Crea una clave con el algoritmo <strong>ECDSA</strong> y permisos de <strong>solo lectura (View)</strong>.
           </p>
 
-          {/* Opción principal: archivo nativo */}
+          {/* Opción principal */}
           <Button
             variant="primary"
             onClick={handleImportFile}
@@ -313,10 +344,9 @@ export function Coinbase() {
                 o
                 <hr style={{ flex: 1, border: "none", borderTop: "1px solid var(--border)" }} />
               </div>
-
               <Button
                 variant="secondary"
-                onClick={() => setImportMode("paste")}
+                onClick={() => { setImportMode("paste"); setErrorMsg(""); }}
                 disabled={isBusy}
                 style={{ width: "100%" }}
               >
@@ -351,8 +381,8 @@ export function Coinbase() {
                 </Button>
               </div>
               <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: 10, lineHeight: 1.5 }}>
-                El archivo se procesa en el proceso principal y se guarda en el llavero del sistema.
-                Nunca se almacena en la base de datos ni en variables del renderer.
+                El JSON se procesa exclusivamente en el proceso principal. Nunca se almacena en la base de datos
+                ni queda accesible desde DevTools.
               </p>
             </div>
           )}

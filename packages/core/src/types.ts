@@ -8,6 +8,8 @@ export type Result<T> =
         code: string;
         message: string;
         recoverable: boolean;
+        httpStatus?: number;
+        correlationId?: string;
       };
     };
 

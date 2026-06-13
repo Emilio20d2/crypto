@@ -127,15 +127,25 @@ function setupIpcHandlers() {
     return new PortfolioService(repo, calc, fifoCalc, marketService);
   };
 
-  // Helper to wrap IPC handlers with Result
+  // Helper to wrap IPC handlers with Result<T> — error shape matches core Result type
   const withResult = <T extends unknown[], R>(fn: (...args: T) => Promise<R>) => async (...args: T) => {
     try {
       const data = await fn(...args);
-      return { ok: true, data };
+      return { ok: true as const, data };
     } catch (e: unknown) {
-      console.error("IPC Error:", e);
-      const err = e as { message?: string; code?: string };
-      return { ok: false, error: err.message || "Unknown error", code: err.code };
+      const err = e as { message?: string; code?: string; httpStatus?: number; correlationId?: string };
+      // Log only sanitized info — never the credential or JWT
+      console.error("[IPC]", err.code ?? "UNKNOWN", err.httpStatus ?? "", err.correlationId ?? "");
+      return {
+        ok: false as const,
+        error: {
+          code:           err.code    || "UNKNOWN",
+          message:        err.message || "Error desconocido.",
+          recoverable:    false,
+          httpStatus:     err.httpStatus,
+          correlationId:  err.correlationId,
+        },
+      };
     }
   };
 
@@ -261,43 +271,60 @@ function setupIpcHandlers() {
   const {
     CoinbaseCredentialsManager,
     CoinbaseClient,
+    CoinbaseApiError,
     CoinbaseSyncService,
     parseCdpJson,
-    CdpParseError,
   } = require("@crypto-control/coinbase-sync") as typeof import("@crypto-control/coinbase-sync");
 
   const credsMgr = new CoinbaseCredentialsManager();
 
+  /**
+   * Sequence: parse JSON → validate EC P-256 → GET key_permissions → check can_view
+   *           → GET accounts → save to Keychain (ONLY if both API calls succeed).
+   * Never saves credentials before verifying them.
+   */
   async function importCdpCredentials(jsonContent: string) {
-    const parsed = parseCdpJson(jsonContent);
+    // Step 1-3: Parse + validate key format and curve
+    const parsed = parseCdpJson(jsonContent); // throws CdpParseError on any structural issue
 
     const client = new CoinbaseClient(parsed.keyName, parsed.privateKeyPem);
 
+    // Step 4-5: GET key_permissions — verifies JWT signature + checks can_view
     let permissions = { canView: true, canTrade: false, canTransfer: false };
     try {
       const perms = await client.getKeyPermissions();
+
       if (!perms.can_view) {
-        throw new Error(
-          "La clave no tiene permiso de lectura (can_view = false). Crea una clave CDP con al menos permisos de solo lectura."
+        throw new CoinbaseApiError(
+          "INSUFFICIENT_PERMISSIONS",
+          "La clave no tiene permiso de lectura (can_view = false). Crea una clave CDP con el permiso View activado.",
+          403
         );
       }
+
       permissions = {
-        canView:    perms.can_view,
-        canTrade:   perms.can_trade,
-        canTransfer:perms.can_transfer,
+        canView:     perms.can_view,
+        canTrade:    perms.can_trade,
+        canTransfer: perms.can_transfer,
       };
     } catch (e) {
-      const msg = (e as Error).message ?? "";
-      if (msg.includes("can_view") || msg.includes("401") || msg.includes("403")) throw e;
-      // Permissions endpoint unavailable — fall back to connection test
-      await client.testConnection();
+      if (e instanceof CoinbaseApiError) throw e;
+      // If key_permissions endpoint returns an unexpected error, re-throw as a network error
+      throw new CoinbaseApiError(
+        "NETWORK_ERROR",
+        `No se pudo verificar los permisos de la clave: ${(e as Error).message ?? "error desconocido"}.`
+      );
     }
 
+    // Step 6: GET accounts — secondary verification (confirms read access to portfolio)
+    await client.getAccounts();
+
+    // Step 7: Save to Keychain ONLY after both API calls succeed
     credsMgr.saveCredentials({
-      apiKeyName:      parsed.keyName,
-      privateKeyPem:   parsed.privateKeyPem,
-      algorithm:       parsed.algorithm,
-      keyDisplayName:  parsed.keyDisplayName,
+      apiKeyName:     parsed.keyName,
+      privateKeyPem:  parsed.privateKeyPem,
+      algorithm:      parsed.algorithm,
+      keyDisplayName: parsed.keyDisplayName,
     });
 
     return {
@@ -317,22 +344,23 @@ function setupIpcHandlers() {
     });
 
     if (canceled || !filePaths[0]) {
-      return { connected: false, canceled: true, keyDisplayName: "", algorithm: "ES256" as const, permissions: { canView: false, canTrade: false, canTransfer: false } };
+      return {
+        connected: false, canceled: true, keyDisplayName: "",
+        algorithm: "ES256" as const,
+        permissions: { canView: false, canTrade: false, canTransfer: false },
+      };
     }
 
     const jsonContent = fs.readFileSync(filePaths[0], "utf8");
-    try {
-      return await importCdpCredentials(jsonContent);
-    } finally {
-      // Overwrite local reference (best effort — V8 may keep it in memory longer)
-      // Not an assignment we can zero out since jsonContent is const, but it goes out of scope here
-    }
+    // jsonContent goes out of scope after this call — key not held in main process memory
+    return await importCdpCredentials(jsonContent);
   }));
 
   ipcMain.handle("coinbase:connect-from-json", withResult(async (_, jsonContent: string) => {
     if (typeof jsonContent !== "string" || !jsonContent.trim()) {
-      throw new Error("No se recibió contenido JSON.");
+      throw new CoinbaseApiError("INVALID_JSON", "No se recibió contenido JSON.");
     }
+    // jsonContent goes out of scope after this call
     return await importCdpCredentials(jsonContent);
   }));
 

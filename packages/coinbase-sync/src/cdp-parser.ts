@@ -9,7 +9,8 @@ export type CdpErrorCode =
   | "PEM_INVALID"
   | "KEY_NOT_PRIVATE"
   | "KEY_ED25519_INCOMPATIBLE"
-  | "KEY_NOT_EC";
+  | "KEY_NOT_EC"
+  | "KEY_WRONG_CURVE";
 
 export class CdpParseError extends Error {
   constructor(
@@ -135,6 +136,16 @@ export function parseCdpJson(jsonString: string): ParsedCdpCredentials {
     throw new CdpParseError(
       "KEY_NOT_EC",
       `La clave es de tipo "${asymmType}" y no es compatible. Se requiere una clave EC (ECDSA) para la API de Coinbase Advanced Trade.`
+    );
+  }
+
+  // Verify the curve is P-256 (prime256v1) — required for ES256
+  const details = keyObject.asymmetricKeyDetails;
+  const curve   = details?.namedCurve;
+  if (curve !== "prime256v1" && curve !== "P-256") {
+    throw new CdpParseError(
+      "KEY_WRONG_CURVE",
+      `La clave EC utiliza la curva "${curve ?? "desconocida"}" en lugar de P-256 (prime256v1) requerida para ES256. Crea una nueva clave CDP seleccionando ECDSA P-256.`
     );
   }
 
