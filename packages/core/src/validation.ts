@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const AssetSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().min(1),
   symbol: z.string().min(1),
   name: z.string().min(1),
   logoUrl: z.string().url().optional().nullable(),
@@ -24,7 +24,7 @@ export const TransactionTypeEnum = z.enum([
 
 export const TransactionLegSchema = z.object({
   id: z.string().uuid().optional(),
-  assetId: z.string().uuid(),
+  assetId: z.string().min(1),
   accountId: z.string().uuid().optional(),
   amount: z.number(), // Positivo = entrada, Negativo = salida
   legType: z.enum(["source", "destination", "fee"]),
@@ -32,7 +32,7 @@ export const TransactionLegSchema = z.object({
 });
 
 export const FeeSchema = z.object({
-  assetId: z.string().uuid(),
+  assetId: z.string().min(1),
   amount: z.number().positive()
 });
 
@@ -46,7 +46,26 @@ export const CreateTransactionSchema = z.object({
   fees: z.array(FeeSchema).optional()
 });
 
+export const TransactionLegInputSchema = z.object({
+  assetId: z.string().min(1),
+  amount: z.number(),
+  legType: z.enum(["source", "destination", "fee"]),
+  valuationEur: z.number().optional().nullable(),
+  valuationStatus: z.enum(["valued", "pending", "estimated"]).optional().nullable()
+});
+
+export const TransactionInputSchema = z.object({
+  id: z.string(),
+  type: TransactionTypeEnum,
+  date: z.number().int(),
+  legs: z.array(TransactionLegInputSchema)
+});
+
+export const TransactionInputListSchema = z.array(TransactionInputSchema);
+
 export type CreateTransactionInput = z.infer<typeof CreateTransactionSchema>;
 export type TransactionType = z.infer<typeof TransactionTypeEnum>;
 export type Asset = z.infer<typeof AssetSchema>;
 export type Account = z.infer<typeof AccountSchema>;
+export type TransactionLegInput = z.infer<typeof TransactionLegInputSchema>;
+export type TransactionInput = z.infer<typeof TransactionInputSchema>;

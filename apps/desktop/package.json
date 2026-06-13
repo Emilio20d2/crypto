@@ -12,6 +12,20 @@
     "dev": "tsc && electron .",
     "typecheck": "tsc --noEmit", "build": "tsc"
   },
+  "build": {
+    "appId": "com.cryptocontrol.app",
+    "productName": "Crypto Control",
+    "directories": {
+      "output": "dist-packaged"
+    },
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.finance"
+    },
+    "dmg": {
+      "title": "Crypto Control"
+    }
+  },
   "devDependencies": {
     "electron": "^30.0.0",
     "electron-builder": "^24.13.3",

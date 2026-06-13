@@ -31,9 +31,11 @@ export const CurrentPriceRequestSchema = z.object({
 export type CurrentPriceRequest = z.infer<typeof CurrentPriceRequestSchema>;
 
 export const CurrentPriceResultSchema = z.object({
-  price: z.number(),
+  price: z.number().nullable(),
+  state: z.enum(["live", "cached", "unavailable"]),
   provider: z.string(),
-  timestamp: z.number()
+  fetchedAt: z.number(),
+  reason: z.string().optional()
 });
 export type CurrentPriceResult = z.infer<typeof CurrentPriceResultSchema>;
 

@@ -1,28 +1,54 @@
 import { app, BrowserWindow, ipcMain } from "electron";
 import * as path from "path";
 import { initializeDatabase, runMigrations, getDb, schema } from "@crypto-control/database";
-import { CreateTransactionSchema } from "@crypto-control/core";
+import { CreateTransactionSchema, CurrentPriceResultSchema, HistoricalPriceResultSchema, TransactionInputListSchema } from "@crypto-control/core";
 import crypto from "crypto";
 import { eq } from "drizzle-orm";
 import * as fs from "fs";
 
 let mainWindow: BrowserWindow | null = null;
 
+function sanitizePoints(points: { timestamp: number; price: number }[]): { time: number; value: number }[] {
+  const mapped = points
+    .map(p => ({
+      time: Math.floor(p.timestamp / 1000),
+      value: p.price
+    }))
+    .filter(p => p.time > 0 && typeof p.value === "number" && Number.isFinite(p.value) && p.value > 0);
+
+  mapped.sort((a, b) => a.time - b.time);
+
+  const unique: { time: number; value: number }[] = [];
+  for (const p of mapped) {
+    if (unique.length === 0 || unique[unique.length - 1].time !== p.time) {
+      unique.push(p);
+    } else {
+      unique[unique.length - 1].value = p.value;
+    }
+  }
+
+  return unique;
+}
+
 function seedDatabase() {
   const db = getDb();
-  const existing = db.select().from(schema.assets).all();
-  if (existing.length === 0) {
-    console.log("[DB] Sembrando activos por defecto...");
-    const defaultAssets = [
-      { id: "BTC", symbol: "BTC", name: "Bitcoin", type: "crypto" },
-      { id: "ETH", symbol: "ETH", name: "Ethereum", type: "crypto" },
-      { id: "ADA", symbol: "ADA", name: "Cardano", type: "crypto" },
-      { id: "SUI", symbol: "SUI", name: "Sui", type: "crypto" },
-      { id: "SEI", symbol: "SEI", name: "Sei", type: "crypto" },
-      { id: "EURC", symbol: "EURC", name: "Euro Coin", type: "crypto" }
-    ];
-    const now = Date.now();
-    for (const asset of defaultAssets) {
+  let existing = db.select().from(schema.assets).all();
+  
+  const defaultAssets = [
+    { id: "BTC", symbol: "BTC", name: "Bitcoin", type: "crypto" },
+    { id: "ETH", symbol: "ETH", name: "Ethereum", type: "crypto" },
+    { id: "ADA", symbol: "ADA", name: "Cardano", type: "crypto" },
+    { id: "SUI", symbol: "SUI", name: "Sui", type: "crypto" },
+    { id: "SEI", symbol: "SEI", name: "Sei", type: "crypto" },
+    { id: "EURC", symbol: "EURC", name: "Euro Coin", type: "crypto" }
+  ];
+
+  console.log(`[DB] Se encontraron ${existing.length} activos. Ejecutando siembra de activos ausentes...`);
+
+  const now = Date.now();
+  for (const asset of defaultAssets) {
+    const found = existing.some(a => a.id === asset.id);
+    if (!found) {
       db.insert(schema.assets).values({
         id: asset.id,
         symbol: asset.symbol,
@@ -32,7 +58,20 @@ function seedDatabase() {
         updatedAt: now
       }).run();
     }
-    console.log("[DB] Sembrado completado.");
+  }
+
+  // Seed default portfolio target if it doesn't exist
+  const existingTarget = db.select().from(schema.settings).where(eq(schema.settings.key, "portfolio_target")).all();
+  if (existingTarget.length === 0) {
+    db.insert(schema.settings).values({ key: "portfolio_target", value: "50000" }).run();
+  }
+
+  // Volver a consultar y comprobar mínimo seis activos
+  existing = db.select().from(schema.assets).all();
+  console.log(`[DB] Consulta post-siembra: ${existing.length} activos en base de datos.`);
+  
+  if (existing.length < 6) {
+    throw new Error("La siembra de activos no se completó: menos de 6 activos en la base de datos.");
   }
 }
 
@@ -115,8 +154,11 @@ function setupIpcHandlers() {
   }));
 
   ipcMain.handle("transactions:list", withResult(async () => {
+    const { DatabasePortfolioRepository } = require("@crypto-control/database") as typeof import("@crypto-control/database");
     const db = getDb();
-    return await db.select().from(schema.transactions).all();
+    const repo = new DatabasePortfolioRepository(db);
+    const list = await repo.getTransactions();
+    return TransactionInputListSchema.parse(list);
   }));
 
   ipcMain.handle("transactions:create", withResult(async (_, payload) => {
@@ -179,20 +221,36 @@ function setupIpcHandlers() {
   }));
 
   ipcMain.handle("market:get-current-price", withResult(async (_, input: {assetId: string, quoteCurrency?: string}) => {
-    const price = await marketService.getCurrentPrice(input.assetId);
-    return {
-      price,
-      provider: "market-service",
-      timestamp: Date.now()
-    };
+    const priceRes = await marketService.getCurrentPrice(input.assetId);
+    return CurrentPriceResultSchema.parse(priceRes);
   }));
 
   ipcMain.handle("market:get-historical-prices", withResult(async (_, input: {assetId: string, period: string, quoteCurrency?: string}) => {
     const result = await marketService.getHistoricalPrices(input.assetId, input.period);
-    return {
+    const sanitizedPoints = sanitizePoints(result.points);
+    if (sanitizedPoints.length < 2) {
+      throw new Error("No hay suficientes puntos de precio para generar la gráfica (mínimo 2)");
+    }
+    return HistoricalPriceResultSchema.parse({
       ...result,
-      points: result.points.map((p) => ({ time: Math.floor(p.timestamp / 1000), value: p.price }))
-    };
+      points: sanitizedPoints
+    });
+  }));
+
+  ipcMain.handle("settings:get", withResult(async (_, key: string) => {
+    const db = getDb();
+    const rows = await db.select().from(schema.settings).where(eq(schema.settings.key, key)).limit(1);
+    return rows.length > 0 ? rows[0].value : null;
+  }));
+
+  ipcMain.handle("settings:update", withResult(async (_, key: string, value: string) => {
+    const db = getDb();
+    await db.insert(schema.settings).values({ key, value })
+      .onConflictDoUpdate({
+        target: schema.settings.key,
+        set: { value }
+      });
+    return null;
   }));
 }
 
@@ -200,6 +258,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    title: "Crypto Control",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,

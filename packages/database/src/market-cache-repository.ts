@@ -72,7 +72,7 @@ export class DatabaseMarketCacheRepository implements MarketCacheRepository {
     }
   }
 
-  async getCurrentPrice(assetId: string, quoteCurrency: string): Promise<{ price: number; fetchedAt: number; } | null> {
+  async getCurrentPrice(assetId: string, quoteCurrency: string): Promise<{ price: number; fetchedAt: number; provider: string } | null> {
     const rows = await this.db.select()
       .from(priceHistory)
       .where(
@@ -86,7 +86,7 @@ export class DatabaseMarketCacheRepository implements MarketCacheRepository {
       .limit(1);
 
     if (rows.length === 0) return null;
-    return { price: rows[0].price, fetchedAt: rows[0].fetchedAt };
+    return { price: rows[0].price, fetchedAt: rows[0].fetchedAt, provider: rows[0].provider };
   }
 
   async saveCurrentPrice(assetId: string, quoteCurrency: string, price: number, provider: string): Promise<void> {

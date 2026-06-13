@@ -18,14 +18,14 @@ export class MarketService {
 
   constructor(private cache?: MarketCacheRepository) {}
 
-  async getCurrentPrice(assetId: string, signal?: AbortSignal): Promise<{ price: number | null; state: "live" | "cached" | "unavailable"; reason?: string }> {
+  async getCurrentPrice(assetId: string, signal?: AbortSignal): Promise<{ price: number | null; state: "live" | "cached" | "unavailable"; provider: string; fetchedAt: number; reason?: string }> {
     const meta = getAssetMetadata(assetId);
-    if (!meta) return { price: null, state: "unavailable", reason: "Asset metadata not found" };
+    if (!meta) return { price: null, state: "unavailable", reason: "Asset metadata not found", provider: "none", fetchedAt: Date.now() };
 
     if (this.cache) {
       const cached = await this.cache.getCurrentPrice(assetId, meta.quoteCurrency);
       if (cached && Date.now() - cached.fetchedAt < 60000) { // 1 min cache
-        return { price: cached.price, state: "cached" };
+        return { price: cached.price, state: "cached", provider: cached.provider, fetchedAt: cached.fetchedAt };
       }
     }
 
@@ -35,7 +35,7 @@ export class MarketService {
       try {
         const price = await retryWithBackoff(() => this.coinbase.getCurrentPrice(meta, signal), 3, 1000, signal);
         if (this.cache) await this.cache.saveCurrentPrice(assetId, meta.quoteCurrency, price, "coinbase");
-        return { price, state: "live" };
+        return { price, state: "live", provider: "coinbase", fetchedAt: Date.now() };
       } catch (e: unknown) {
         if (e instanceof DOMException && e.name === "AbortError") throw e;
         if (e instanceof Error && e.name === "AbortError") throw e;
@@ -48,7 +48,7 @@ export class MarketService {
       try {
         const price = await retryWithBackoff(() => this.coingecko.getCurrentPrice(meta, signal), 3, 1000, signal);
         if (this.cache) await this.cache.saveCurrentPrice(assetId, meta.quoteCurrency, price, "coingecko");
-        return { price, state: "live" };
+        return { price, state: "live", provider: "coingecko", fetchedAt: Date.now() };
       } catch (e: unknown) {
         if (e instanceof DOMException && e.name === "AbortError") throw e;
         if (e instanceof Error && e.name === "AbortError") throw e;
@@ -57,11 +57,11 @@ export class MarketService {
       }
     }
 
-    return { price: null, state: "unavailable", reason: lastError || "All providers failed" };
+    return { price: null, state: "unavailable", reason: lastError || "All providers failed", provider: "none", fetchedAt: Date.now() };
   }
 
   // Adapter for PortfolioService
-  async getCurrentPriceEur(assetId: string): Promise<{ price: number | null; state: "live" | "cached" | "unavailable"; reason?: string }> {
+  async getCurrentPriceEur(assetId: string): Promise<{ price: number | null; state: "live" | "cached" | "unavailable"; provider: string; fetchedAt: number; reason?: string }> {
     return this.getCurrentPrice(assetId);
   }
 

@@ -15,6 +15,6 @@ export interface MarketCacheRepository {
   getHistoricalPrices(assetId: string, quoteCurrency: string, period: string): Promise<HistoricalPriceData[] | null>;
   saveHistoricalPrices(assetId: string, quoteCurrency: string, period: string, data: HistoricalPriceData[], provider: string): Promise<void>;
   
-  getCurrentPrice(assetId: string, quoteCurrency: string): Promise<{ price: number, fetchedAt: number } | null>;
+  getCurrentPrice(assetId: string, quoteCurrency: string): Promise<{ price: number, fetchedAt: number, provider: string } | null>;
   saveCurrentPrice(assetId: string, quoteCurrency: string, price: number, provider: string): Promise<void>;
 }

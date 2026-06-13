@@ -140,7 +140,7 @@ export function Mercado() {
         <div className="mercado-main card">
           <div className="market-header" style={{ marginBottom: "24px" }}>
             <h2>{assets.find((a: { id: string; name: string; }) => a.id === selectedAsset)?.name || selectedAsset}</h2>
-            {currentPrice !== null && (
+            {typeof currentPrice === "number" && Number.isFinite(currentPrice) && (
               <div className="current-price" style={{ display: "flex", alignItems: "baseline", gap: "12px" }}>
                 <h2 style={{ margin: 0 }}>{currentPrice.toLocaleString("es-ES", { style: "currency", currency: "EUR" })}</h2>
                 {variation24h !== null && (
@@ -158,7 +158,7 @@ export function Mercado() {
             ) : historyRes?.ok && historyRes.data ? (
               <MarketChart 
                 data={historyRes.data.points.map((p: { time: number; value: number }) => ({
-                  time: (Math.floor(p.time / 1000)) as import('lightweight-charts').Time, 
+                  time: p.time as import('lightweight-charts').Time, 
                   value: p.value
                 }))} 
                 operations={operations}

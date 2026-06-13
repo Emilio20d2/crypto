@@ -5,6 +5,7 @@ import { Portfolio } from "./pages/Portfolio";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Operaciones } from "./pages/Operaciones";
 import { Mercado } from "./pages/Mercado";
+import logoUrl from "./assets/logo.png";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -20,7 +21,7 @@ function Layout({ children }: { children: ReactNode }) {
     <div className="layout">
       <aside className="sidebar">
         <div className="sidebar-logo">
-          <img src="/logo.png" alt="Logo" />
+          <img src={logoUrl} alt="Logo" />
           <span>Crypto Control</span>
         </div>
         <nav>
