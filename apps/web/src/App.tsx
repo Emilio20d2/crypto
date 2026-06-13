@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { Portfolio } from "./pages/Portfolio";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Operaciones } from "./pages/Operaciones";
+import { Mercado } from "./pages/Mercado";
 
 function Layout({ children }: { children: ReactNode }) {
   return (
@@ -13,30 +14,30 @@ function Layout({ children }: { children: ReactNode }) {
           <span>Crypto Control</span>
         </div>
         <nav>
-          <NavLink to="/" className={({isActive}) => isActive ? "nav-link active" : "nav-link"}>Cartera</NavLink>
-          <NavLink to="/operaciones" className={({isActive}) => isActive ? "nav-link active" : "nav-link"}>Operaciones</NavLink>
+          <NavLink to="/" className={({ isActive }) => isActive ? "nav-link active" : "nav-link"}>Cartera</NavLink>
+          <NavLink to="/mercado" className={({ isActive }) => isActive ? "nav-link active" : "nav-link"}>Mercado</NavLink>
+          <NavLink to="/operaciones" className={({ isActive }) => isActive ? "nav-link active" : "nav-link"}>Operaciones</NavLink>
         </nav>
       </aside>
       <main className="main-content">
-        <ErrorBoundary>
-          {children}
-        </ErrorBoundary>
+        {children}
       </main>
     </div>
   );
 }
 
-function App() {
+export default function App() {
   return (
     <HashRouter>
       <Layout>
-        <Routes>
-          <Route path="/" element={<Portfolio />} />
-          <Route path="/operaciones" element={<Operaciones />} />
-        </Routes>
+        <ErrorBoundary>
+          <Routes>
+            <Route path="/" element={<Portfolio />} />
+            <Route path="/mercado" element={<Mercado />} />
+            <Route path="/operaciones" element={<Operaciones />} />
+          </Routes>
+        </ErrorBoundary>
       </Layout>
     </HashRouter>
   );
 }
-
-export default App;

@@ -2,5 +2,13 @@
   "name": "@crypto-control/market-data",
   "version": "0.1.0",
   "main": "index.ts",
-  "private": true
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc || true",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.8"
+  }
 }

@@ -1,10 +1,10 @@
-import { test, expect, describe } from 'vitest';
+import { describe, test, expect, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { Operaciones } from './pages/Operaciones';
 
 // Mock del IPC API
 beforeEach(() => {
-  (window as any).api = {
+  (window as unknown as { api: unknown }).api = {
     transactions: {
       create: async () => ({ success: true })
     }

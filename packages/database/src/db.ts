@@ -1,18 +1,35 @@
-
 import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
+import { drizzle, BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import * as schema from "./schema";
-import path from "path";
-import os from "os";
 
-// We determine a safe path in the user data directory
-const dbPath = path.join(os.homedir(), "Library/Application Support/Crypto Control Nueva", "crypto-control.sqlite");
+let dbInstance: BetterSQLite3Database<typeof schema> | null = null;
+let sqliteInstance: Database.Database | null = null;
 
-// Ensure directory exists
-const dir = path.dirname(dbPath);
-if (!os.path.exists) {
-    // Basic fallback, in real app we use fs.mkdirSync
+export function initializeDatabase(dbPath: string): { db: BetterSQLite3Database<typeof schema>, sqlite: Database.Database } {
+  if (dbInstance) return { db: dbInstance, sqlite: sqliteInstance! };
+
+  // Crear o conectar a SQLite
+  const sqlite = new Database(dbPath);
+  
+  // Activar modo WAL para concurrencia y claves foráneas
+  sqlite.pragma("journal_mode = WAL");
+  sqlite.pragma("foreign_keys = ON");
+
+  dbInstance = drizzle(sqlite, { schema });
+  sqliteInstance = sqlite;
+
+  return { db: dbInstance, sqlite };
 }
 
-const sqlite = new Database(dbPath, { verbose: console.log });
-export const db = drizzle(sqlite, { schema });
+export function runMigrations(migrationsFolder: string) {
+  if (!dbInstance) throw new Error("Database not initialized");
+  migrate(dbInstance, { migrationsFolder });
+}
+
+export function getDb() {
+  if (!dbInstance) throw new Error("Database not initialized");
+  return dbInstance;
+}
+
+export { schema };

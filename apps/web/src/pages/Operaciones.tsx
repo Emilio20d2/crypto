@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useForm, useFieldArray } from "react-hook-form";
+import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 // Usamos el esquema del core o uno local extendido para UI
@@ -62,16 +62,16 @@ export function Operaciones() {
         fees
       };
 
-      // @ts-ignore IPC API
-      const result = await window.api.transactions.create(txData);
+      const api = (window as unknown as { api: { transactions: { create: (data: unknown) => Promise<{success: boolean, error?: string}> } } }).api;
+      const result = await api.transactions.create(txData);
       
       if (!result.success) {
         setErrorMsg(result.error || "Error desconocido");
       } else {
         alert("Operación guardada");
       }
-    } catch (e: any) {
-      setErrorMsg("Fallo al guardar: " + e.message);
+    } catch (e) {
+      setErrorMsg("Fallo al guardar: " + (e instanceof Error ? e.message : "Error"));
     } finally {
       setLoading(false);
     }

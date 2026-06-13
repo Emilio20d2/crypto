@@ -12,7 +12,11 @@ export interface IPCAPI {
     delete: (id: string) => Promise<{ success: boolean }>;
   };
   assets: {
-    list: () => Promise<Asset[]>;
+    list: () => Promise<any[]>;
+  };
+  market: {
+    getCurrentPrice: (assetId: string, currency?: string) => Promise<any>;
+    getHistoricalPrices: (assetId: string, period: string, currency?: string) => Promise<any>;
   };
   settings: {
     get: (key: string) => Promise<string | null>;

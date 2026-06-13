@@ -4,7 +4,7 @@
   "main": "src/index.ts",
   "types": "src/index.ts",
   "scripts": {
-    "build": "tsc || true",
+    "typecheck": "tsc --noEmit", "build": "tsc || true",
     "test": "vitest run"
   },
   "private": true,

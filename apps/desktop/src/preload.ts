@@ -14,6 +14,10 @@ const api: IPCAPI = {
   assets: {
     list: () => ipcRenderer.invoke("assets:list"),
   },
+  market: {
+    getCurrentPrice: (assetId: string, currency?: string) => ipcRenderer.invoke("market:get-current-price", assetId, currency),
+    getHistoricalPrices: (assetId: string, period: string, currency?: string) => ipcRenderer.invoke("market:get-historical-prices", assetId, period, currency),
+  },
   settings: {
     get: (key: string) => ipcRenderer.invoke("settings:get", key),
     update: (key: string, value: string) => ipcRenderer.invoke("settings:update", key, value),

@@ -1,11 +1,16 @@
 {
   "name": "@crypto-control/desktop",
   "version": "0.1.0",
+  "dependencies": {
+    "@crypto-control/core": "*",
+    "@crypto-control/database": "*",
+    "@crypto-control/market-data": "*"
+  },
   "main": "dist/main.js",
   "private": true,
   "scripts": {
     "dev": "tsc && electron .",
-    "build": "tsc"
+    "typecheck": "tsc --noEmit", "build": "tsc"
   },
   "devDependencies": {
     "electron": "^30.0.0",
