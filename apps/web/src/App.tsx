@@ -1,9 +1,19 @@
 import { HashRouter, Routes, Route, NavLink } from "react-router-dom";
 import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Portfolio } from "./pages/Portfolio";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Operaciones } from "./pages/Operaciones";
 import { Mercado } from "./pages/Mercado";
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      retry: false,
+    },
+  },
+});
 
 function Layout({ children }: { children: ReactNode }) {
   return (
@@ -28,16 +38,18 @@ function Layout({ children }: { children: ReactNode }) {
 
 export default function App() {
   return (
-    <HashRouter>
-      <Layout>
-        <ErrorBoundary>
-          <Routes>
-            <Route path="/" element={<Portfolio />} />
-            <Route path="/mercado" element={<Mercado />} />
-            <Route path="/operaciones" element={<Operaciones />} />
-          </Routes>
-        </ErrorBoundary>
-      </Layout>
-    </HashRouter>
+    <QueryClientProvider client={queryClient}>
+      <HashRouter>
+        <Layout>
+          <ErrorBoundary>
+            <Routes>
+              <Route path="/" element={<Portfolio />} />
+              <Route path="/mercado" element={<Mercado />} />
+              <Route path="/operaciones" element={<Operaciones />} />
+            </Routes>
+          </ErrorBoundary>
+        </Layout>
+      </HashRouter>
+    </QueryClientProvider>
   );
 }

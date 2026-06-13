@@ -8,6 +8,34 @@ import * as fs from "fs";
 
 let mainWindow: BrowserWindow | null = null;
 
+function seedDatabase() {
+  const db = getDb();
+  const existing = db.select().from(schema.assets).all();
+  if (existing.length === 0) {
+    console.log("[DB] Sembrando activos por defecto...");
+    const defaultAssets = [
+      { id: "BTC", symbol: "BTC", name: "Bitcoin", type: "crypto" },
+      { id: "ETH", symbol: "ETH", name: "Ethereum", type: "crypto" },
+      { id: "ADA", symbol: "ADA", name: "Cardano", type: "crypto" },
+      { id: "SUI", symbol: "SUI", name: "Sui", type: "crypto" },
+      { id: "SEI", symbol: "SEI", name: "Sei", type: "crypto" },
+      { id: "EURC", symbol: "EURC", name: "Euro Coin", type: "crypto" }
+    ];
+    const now = Date.now();
+    for (const asset of defaultAssets) {
+      db.insert(schema.assets).values({
+        id: asset.id,
+        symbol: asset.symbol,
+        name: asset.name,
+        type: asset.type,
+        createdAt: now,
+        updatedAt: now
+      }).run();
+    }
+    console.log("[DB] Sembrado completado.");
+  }
+}
+
 function setupDatabase() {
   const userDataPath = app.getPath("userData");
   const dbPath = path.join(userDataPath, "crypto-control.sqlite");
@@ -27,6 +55,7 @@ function setupDatabase() {
     if (fs.existsSync(migrationsPath)) {
       runMigrations(migrationsPath);
       console.log("[DB] Migraciones aplicadas");
+      seedDatabase();
     } else {
       console.warn("[DB] No se encontró carpeta de migraciones en", migrationsPath);
     }
