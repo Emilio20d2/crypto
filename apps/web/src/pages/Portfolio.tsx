@@ -1,14 +1,19 @@
 import { useQuery } from "@tanstack/react-query";
 
 export function Portfolio() {
-  const { data: summaryRes, isLoading: loadingSummary, error: summaryErr } = useQuery({
+  const { data: summaryRes, isLoading: loadingSummary } = useQuery({
     queryKey: ['portfolio', 'summary'],
     queryFn: () => window.cryptoControl.portfolio.getSummary()
   });
 
-  const { data: positionsRes, isLoading: loadingPositions, error: positionsErr } = useQuery({
+  const { data: positionsRes, isLoading: loadingPositions } = useQuery({
     queryKey: ['portfolio', 'positions'],
     queryFn: () => window.cryptoControl.portfolio.getPositions()
+  });
+
+  const { data: allocationRes, isLoading: loadingAllocation } = useQuery({
+    queryKey: ['portfolio', 'allocation'],
+    queryFn: () => window.cryptoControl.portfolio.getAllocation()
   });
 
   const { data: assetsRes } = useQuery({
@@ -16,17 +21,20 @@ export function Portfolio() {
     queryFn: () => window.cryptoControl.assets.list()
   });
 
-  if (loadingSummary || loadingPositions) return <div className="page-title">Cargando cartera...</div>;
+  const loading = loadingSummary || loadingPositions || loadingAllocation;
   
-  if (summaryErr || positionsErr || (summaryRes && !summaryRes.ok) || (positionsRes && !positionsRes.ok)) {
+  if (loading) return <div className="page-title">Cargando cartera...</div>;
+  
+  if ((summaryRes && !summaryRes.ok) || (positionsRes && !positionsRes.ok) || (allocationRes && !allocationRes.ok)) {
     return <div className="error-banner">No se pudo cargar la cartera</div>;
   }
 
-  const summary = summaryRes?.ok ? summaryRes.data : null;
-  const portfolioData = positionsRes?.ok ? positionsRes.data : null;
+  const summary = summaryRes?.data;
+  const portfolioData = positionsRes?.data;
+  const allocationData = allocationRes?.data;
   const assets = assetsRes?.ok ? assetsRes.data : [];
 
-  if (!summary || !portfolioData) return null;
+  if (!summary || !portfolioData || !allocationData) return null;
 
   return (
     <div className="portfolio-page">
@@ -43,35 +51,68 @@ export function Portfolio() {
         </div>
         <div className="card">
           <h3>Ganancia/Pérdida (No realizada)</h3>
-          <h2 style={{ color: summary.unrealizedGainEur >= 0 ? "#5ae37a" : "#ff3232" }}>
+          <h2 style={{ color: summary.unrealizedGainEur >= 0 ? "#10B981" : "#EF4444" }}>
             {summary.unrealizedGainEur >= 0 ? "+" : ""}{summary.unrealizedGainEur.toLocaleString("es-ES", { style: "currency", currency: "EUR" })} 
-            ({summary.unrealizedGainPercentage.toFixed(2)}%)
+            <span style={{ fontSize: '1.2rem', marginLeft: '8px' }}>
+              ({summary.unrealizedGainPercentage.toFixed(2)}%)
+            </span>
           </h2>
         </div>
       </div>
 
-      <div className="card">
+      <div className="card" style={{ overflowX: 'auto' }}>
         <h3>Activos</h3>
-        <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse' }}>
+        <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse', minWidth: '600px' }}>
           <thead>
-            <tr style={{ borderBottom: '1px solid #eaf6ff' }}>
-              <th style={{ padding: '10px' }}>Activo</th>
-              <th style={{ padding: '10px' }}>Balance</th>
-              <th style={{ padding: '10px' }}>Precio Medio Compra</th>
-              <th style={{ padding: '10px' }}>Coste Base</th>
+            <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+              <th style={{ padding: '12px 16px' }}>Activo</th>
+              <th style={{ padding: '12px 16px', textAlign: 'right' }}>Balance</th>
+              <th style={{ padding: '12px 16px', textAlign: 'right' }}>Precio de Mercado</th>
+              <th style={{ padding: '12px 16px', textAlign: 'right' }}>Valor Actual</th>
+              <th style={{ padding: '12px 16px', textAlign: 'right' }}>Coste Base</th>
+              <th style={{ padding: '12px 16px', textAlign: 'right' }}>Rentabilidad</th>
+              <th style={{ padding: '12px 16px', textAlign: 'right' }}>Peso</th>
             </tr>
           </thead>
           <tbody>
-            {Object.entries(portfolioData.positions).map(([assetId, pos]) => {
-              const asset = assets.find((a: any) => a.id === assetId);
+            {allocationData.map((alloc: import("@crypto-control/portfolio").AssetAllocation) => {
+              const pos = portfolioData[alloc.assetId];
+              const asset = assets.find((a: { id: string; name: string; symbol: string }) => a.id === alloc.assetId);
+              
+              const currentPrice = pos.balance > 0 ? alloc.valueEur / pos.balance : 0;
+              const unrealizedGain = alloc.valueEur - pos.totalInvestedEur;
+              const unrealizedPct = pos.totalInvestedEur > 0 ? (unrealizedGain / pos.totalInvestedEur) * 100 : 0;
+
               return (
-                <tr key={assetId} style={{ borderBottom: '1px solid #f9f9f9' }}>
-                  <td style={{ padding: '10px' }}>
-                    <strong>{asset?.name || assetId}</strong> <span style={{ color: '#888' }}>{asset?.symbol || assetId}</span>
+                <tr key={alloc.assetId} style={{ borderBottom: '1px solid var(--surface-hover)' }}>
+                  <td style={{ padding: '12px 16px' }}>
+                    <div style={{ fontWeight: 600 }}>{asset?.name || alloc.assetId}</div>
+                    <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>{asset?.symbol || alloc.assetId}</div>
+                    {pos.hasPendingValuation && (
+                      <span style={{ fontSize: '0.75rem', backgroundColor: '#fef3c7', color: '#d97706', padding: '2px 6px', borderRadius: '4px', marginTop: '4px', display: 'inline-block' }}>
+                        Pendiente valoración
+                      </span>
+                    )}
                   </td>
-                  <td style={{ padding: '10px' }}>{pos.balance}</td>
-                  <td style={{ padding: '10px' }}>{pos.averagePriceEur ? pos.averagePriceEur.toLocaleString("es-ES", { style: "currency", currency: "EUR" }) : "-"}</td>
-                  <td style={{ padding: '10px' }}>{pos.totalInvestedEur.toLocaleString("es-ES", { style: "currency", currency: "EUR" })}</td>
+                  <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 500 }}>
+                    {pos.balance.toLocaleString("es-ES", { maximumFractionDigits: 6 })}
+                  </td>
+                  <td style={{ padding: '12px 16px', textAlign: 'right' }}>
+                    {currentPrice > 0 ? currentPrice.toLocaleString("es-ES", { style: "currency", currency: "EUR" }) : "-"}
+                  </td>
+                  <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 600 }}>
+                    {alloc.valueEur.toLocaleString("es-ES", { style: "currency", currency: "EUR" })}
+                  </td>
+                  <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text-secondary)' }}>
+                    {pos.totalInvestedEur.toLocaleString("es-ES", { style: "currency", currency: "EUR" })}
+                  </td>
+                  <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 500, color: unrealizedGain >= 0 ? '#10B981' : '#EF4444' }}>
+                    {unrealizedGain >= 0 ? "+" : ""}{unrealizedGain.toLocaleString("es-ES", { style: "currency", currency: "EUR" })}
+                    <div style={{ fontSize: '0.875rem' }}>{unrealizedPct >= 0 ? "+" : ""}{unrealizedPct.toFixed(2)}%</div>
+                  </td>
+                  <td style={{ padding: '12px 16px', textAlign: 'right' }}>
+                    {alloc.weight.toFixed(1)}%
+                  </td>
                 </tr>
               );
             })}

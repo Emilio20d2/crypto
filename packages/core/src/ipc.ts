@@ -1,9 +1,11 @@
 import type { CreateTransactionInput } from "./validation";
-import { CryptoControlAPI, Result } from "./types";
+import { CryptoControlAPI, Result, Asset } from "./types";
+
+import { TransactionInput } from "@crypto-control/portfolio";
 
 export interface FullCryptoControlAPI extends CryptoControlAPI {
   transactions: {
-    list: () => Promise<Result<any[]>>;
+    list: () => Promise<Result<TransactionInput[]>>;
     create: (data: CreateTransactionInput) => Promise<Result<{ id?: string }>>;
     update: (id: string, data: CreateTransactionInput) => Promise<Result<null>>;
     delete: (id: string) => Promise<Result<null>>;

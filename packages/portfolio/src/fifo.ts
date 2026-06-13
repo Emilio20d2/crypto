@@ -1,5 +1,5 @@
-import { TransactionInput } from "./types";
-import { RealizedGain } from "./schemas";
+import type { TransactionInput } from "./types";
+import type { RealizedGain } from "./schemas";
 
 export interface Lot {
   id: string;

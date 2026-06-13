@@ -7,8 +7,8 @@ import crypto from "crypto";
 import { eq } from "drizzle-orm";
 
 describe("Base de datos y operaciones", () => {
-  let db: any;
-  let sqlite: any;
+  let db: ReturnType<typeof drizzle>;
+  let sqlite: Database.Database;
 
   beforeEach(() => {
     sqlite = new Database(":memory:");
@@ -56,7 +56,7 @@ describe("Base de datos y operaciones", () => {
 
   test("Crear una conversión y comisión", () => {
     const txId = crypto.randomUUID();
-    db.transaction((tx: any) => {
+    db.transaction((tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
       tx.insert(schema.transactions).values({
         id: txId, type: "convert", date: Date.now(), createdAt: Date.now(), updatedAt: Date.now()
       }).run();
@@ -78,7 +78,7 @@ describe("Base de datos y operaciones", () => {
   test("Mantener consistencia si una escritura falla", () => {
     const txId = crypto.randomUUID();
     try {
-      db.transaction((tx: any) => {
+      db.transaction((tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
         tx.insert(schema.transactions).values({
           id: txId, type: "buy", date: Date.now(), createdAt: Date.now(), updatedAt: Date.now()
         }).run();

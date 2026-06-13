@@ -27,9 +27,9 @@ export class CoinGeckoProvider implements MarketDataProvider {
       if (!response.ok) throw new MarketInvalidResponseError(`CoinGecko API error: ${response.status} ${response.statusText}`);
 
       return await response.json();
-    } catch (error: any) {
+    } catch (error: unknown) {
       clearTimeout(id);
-      if (error.name === "AbortError" || error.message?.includes("timeout")) {
+      if (error instanceof Error && (error.name === "AbortError" || error.message?.includes("timeout"))) {
         throw new MarketTimeoutError("CoinGecko API timed out");
       }
       throw error;
@@ -51,7 +51,8 @@ export class CoinGeckoProvider implements MarketDataProvider {
 
   async getHistoricalPrices(meta: AssetMetadata, period: string, signal?: AbortSignal): Promise<HistoricalPriceData[]> {
     let days = "1";
-    if (period === "7d") days = "7";
+    if (period === "1h") days = "1";
+    else if (period === "7d") days = "7";
     else if (period === "30d") days = "30";
     else if (period === "1y") days = "365";
     else if (period === "all") days = "max";

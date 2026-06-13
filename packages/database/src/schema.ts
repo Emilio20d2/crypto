@@ -34,7 +34,12 @@ export const transactionLegs = sqliteTable("transaction_legs", {
   accountId: text("account_id").references(() => accounts.id),
   amount: real("amount").notNull(), // Positivo = entrada, Negativo = salida
   legType: text("leg_type").notNull(), // "source" | "destination" | "fee"
-  valuationEur: real("valuation_eur") // Total value in EUR
+  valuationEur: real("valuation_eur"), // Deprecated, use acquisitionValueEur
+  acquisitionValueEur: real("acquisition_value_eur"),
+  unitAcquisitionPriceEur: real("unit_acquisition_price_eur"),
+  valuationSource: text("valuation_source"),
+  valuationTimestamp: integer("valuation_timestamp"),
+  valuationStatus: text("valuation_status").default("valued") // "valued" | "pending" | "estimated"
 });
 
 export const fees = sqliteTable("fees", {
@@ -61,6 +66,17 @@ export const lotConsumptions = sqliteTable("lot_consumptions", {
   transactionId: text("transaction_id").notNull().references(() => transactions.id, { onDelete: "cascade" }), // The sell/convert transaction
   amountConsumed: real("amount_consumed").notNull(),
   unitSellPriceEur: real("unit_sell_price_eur").notNull(),
+  realizedGainEur: real("realized_gain_eur").notNull(),
+  date: integer("date").notNull()
+});
+
+export const realizedGains = sqliteTable("realized_gains", {
+  id: text("id").primaryKey(),
+  transactionId: text("transaction_id").notNull().references(() => transactions.id, { onDelete: "cascade" }),
+  assetId: text("asset_id").notNull().references(() => assets.id),
+  amountSold: real("amount_sold").notNull(),
+  saleValueEur: real("sale_value_eur").notNull(),
+  costBasisEur: real("cost_basis_eur").notNull(),
   realizedGainEur: real("realized_gain_eur").notNull(),
   date: integer("date").notNull()
 });

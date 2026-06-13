@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import { PortfolioCalculator } from "./calculator";
-import { TransactionInput } from "./types";
+import type { TransactionInput } from "./types";
 
 describe("PortfolioCalculator", () => {
   const calculator = new PortfolioCalculator();

@@ -1,5 +1,5 @@
-import { TransactionInput } from "./types";
-import { PortfolioResult, PortfolioPosition, RealizedGain } from "./schemas";
+import type { TransactionInput } from "./types";
+import type { PortfolioResult, PortfolioPosition, RealizedGain } from "./schemas";
 
 export class PortfolioCalculator {
   calculate(transactions: TransactionInput[]): PortfolioResult {
@@ -16,6 +16,7 @@ export class PortfolioCalculator {
           balance: 0,
           averagePriceEur: null,
           totalInvestedEur: 0,
+          hasPendingValuation: false
         };
       }
       return positions[assetId];
@@ -23,21 +24,28 @@ export class PortfolioCalculator {
 
     for (const tx of sorted) {
       // Group legs by asset
-      const assetImpacts: Record<string, { amount: number; valuation: number | undefined; type: string }> = {};
+      const assetImpacts: Record<string, { amount: number; valuation: number | undefined; type: string; hasPendingValuation: boolean }> = {};
 
       for (const leg of tx.legs) {
         if (!assetImpacts[leg.assetId]) {
-          assetImpacts[leg.assetId] = { amount: 0, valuation: undefined, type: leg.legType };
+          assetImpacts[leg.assetId] = { amount: 0, valuation: undefined, type: leg.legType, hasPendingValuation: false };
         }
         assetImpacts[leg.assetId].amount += leg.amount;
         if (leg.valuationEur !== undefined) {
           assetImpacts[leg.assetId].valuation = (assetImpacts[leg.assetId].valuation || 0) + leg.valuationEur;
+        }
+        if (leg.valuationStatus === "pending") {
+          assetImpacts[leg.assetId].hasPendingValuation = true;
         }
       }
 
       for (const assetId in assetImpacts) {
         const impact = assetImpacts[assetId];
         const pos = getPos(assetId);
+
+        if (impact.hasPendingValuation) {
+          pos.hasPendingValuation = true;
+        }
 
         if (impact.amount > 0) {
           // Inflow (Buy, Receive, Reward)
@@ -48,9 +56,8 @@ export class PortfolioCalculator {
             if (impact.valuation !== undefined) {
               pos.totalInvestedEur += impact.valuation;
             } else if (tx.type === "reward" || tx.type === "staking" || tx.type === "airdrop") {
-              // Pending valuation
-              // We could mark it as pending, but for now we just add balance without cost.
-              // A proper flag `hasPendingValuation` would be better.
+              // Note: If valuationStatus is missing, we could treat it as pending.
+              pos.hasPendingValuation = true;
             }
             pos.balance += impact.amount;
           }

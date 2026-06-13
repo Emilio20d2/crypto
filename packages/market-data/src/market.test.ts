@@ -49,28 +49,28 @@ describe("Market Providers y Resiliencia", () => {
   });
 
   test("MarketService - Fallback a CoinGecko si Coinbase falla (Timeout o 500)", async () => {
-    const cb = (marketService as any).coinbase;
+    const cb = (marketService as unknown as { coinbase: { getCurrentPrice: unknown } }).coinbase;
     vi.spyOn(cb, "getCurrentPrice").mockRejectedValue(new Error("Timeout simulado"));
     
-    const cg = (marketService as any).coingecko;
+    const cg = (marketService as unknown as { coingecko: { getCurrentPrice: unknown } }).coingecko;
     vi.spyOn(cg, "getCurrentPrice").mockResolvedValue(48000.00);
 
-    const price = await marketService.getCurrentPrice("bitcoin", "EUR");
+    const result = await marketService.getCurrentPrice("bitcoin");
     
     expect(cb.getCurrentPrice).toHaveBeenCalled();
     expect(cg.getCurrentPrice).toHaveBeenCalled();
-    expect(price).toBe(48000.00);
-  });
+    expect(result).toEqual({ price: 48000.00, state: "live" });
+  }, 10000);
 
   test("MarketService - Rate limit / Fallo total no rompe en blanco (Lanza error recuperable)", async () => {
+    const cg = (marketService as any).coingecko;
     const cb = (marketService as any).coinbase;
     vi.spyOn(cb, "getCurrentPrice").mockRejectedValue(new Error("Rate limit 429 Coinbase"));
-    
-    const cg = (marketService as any).coingecko;
     vi.spyOn(cg, "getCurrentPrice").mockRejectedValue(new Error("Rate limit 429 CoinGecko"));
 
-    await expect(marketService.getCurrentPrice("bitcoin", "EUR")).rejects.toThrow("Rate limit 429 CoinGecko");
-  });
+    const result = await marketService.getCurrentPrice("bitcoin");
+    expect(result).toEqual({ price: 0, state: "unavailable" });
+  }, 10000);
 
   test("CoinGecko - Historical Prices filtra 1h correctamente", async () => {
     const now = Date.now();

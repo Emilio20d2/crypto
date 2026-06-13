@@ -6,6 +6,7 @@ export interface TransactionLegInput {
   amount: number; // Positive for incoming, Negative for outgoing
   legType: LegType;
   valuationEur?: number; // Total value in EUR of this leg at the time of transaction
+  valuationStatus?: "valued" | "pending" | "estimated";
 }
 
 export interface TransactionInput {

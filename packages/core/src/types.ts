@@ -59,10 +59,14 @@ export const HistoricalPriceResultSchema = z.object({
 });
 export type HistoricalPriceResult = z.infer<typeof HistoricalPriceResultSchema>;
 
+import { Asset, AssetSchema } from "./validation";
+export type { Asset };
+export { AssetSchema };
+
 // API Interface
 export interface CryptoControlAPI {
   assets: {
-    list(): Promise<Result<any[]>>;
+    list(): Promise<Result<Asset[]>>;
   };
   market: {
     getCurrentPrice(input: CurrentPriceRequest): Promise<Result<CurrentPriceResult>>;

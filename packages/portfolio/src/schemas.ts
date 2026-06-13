@@ -4,7 +4,8 @@ export const PortfolioPositionSchema = z.object({
   assetId: z.string(),
   balance: z.number(),
   averagePriceEur: z.number().nullable(),
-  totalInvestedEur: z.number()
+  totalInvestedEur: z.number(),
+  hasPendingValuation: z.boolean().default(false)
 });
 
 export const PortfolioSummarySchema = z.object({

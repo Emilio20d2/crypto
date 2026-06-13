@@ -5,7 +5,7 @@
   "types": "src/index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc || true",
+    "build": "tsc",
     "test": "vitest run"
   },
   "private": true,

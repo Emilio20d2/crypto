@@ -40,13 +40,14 @@ function setupDatabase() {
 function setupIpcHandlers() {
   const { MarketService } = require("@crypto-control/market-data");
   const { PortfolioService, PortfolioCalculator } = require("@crypto-control/portfolio");
-  const { DatabasePortfolioRepository } = require("@crypto-control/database");
+  const { DatabasePortfolioRepository, DatabaseMarketCacheRepository } = require("@crypto-control/database");
 
-  const marketService = new MarketService();
+  const db = getDb();
+  const marketCache = new DatabaseMarketCacheRepository(db);
+  const marketService = new MarketService(marketCache);
   
   // We lazily instantiate the portfolio service per request or once the DB is ready
   const getPortfolioService = () => {
-    const db = getDb();
     const repo = new DatabasePortfolioRepository(db);
     const calc = new PortfolioCalculator();
     return new PortfolioService(repo, calc, marketService);
@@ -73,6 +74,14 @@ function setupIpcHandlers() {
 
   ipcMain.handle("portfolio:get-allocation", withResult(async () => {
     return await getPortfolioService().getAllocation();
+  }));
+
+  ipcMain.handle("portfolio:get-realized-gains", withResult(async () => {
+    return await getPortfolioService().getRealizedGains();
+  }));
+
+  ipcMain.handle("portfolio:get-fifo-lots", withResult(async () => {
+    return await getPortfolioService().getFifoLots();
   }));
 
   ipcMain.handle("transactions:list", withResult(async () => {
