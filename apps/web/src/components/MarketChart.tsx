@@ -136,7 +136,7 @@ export function MarketChart({ data, operations = [], provider, isCached, emptySt
         markersRef.current.setMarkers(markers);
       }
     }
-  }, [data]);
+  }, [data, operations]);
 
   return (
     <div style={{ position: "relative" }}>

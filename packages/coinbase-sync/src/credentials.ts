@@ -1,4 +1,4 @@
-import { execFileSync } from "child_process";
+import { execFileSync, spawnSync } from "child_process";
 import type { CoinbaseCredentials } from "./types";
 
 const KEYCHAIN_SERVICE = "crypto-control-coinbase";
@@ -28,11 +28,14 @@ function keychainSet(account: string, value: string): void {
     );
   } catch {}
 
-  execFileSync(
+  // Use -i to read the password from stdin so it never appears in process args
+  const result = spawnSync(
     "security",
-    ["add-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w", value],
-    { stdio: "ignore" }
+    ["add-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-i"],
+    { input: value, stdio: ["pipe", "ignore", "ignore"] }
   );
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`security add-generic-password failed with status ${result.status}`);
 }
 
 function keychainDelete(account: string): void {

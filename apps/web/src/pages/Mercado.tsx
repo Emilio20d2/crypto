@@ -34,7 +34,7 @@ export function Mercado() {
     queryFn: () => window.cryptoControl.transactions.list()
   });
 
-  const assets = assetsRes?.ok ? assetsRes.data : [];
+  const assets = useMemo(() => assetsRes?.ok ? assetsRes.data : [], [assetsRes]);
   const currentPrice = priceRes?.ok ? priceRes.data.price : null;
 
   const filteredAssets = useMemo(() => {

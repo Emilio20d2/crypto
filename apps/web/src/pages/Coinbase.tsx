@@ -43,11 +43,9 @@ export function Coinbase() {
   const privateKeyRef = useRef<HTMLTextAreaElement>(null);
   const [formVisible, setFormVisible] = useState(false);
 
-  const loadStatus = async () => {
-    const result = await window.cryptoControl.coinbase.getStatus();
+  const applyStatusResult = (result: Awaited<ReturnType<typeof window.cryptoControl.coinbase.getStatus>>) => {
     if (result.ok) {
-      const { connected, lastSyncAt, lastSyncItemsProcessed, lastSyncStatus, lastSyncError } =
-        result.data;
+      const { connected, lastSyncAt, lastSyncItemsProcessed, lastSyncStatus, lastSyncError } = result.data;
       setConnectionState(connected ? "connected" : "disconnected");
       setSyncStatus({ lastSyncAt, lastSyncItemsProcessed, lastSyncStatus, lastSyncError });
     } else {
@@ -55,9 +53,19 @@ export function Coinbase() {
     }
   };
 
+  const loadStatus = async () => {
+    const result = await window.cryptoControl.coinbase.getStatus();
+    applyStatusResult(result);
+  };
+
+  // Initial mount: fetch status without calling setState synchronously in the effect body
   useEffect(() => {
-    loadStatus();
-  }, []);
+    let cancelled = false;
+    window.cryptoControl.coinbase.getStatus().then(result => {
+      if (!cancelled) applyStatusResult(result);
+    });
+    return () => { cancelled = true; };
+  }, []); // applyStatusResult is stable (defined in render scope, closes over setters only)
 
   const handleConnect = async () => {
     const apiKeyName = keyNameRef.current?.value?.trim() ?? "";
@@ -217,7 +225,7 @@ export function Coinbase() {
                 disabled={isBusy}
                 style={{ backgroundColor: "var(--accent)", color: "#fff", border: "none" }}
               >
-                {connectionState === "syncing" ? "Sincronizando..." : "Sincronizar ahora"}
+                {isBusy ? "Sincronizando..." : "Sincronizar ahora"}
               </button>
               <button
                 onClick={handleDisconnect}

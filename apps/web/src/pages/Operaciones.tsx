@@ -45,6 +45,7 @@ export function Operaciones() {
     defaultValues: { type: "buy", amount: undefined, feeAmount: 0 }
   });
 
+  // eslint-disable-next-line react-hooks/incompatible-library
   const type = watch("type");
 
   const { data: assetsRes } = useQuery({
