@@ -11,6 +11,7 @@
   "private": true,
   "scripts": {
     "dev": "tsc && electron .",
+    "rebuild-electron": "npm rebuild better-sqlite3 --runtime=electron --target=30.5.1 --dist-url=https://electronjs.org/headers --build-from-source",
     "typecheck": "tsc --noEmit", "build": "tsc"
   },
   "build": {

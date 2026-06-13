@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { MarketChart } from "../components/MarketChart";
+import { CryptoLogo } from "../components/CryptoLogo";
 import "../mercado.css";
 
 const PERIODS = ["1h", "24h", "7d", "30d", "1y", "all"] as const;
@@ -118,12 +119,13 @@ export function Mercado() {
             onChange={(e) => setSearch(e.target.value)}
           />
           <div className="asset-list">
-            {filteredAssets.map((a: { id: string; name: string; symbol: string; }) => (
-              <div 
-                key={a.id} 
+            {filteredAssets.map((a: { id: string; name: string; symbol: string; logoUrl?: string | null }) => (
+              <div
+                key={a.id}
                 className={`asset-item ${selectedAsset === a.id ? 'selected' : ''}`}
                 onClick={() => setSelectedAsset(a.id)}
               >
+                <CryptoLogo logoUrl={a.logoUrl} symbol={a.symbol} size={28} />
                 <div className="asset-info">
                   <span className="asset-name">{a.name}</span>
                   <span className="asset-symbol">{a.symbol}</span>

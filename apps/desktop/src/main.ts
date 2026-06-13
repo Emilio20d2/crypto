@@ -35,12 +35,12 @@ function seedDatabase() {
   let existing = db.select().from(schema.assets).all();
   
   const defaultAssets = [
-    { id: "BTC", symbol: "BTC", name: "Bitcoin", type: "crypto" },
-    { id: "ETH", symbol: "ETH", name: "Ethereum", type: "crypto" },
-    { id: "ADA", symbol: "ADA", name: "Cardano", type: "crypto" },
-    { id: "SUI", symbol: "SUI", name: "Sui", type: "crypto" },
-    { id: "SEI", symbol: "SEI", name: "Sei", type: "crypto" },
-    { id: "EURC", symbol: "EURC", name: "Euro Coin", type: "crypto" }
+    { id: "BTC",  symbol: "BTC",  name: "Bitcoin",    type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/1/small/bitcoin.png" },
+    { id: "ETH",  symbol: "ETH",  name: "Ethereum",   type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/279/small/ethereum.png" },
+    { id: "ADA",  symbol: "ADA",  name: "Cardano",    type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/975/small/cardano.png" },
+    { id: "SUI",  symbol: "SUI",  name: "Sui",        type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/26375/small/sui_asset.jpeg" },
+    { id: "SEI",  symbol: "SEI",  name: "Sei",        type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/28205/small/Sei_Logo_-_Transparent.png" },
+    { id: "EURC", symbol: "EURC", name: "Euro Coin",  type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/26045/small/euro-coin.png" },
   ];
 
   console.log(`[DB] Se encontraron ${existing.length} activos. Ejecutando siembra de activos ausentes...`);
@@ -54,9 +54,19 @@ function seedDatabase() {
         symbol: asset.symbol,
         name: asset.name,
         type: asset.type,
+        logoUrl: asset.logoUrl,
         createdAt: now,
         updatedAt: now
       }).run();
+    } else {
+      // Update logoUrl for existing assets that don't have one yet
+      const existing_asset = existing.find(a => a.id === asset.id);
+      if (!existing_asset?.logoUrl) {
+        db.update(schema.assets)
+          .set({ logoUrl: asset.logoUrl, updatedAt: now })
+          .where(eq(schema.assets.id, asset.id))
+          .run();
+      }
     }
   }
 

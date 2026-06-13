@@ -1,6 +1,7 @@
 import { useQuery, useQueries } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { createChart, LineSeries } from "lightweight-charts";
+import { CryptoLogo } from "../components/CryptoLogo";
 
 function Sparkline({ data, positive = true }: { data: { time: number; value: number }[]; positive?: boolean }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -240,6 +241,7 @@ export function Portfolio() {
               <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
                 <th style={{ padding: '12px 16px' }}>Activo</th>
                 <th style={{ padding: '12px 16px', textAlign: 'right' }}>Balance</th>
+                <th style={{ padding: '12px 16px', textAlign: 'right' }}>Precio Medio</th>
                 <th style={{ padding: '12px 16px', textAlign: 'right' }}>Precio de Mercado</th>
                 <th style={{ padding: '12px 16px', textAlign: 'center' }}>Tendencia</th>
                 <th style={{ padding: '12px 16px', textAlign: 'right' }}>Valor Actual</th>
@@ -252,8 +254,8 @@ export function Portfolio() {
               {allocationData.map((alloc: import("@crypto-control/portfolio").AssetAllocation) => {
                 const pos = portfolioData[alloc.assetId];
                 if (!pos) return null;
-                const asset = assets.find((a: { id: string; name: string; symbol: string }) => a.id === alloc.assetId);
-                
+                const asset = assets.find((a: { id: string; name: string; symbol: string; logoUrl?: string | null }) => a.id === alloc.assetId);
+
                 const currentPrice = pos.balance > 0 ? alloc.valueEur / pos.balance : 0;
                 const unrealizedGain = alloc.valueEur - pos.totalInvestedEur;
                 const unrealizedPct = pos.totalInvestedEur > 0 ? (unrealizedGain / pos.totalInvestedEur) * 100 : 0;
@@ -261,16 +263,26 @@ export function Portfolio() {
                 return (
                   <tr key={alloc.assetId} style={{ borderBottom: '1px solid var(--surface-hover)' }}>
                     <td style={{ padding: '12px 16px' }}>
-                      <div style={{ fontWeight: 600 }}>{asset?.name || alloc.assetId}</div>
-                      <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>{asset?.symbol || alloc.assetId}</div>
-                      {pos.hasPendingValuation && (
-                        <span style={{ fontSize: '0.75rem', backgroundColor: '#fef3c7', color: '#d97706', padding: '2px 6px', borderRadius: '4px', marginTop: '4px', display: 'inline-block' }}>
-                          Pendiente valoración
-                        </span>
-                      )}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <CryptoLogo logoUrl={asset?.logoUrl} symbol={asset?.symbol || alloc.assetId} size={28} />
+                        <div>
+                          <div style={{ fontWeight: 600 }}>{asset?.name || alloc.assetId}</div>
+                          <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>{asset?.symbol || alloc.assetId}</div>
+                          {pos.hasPendingValuation && (
+                            <span style={{ fontSize: '0.75rem', backgroundColor: '#fef3c7', color: '#d97706', padding: '2px 6px', borderRadius: '4px', marginTop: '4px', display: 'inline-block' }}>
+                              Pendiente valoración
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </td>
                     <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 500 }}>
                       {pos.balance.toLocaleString("es-ES", { maximumFractionDigits: 6 })}
+                    </td>
+                    <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text-secondary)' }}>
+                      {pos.averagePriceEur != null
+                        ? pos.averagePriceEur.toLocaleString("es-ES", { style: "currency", currency: "EUR" })
+                        : "—"}
                     </td>
                     <td style={{ padding: '12px 16px', textAlign: 'right' }}>
                       {currentPrice > 0 ? currentPrice.toLocaleString("es-ES", { style: "currency", currency: "EUR" }) : "-"}
@@ -305,8 +317,8 @@ export function Portfolio() {
           {allocationData.map((alloc: import("@crypto-control/portfolio").AssetAllocation) => {
             const pos = portfolioData[alloc.assetId];
             if (!pos) return null;
-            const asset = assets.find((a: { id: string; name: string; symbol: string }) => a.id === alloc.assetId);
-            
+            const asset = assets.find((a: { id: string; name: string; symbol: string; logoUrl?: string | null }) => a.id === alloc.assetId);
+
             const currentPrice = pos.balance > 0 ? alloc.valueEur / pos.balance : 0;
             const unrealizedGain = alloc.valueEur - pos.totalInvestedEur;
             const unrealizedPct = pos.totalInvestedEur > 0 ? (unrealizedGain / pos.totalInvestedEur) * 100 : 0;
@@ -314,9 +326,12 @@ export function Portfolio() {
             return (
               <div key={alloc.assetId} className="portfolio-card">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', paddingBottom: '12px', borderBottom: '1px solid var(--border-color)' }}>
-                  <div>
-                    <div style={{ fontWeight: 600, fontSize: '1.1rem' }}>{asset?.name || alloc.assetId}</div>
-                    <div style={{ color: 'var(--text-secondary)' }}>{asset?.symbol || alloc.assetId}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <CryptoLogo logoUrl={asset?.logoUrl} symbol={asset?.symbol || alloc.assetId} size={32} />
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: '1.1rem' }}>{asset?.name || alloc.assetId}</div>
+                      <div style={{ color: 'var(--text-secondary)' }}>{asset?.symbol || alloc.assetId}</div>
+                    </div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontWeight: 600, fontSize: '1.1rem' }}>{alloc.valueEur.toLocaleString("es-ES", { style: "currency", currency: "EUR" })}</div>
@@ -328,7 +343,16 @@ export function Portfolio() {
                   <span className="portfolio-card-label">Balance</span>
                   <span className="portfolio-card-value">{pos.balance.toLocaleString("es-ES", { maximumFractionDigits: 6 })}</span>
                 </div>
-                
+
+                <div className="portfolio-card-row">
+                  <span className="portfolio-card-label">Precio Medio</span>
+                  <span className="portfolio-card-value">
+                    {pos.averagePriceEur != null
+                      ? pos.averagePriceEur.toLocaleString("es-ES", { style: "currency", currency: "EUR" })
+                      : "—"}
+                  </span>
+                </div>
+
                 <div className="portfolio-card-row">
                   <span className="portfolio-card-label">Precio Act.</span>
                   <span className="portfolio-card-value">{currentPrice > 0 ? currentPrice.toLocaleString("es-ES", { style: "currency", currency: "EUR" }) : "-"}</span>
