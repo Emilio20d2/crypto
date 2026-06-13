@@ -60,18 +60,14 @@ function seedDatabase() {
     }
   }
 
-  // Seed default portfolio target if it doesn't exist
-  const existingTarget = db.select().from(schema.settings).where(eq(schema.settings.key, "portfolio_target")).all();
-  if (existingTarget.length === 0) {
-    db.insert(schema.settings).values({ key: "portfolio_target", value: "50000" }).run();
-  }
-
-  // Volver a consultar y comprobar mínimo seis activos
+  // Volver a consultar y verificar que todos los símbolos requeridos están presentes
   existing = db.select().from(schema.assets).all();
   console.log(`[DB] Consulta post-siembra: ${existing.length} activos en base de datos.`);
-  
-  if (existing.length < 6) {
-    throw new Error("La siembra de activos no se completó: menos de 6 activos en la base de datos.");
+
+  const requiredSymbols = ["BTC", "ETH", "ADA", "SUI", "SEI", "EURC"];
+  const missingSymbols = requiredSymbols.filter(sym => !existing.some(a => a.symbol === sym));
+  if (missingSymbols.length > 0) {
+    throw new Error(`La siembra de activos no se completó. Faltan los símbolos: ${missingSymbols.join(", ")}`);
   }
 }
 
@@ -154,8 +150,6 @@ function setupIpcHandlers() {
   }));
 
   ipcMain.handle("transactions:list", withResult(async () => {
-    const { DatabasePortfolioRepository } = require("@crypto-control/database") as typeof import("@crypto-control/database");
-    const db = getDb();
     const repo = new DatabasePortfolioRepository(db);
     const list = await repo.getTransactions();
     return TransactionInputListSchema.parse(list);

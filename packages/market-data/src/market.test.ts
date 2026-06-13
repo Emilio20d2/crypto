@@ -59,7 +59,7 @@ describe("Market Providers y Resiliencia", () => {
     
     expect(cb.getCurrentPrice).toHaveBeenCalled();
     expect(cg.getCurrentPrice).toHaveBeenCalled();
-    expect(result).toEqual({ price: 48000.00, state: "live" });
+    expect(result).toMatchObject({ price: 48000.00, state: "live", provider: "coingecko" });
   }, 10000);
 
   test("MarketService - Rate limit / Fallo total no rompe en blanco (Lanza error recuperable)", async () => {
@@ -69,7 +69,7 @@ describe("Market Providers y Resiliencia", () => {
     vi.spyOn(cg, "getCurrentPrice").mockRejectedValue(new Error("Rate limit 429 CoinGecko"));
 
     const result = await marketService.getCurrentPrice("bitcoin");
-    expect(result).toEqual({ price: null, state: "unavailable", reason: "Rate limit 429 CoinGecko" });
+    expect(result).toMatchObject({ price: null, state: "unavailable", reason: "Rate limit 429 CoinGecko" });
   }, 10000);
 
   test("CoinGecko - Historical Prices filtra 1h correctamente", async () => {

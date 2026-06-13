@@ -1,6 +1,6 @@
 import { useQuery, useQueries } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
-import { createChart } from "lightweight-charts";
+import { createChart, LineSeries } from "lightweight-charts";
 
 function Sparkline({ data, positive = true }: { data: { time: number; value: number }[]; positive?: boolean }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -29,9 +29,9 @@ function Sparkline({ data, positive = true }: { data: { time: number; value: num
       handleScale: false,
     });
 
-    const lineSeries = chart.addLineSeries({
+    const lineSeries = chart.addSeries(LineSeries, {
       color: positive ? "#10B981" : "#EF4444",
-      lineWidth: 1.5,
+      lineWidth: 1,
       priceLineVisible: false,
       lastValueVisible: false,
     });

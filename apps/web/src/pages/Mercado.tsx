@@ -61,8 +61,9 @@ export function Mercado() {
     const ops: { time: import('lightweight-charts').Time; type: string; label: string; color: string }[] = [];
     
     for (const tx of txsRes.data) {
-      // Only include operations within the chart's visible timeframe (with a small buffer)
-      if (tx.date < chartStartTime - 86400000) continue;
+      // chartStartTime is in seconds; tx.date is in milliseconds — convert before comparing
+      const txTimeSec = Math.floor(tx.date / 1000);
+      if (txTimeSec < chartStartTime - 86400) continue;
 
       for (const leg of tx.legs) {
         if (leg.assetId === selectedAsset) {
@@ -91,7 +92,7 @@ export function Mercado() {
           
           if (type) {
             ops.push({
-              time: Math.floor(tx.date / 1000) as import('lightweight-charts').Time, // assuming lightweight-charts expects seconds for Time
+              time: txTimeSec as import('lightweight-charts').Time,
               type,
               label,
               color
