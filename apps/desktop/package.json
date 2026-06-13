@@ -1,0 +1,15 @@
+{
+  "name": "@crypto-control/desktop",
+  "version": "0.1.0",
+  "main": "dist/main.js",
+  "private": true,
+  "scripts": {
+    "dev": "tsc && electron .",
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3",
+    "typescript": "^5.4.5"
+  }
+}

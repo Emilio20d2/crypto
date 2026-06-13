@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+scanned_secrets.json
+node_modules/
+dist/
+release/
+.DS_Store

@@ -1,0 +1,6 @@
+{
+  "name": "@crypto-control/market-data",
+  "version": "0.1.0",
+  "main": "index.ts",
+  "private": true
+}

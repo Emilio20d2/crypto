@@ -1,0 +1,74 @@
+
+:root {
+  --bg-color: #FFFFFF;
+  --surface-color: #F9FAFB;
+  --surface-hover: #F3F4F6;
+  --text-primary: #111827;
+  --text-secondary: #6B7280;
+  --border-color: #E5E7EB;
+  --brand-primary: #0284C7;
+  --brand-light: #E0F2FE;
+  --error-color: #EF4444;
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+* { box-sizing: border-box; }
+
+.layout { display: flex; min-height: 100vh; }
+.sidebar {
+  width: 260px;
+  background-color: var(--surface-color);
+  border-right: 1px solid var(--border-color);
+  padding: 24px 20px;
+  display: flex;
+  flex-direction: column;
+}
+.sidebar-logo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-weight: 600;
+  font-size: 1.1rem;
+  margin-bottom: 40px;
+}
+.sidebar-logo img { width: 32px; height: 32px; }
+.nav-link {
+  display: block;
+  padding: 10px 16px;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+.nav-link:hover { background-color: var(--surface-hover); color: var(--text-primary); }
+.nav-link.active { background-color: var(--brand-light); color: var(--brand-primary); }
+
+.main-content { flex: 1; padding: 40px 60px; overflow-y: auto; background-color: var(--bg-color); }
+.page-title { font-size: 2rem; font-weight: 700; margin-top: 0; margin-bottom: 32px; color: var(--text-primary); }
+
+.card {
+  background-color: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 24px;
+}
+
+.error-container {
+  padding: 40px;
+  text-align: center;
+  color: var(--text-primary);
+}
+.error-title { color: var(--error-color); font-size: 1.5rem; font-weight: bold; margin-bottom: 16px; }
