@@ -72,3 +72,39 @@ body {
   color: var(--text-primary);
 }
 .error-title { color: var(--error-color); font-size: 1.5rem; font-weight: bold; margin-bottom: 16px; }
+
+/* Responsive Table/Cards for Portfolio */
+@media (max-width: 768px) {
+  .portfolio-desktop-view {
+    display: none !important;
+  }
+  .portfolio-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .portfolio-card {
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 16px;
+    background: var(--bg-color);
+  }
+  .portfolio-card-row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    align-items: center;
+  }
+  .portfolio-card-label {
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+  }
+  .portfolio-card-value {
+    font-weight: 500;
+  }
+}
+@media (min-width: 769px) {
+  .portfolio-cards {
+    display: none;
+  }
+}

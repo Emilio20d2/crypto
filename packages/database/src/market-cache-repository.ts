@@ -1,7 +1,7 @@
 import { MarketCacheRepository, HistoricalPriceData } from "@crypto-control/market-data";
 import { getDb } from "./db";
 import { priceHistory } from "./schema";
-import { and, eq, gte, desc, asc } from "drizzle-orm";
+import { and, eq, gte, desc, asc, sql } from "drizzle-orm";
 
 export class DatabaseMarketCacheRepository implements MarketCacheRepository {
   constructor(private db: ReturnType<typeof getDb>) {}
@@ -60,21 +60,15 @@ export class DatabaseMarketCacheRepository implements MarketCacheRepository {
       fetchedAt
     }));
 
-    // We just delete existing cache for this period and insert the new one
-    await this.db.delete(priceHistory)
-      .where(
-        and(
-          eq(priceHistory.assetId, assetId),
-          eq(priceHistory.quoteCurrency, quoteCurrency),
-          eq(priceHistory.interval, period)
-        )
-      );
-
     // We do chunks of 500 to avoid "too many variables" in SQLite
     const chunkSize = 500;
     for (let i = 0; i < values.length; i += chunkSize) {
       const chunk = values.slice(i, i + chunkSize);
-      await this.db.insert(priceHistory).values(chunk);
+      await this.db.insert(priceHistory).values(chunk)
+        .onConflictDoUpdate({
+          target: [priceHistory.assetId, priceHistory.quoteCurrency, priceHistory.timestamp, priceHistory.provider, priceHistory.interval],
+          set: { price: sql`excluded.price`, fetchedAt }
+        });
     }
   }
 

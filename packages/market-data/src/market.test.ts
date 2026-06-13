@@ -63,13 +63,13 @@ describe("Market Providers y Resiliencia", () => {
   }, 10000);
 
   test("MarketService - Rate limit / Fallo total no rompe en blanco (Lanza error recuperable)", async () => {
-    const cg = (marketService as any).coingecko;
-    const cb = (marketService as any).coinbase;
+    const cg = (marketService as unknown as { coingecko: { getCurrentPrice: unknown } }).coingecko;
+    const cb = (marketService as unknown as { coinbase: { getCurrentPrice: unknown } }).coinbase;
     vi.spyOn(cb, "getCurrentPrice").mockRejectedValue(new Error("Rate limit 429 Coinbase"));
     vi.spyOn(cg, "getCurrentPrice").mockRejectedValue(new Error("Rate limit 429 CoinGecko"));
 
     const result = await marketService.getCurrentPrice("bitcoin");
-    expect(result).toEqual({ price: 0, state: "unavailable" });
+    expect(result).toEqual({ price: null, state: "unavailable", reason: "Rate limit 429 CoinGecko" });
   }, 10000);
 
   test("CoinGecko - Historical Prices filtra 1h correctamente", async () => {

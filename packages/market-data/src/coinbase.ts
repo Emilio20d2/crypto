@@ -1,6 +1,7 @@
 import { MarketDataProvider, HistoricalPriceData } from "./interfaces";
 import { MarketTimeoutError, MarketRateLimitError, MarketInvalidResponseError, MarketNotFoundError } from "./errors";
 import { AssetMetadata } from "./mapping";
+import { parseRetryAfter } from "./utils";
 
 import { z } from "zod";
 
@@ -31,12 +32,18 @@ export class CoinbaseProvider implements MarketDataProvider {
       clearTimeout(id);
 
       if (response.status === 404) throw new MarketNotFoundError(`Asset not found at ${url}`);
-      if (response.status === 429) throw new MarketRateLimitError(undefined, `Rate limit exceeded for Coinbase`);
+      if (response.status === 429) {
+        const retryAfter = parseRetryAfter(response.headers.get("Retry-After"));
+        throw new MarketRateLimitError(retryAfter, `Rate limit exceeded for Coinbase`);
+      }
       if (!response.ok) throw new MarketInvalidResponseError(`Coinbase API error: ${response.status} ${response.statusText}`);
 
       return await response.json();
     } catch (error: unknown) {
       clearTimeout(id);
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw error;
+      }
       if (error instanceof Error && (error.name === "AbortError" || error.message?.includes("timeout"))) {
         throw new MarketTimeoutError("Coinbase API timed out");
       }

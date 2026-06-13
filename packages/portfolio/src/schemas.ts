@@ -12,7 +12,11 @@ export const PortfolioSummarySchema = z.object({
   totalValueEur: z.number(),
   totalInvestedEur: z.number(),
   unrealizedGainEur: z.number(),
-  unrealizedGainPercentage: z.number()
+  unrealizedGainPercentage: z.number(),
+  valuationStatus: z.enum(["complete", "partial", "empty"]).default("empty"),
+  valuedAssets: z.number().default(0),
+  unavailableAssets: z.number().default(0),
+  lastSuccessfulPriceAt: z.number().nullable().default(null)
 });
 
 export const AssetAllocationSchema = z.object({

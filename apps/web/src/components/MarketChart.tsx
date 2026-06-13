@@ -1,18 +1,20 @@
 import { useEffect, useRef } from "react";
-import { createChart, AreaSeries, CrosshairMode } from "lightweight-charts";
-import type { IChartApi, ISeriesApi, Time } from "lightweight-charts";
+import { createChart, AreaSeries, CrosshairMode, createSeriesMarkers } from "lightweight-charts";
+import type { IChartApi, ISeriesApi, Time, ISeriesMarkersPluginApi } from "lightweight-charts";
 
 export interface MarketChartProps {
   data: { time: Time; value: number }[];
+  operations?: { time: Time; type: string; label: string; color: string }[];
   provider?: string;
   isCached?: boolean;
   emptyStateMessage?: string;
 }
 
-export function MarketChart({ data, provider, isCached, emptyStateMessage = "No hay datos disponibles" }: MarketChartProps) {
+export function MarketChart({ data, operations = [], provider, isCached, emptyStateMessage = "No hay datos disponibles" }: MarketChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Area"> | null>(null);
+  const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -51,6 +53,7 @@ export function MarketChart({ data, provider, isCached, emptyStateMessage = "No 
       lineWidth: 2,
     });
     seriesRef.current = series;
+    markersRef.current = createSeriesMarkers(series);
 
     // Use ResizeObserver for more robust resizing
     const resizeObserver = new ResizeObserver((entries) => {
@@ -82,13 +85,16 @@ export function MarketChart({ data, provider, isCached, emptyStateMessage = "No 
           tooltipRef.current.style.display = 'block';
           tooltipRef.current.style.left = param.point.x + 15 + 'px';
           tooltipRef.current.style.top = param.point.y + 15 + 'px';
-          tooltipRef.current.innerHTML = `<div><strong>Price:</strong> €${value.toFixed(2)}</div>`;
+          tooltipRef.current.innerHTML = `<div><strong>Precio:</strong> €${value.toFixed(2)}</div>`;
         }
       }
     });
 
     return () => {
       resizeObserver.disconnect();
+      if (markersRef.current) {
+        markersRef.current = null;
+      }
       if (chartRef.current) {
         chartRef.current.remove();
         chartRef.current = null;
@@ -102,16 +108,33 @@ export function MarketChart({ data, provider, isCached, emptyStateMessage = "No 
       chartRef.current?.timeScale().fitContent();
 
       const latest = data[data.length - 1];
-      // @ts-expect-error: En lightweight-charts v5 los markers no están tipados estáticamente en AreaSeries
-      seriesRef.current.setMarkers([
-        {
+      if (markersRef.current) {
+        const markers: import('lightweight-charts').SeriesMarker<Time>[] = operations.map(op => ({
+          time: op.time,
+          position: op.type === "buy" ? 'belowBar' : 'aboveBar',
+          color: op.color,
+          shape: op.type === "buy" ? 'arrowUp' : 'arrowDown',
+          text: op.label,
+        }));
+        
+        markers.push({
           time: latest.time,
           position: 'aboveBar',
           color: '#327cff',
           shape: 'circle',
-          text: 'Current',
-        }
-      ]);
+          text: 'Actual',
+        });
+        
+        // Sort markers by time as lightweight-charts requires them to be strictly ascending in time, 
+        // wait, actually lightweight-charts requires markers to be sorted by time
+        markers.sort((a, b) => {
+          const ta = typeof a.time === 'string' ? new Date(a.time).getTime() : (a.time as number);
+          const tb = typeof b.time === 'string' ? new Date(b.time).getTime() : (b.time as number);
+          return ta - tb;
+        });
+
+        markersRef.current.setMarkers(markers);
+      }
     }
   }, [data]);
 
@@ -119,7 +142,7 @@ export function MarketChart({ data, provider, isCached, emptyStateMessage = "No 
     <div style={{ position: "relative" }}>
       {provider && (
         <div style={{ position: "absolute", top: 10, left: 10, zIndex: 2, background: "rgba(255,255,255,0.8)", padding: "4px 8px", borderRadius: 4, fontSize: "12px", border: "1px solid #ddd" }}>
-          Provider: {provider} {isCached && <span style={{ color: "green", marginLeft: "4px" }}>(Cached)</span>}
+          Proveedor: {provider} {isCached && <span style={{ color: "green", marginLeft: "4px" }}>(En caché)</span>}
         </div>
       )}
       {data.length === 0 && (

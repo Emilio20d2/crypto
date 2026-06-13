@@ -10,7 +10,7 @@ export async function retryWithBackoff<T>(
 
   while (attempt < maxRetries) {
     if (signal?.aborted) {
-      throw new Error("AbortError");
+      throw new DOMException("AbortError", "AbortError");
     }
 
     try {
@@ -37,16 +37,37 @@ export async function retryWithBackoff<T>(
 
       // Wait before retrying
       await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, delayMs);
+        let abortHandler: (() => void) | undefined;
+        
+        const timer = setTimeout(() => {
+          if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
+          resolve();
+        }, delayMs);
+
         if (signal) {
-          signal.addEventListener("abort", () => {
+          abortHandler = () => {
             clearTimeout(timer);
-            reject(new Error("AbortError"));
-          });
+            reject(new DOMException("AbortError", "AbortError"));
+          };
+          signal.addEventListener("abort", abortHandler, { once: true });
         }
       });
     }
   }
 
-  throw new Error("Max retries exceeded"); // Should never happen due to the throw inside the loop
+  throw new DOMException("Max retries exceeded", "AbortError"); // Should never happen due to the throw inside the loop
+}
+
+export function parseRetryAfter(header: string | null): number | undefined {
+  if (!header) return undefined;
+  // If it's purely digits, it's seconds
+  if (/^\d+$/.test(header)) {
+    return parseInt(header, 10) * 1000;
+  }
+  // Otherwise, it might be an HTTP date
+  const date = new Date(header);
+  if (!isNaN(date.getTime())) {
+    return Math.max(0, date.getTime() - Date.now());
+  }
+  return undefined;
 }

@@ -1,6 +1,7 @@
 import { MarketDataProvider, HistoricalPriceData } from "./interfaces";
 import { MarketTimeoutError, MarketRateLimitError, MarketInvalidResponseError, MarketNotFoundError } from "./errors";
 import { AssetMetadata } from "./mapping";
+import { parseRetryAfter } from "./utils";
 
 const COINGECKO_API_URL = "https://api.coingecko.com/api/v3";
 
@@ -21,14 +22,17 @@ export class CoinGeckoProvider implements MarketDataProvider {
 
       if (response.status === 404) throw new MarketNotFoundError(`Asset not found at ${url}`);
       if (response.status === 429) {
-        const retryAfter = response.headers.get("retry-after");
-        throw new MarketRateLimitError(retryAfter ? parseInt(retryAfter) * 1000 : undefined, "Rate limit exceeded for CoinGecko");
+        const retryAfter = parseRetryAfter(response.headers.get("retry-after"));
+        throw new MarketRateLimitError(retryAfter, "Rate limit exceeded for CoinGecko");
       }
       if (!response.ok) throw new MarketInvalidResponseError(`CoinGecko API error: ${response.status} ${response.statusText}`);
 
       return await response.json();
     } catch (error: unknown) {
       clearTimeout(id);
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw error;
+      }
       if (error instanceof Error && (error.name === "AbortError" || error.message?.includes("timeout"))) {
         throw new MarketTimeoutError("CoinGecko API timed out");
       }

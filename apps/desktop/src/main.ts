@@ -30,37 +30,38 @@ function setupDatabase() {
     } else {
       console.warn("[DB] No se encontró carpeta de migraciones en", migrationsPath);
     }
-  } catch (e: any) {
-    console.error("[DB] Fallo en migración:", e.message);
+  } catch (e: unknown) {
+    console.error("[DB] Fallo en migración:", e instanceof Error ? e.message : String(e));
     // Un fallo en migración detendría la ejecución si es destructiva, 
     // pero idealmente deberíamos hacer un backup del SQLite antes (implementación de backup requerida)
   }
 }
 
 function setupIpcHandlers() {
-  const { MarketService } = require("@crypto-control/market-data");
-  const { PortfolioService, PortfolioCalculator } = require("@crypto-control/portfolio");
-  const { DatabasePortfolioRepository, DatabaseMarketCacheRepository } = require("@crypto-control/database");
+  const { MarketService } = require("@crypto-control/market-data") as typeof import("@crypto-control/market-data");
+  const { DatabasePortfolioRepository, DatabaseMarketCacheRepository } = require("@crypto-control/database") as typeof import("@crypto-control/database");
 
   const db = getDb();
   const marketCache = new DatabaseMarketCacheRepository(db);
   const marketService = new MarketService(marketCache);
-  
-  // We lazily instantiate the portfolio service per request or once the DB is ready
+
   const getPortfolioService = () => {
+    const { PortfolioService, PortfolioCalculator, FifoCalculator } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
     const repo = new DatabasePortfolioRepository(db);
     const calc = new PortfolioCalculator();
-    return new PortfolioService(repo, calc, marketService);
+    const fifoCalc = new FifoCalculator();
+    return new PortfolioService(repo, calc, fifoCalc, marketService);
   };
 
   // Helper to wrap IPC handlers with Result
-  const withResult = (fn: (...args: any[]) => Promise<any>) => async (...args: any[]) => {
+  const withResult = <T extends unknown[], R>(fn: (...args: T) => Promise<R>) => async (...args: T) => {
     try {
       const data = await fn(...args);
       return { ok: true, data };
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error("IPC Error:", e);
-      return { ok: false, error: e.message, code: e.code };
+      const err = e as { message?: string; code?: string };
+      return { ok: false, error: err.message || "Unknown error", code: err.code };
     }
   };
 
@@ -93,7 +94,7 @@ function setupIpcHandlers() {
     const db = getDb();
     const parsed = CreateTransactionSchema.parse(payload);
     
-    return db.transaction((tx: any) => {
+    return db.transaction((tx) => {
       const txId = crypto.randomUUID();
       
       tx.insert(schema.transactions).values({
@@ -158,14 +159,10 @@ function setupIpcHandlers() {
   }));
 
   ipcMain.handle("market:get-historical-prices", withResult(async (_, input: {assetId: string, period: string, quoteCurrency?: string}) => {
-    const points = await marketService.getHistoricalPrices(input.assetId, input.period);
+    const result = await marketService.getHistoricalPrices(input.assetId, input.period);
     return {
-      points: points.map((p: any) => ({ time: Math.floor(p.timestamp / 1000), value: p.price })),
-      provider: "market-service",
-      requestedPeriod: input.period,
-      actualInterval: "auto",
-      fetchedAt: Date.now(),
-      isCached: false
+      ...result,
+      points: result.points.map((p) => ({ time: Math.floor(p.timestamp / 1000), value: p.price }))
     };
   }));
 }

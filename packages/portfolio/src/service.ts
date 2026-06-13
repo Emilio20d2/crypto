@@ -1,10 +1,13 @@
 import type { PortfolioCalculator } from "./calculator";
+import type { FifoCalculator } from "./fifo";
 import type { PortfolioRepository } from "./repository";
 import type { PortfolioSummary, AssetAllocation, PortfolioResult } from "./schemas";
 
 export interface PriceResult {
-  price: number;
+  price: number | null;
   state: "live" | "cached" | "unavailable";
+  provider?: string;
+  fetchedAt?: number;
 }
 
 export interface PriceProvider {
@@ -13,22 +16,25 @@ export interface PriceProvider {
 
 export class PortfolioService {
   private repository: PortfolioRepository;
-  private calculator: PortfolioCalculator;
+  private portfolioCalculator: PortfolioCalculator;
+  private fifoCalculator: FifoCalculator;
   private priceProvider: PriceProvider;
 
   constructor(
     repository: PortfolioRepository,
-    calculator: PortfolioCalculator,
+    portfolioCalculator: PortfolioCalculator,
+    fifoCalculator: FifoCalculator,
     priceProvider: PriceProvider
   ) {
     this.repository = repository;
-    this.calculator = calculator;
+    this.portfolioCalculator = portfolioCalculator;
+    this.fifoCalculator = fifoCalculator;
     this.priceProvider = priceProvider;
   }
 
   async getPositions(): Promise<PortfolioResult> {
     const txs = await this.repository.getTransactions();
-    return this.calculator.calculate(txs);
+    return this.portfolioCalculator.calculate(txs);
   }
 
   async getSummary(): Promise<PortfolioSummary> {
@@ -36,16 +42,31 @@ export class PortfolioService {
     
     let totalValueEur = 0;
     let totalInvestedEur = 0;
+    let valuedAssets = 0;
+    let unavailableAssets = 0;
+    let lastSuccessfulPriceAt: number | null = null;
+    let assetCount = 0;
 
     for (const [assetId, pos] of Object.entries(positions)) {
       if (pos.balance > 0) {
-        const result = await this.priceProvider.getCurrentPriceEur(assetId).catch(() => ({ price: 0, state: "unavailable" as const }));
-        const currentPrice = result.state !== "unavailable" ? result.price : 0;
-        const value = pos.balance * currentPrice;
-        totalValueEur += value;
-        totalInvestedEur += pos.totalInvestedEur;
+        assetCount++;
+        let result: PriceResult;
+        try {
+          result = await this.priceProvider.getCurrentPriceEur(assetId);
+        } catch (error) {
+          result = { price: null, state: "unavailable" };
+        }
         
-        if (result.state === "unavailable") {
+        if (result.price !== null) {
+          const value = pos.balance * result.price;
+          totalValueEur += value;
+          totalInvestedEur += pos.totalInvestedEur;
+          valuedAssets++;
+          if (result.fetchedAt && (!lastSuccessfulPriceAt || result.fetchedAt > lastSuccessfulPriceAt)) {
+            lastSuccessfulPriceAt = result.fetchedAt;
+          }
+        } else {
+          unavailableAssets++;
           pos.hasPendingValuation = true;
         }
       }
@@ -53,12 +74,23 @@ export class PortfolioService {
 
     const unrealizedGainEur = totalValueEur - totalInvestedEur;
     const unrealizedGainPercentage = totalInvestedEur > 0 ? (unrealizedGainEur / totalInvestedEur) * 100 : 0;
+    
+    let valuationStatus: "complete" | "partial" | "empty" = "empty";
+    if (assetCount > 0) {
+      if (valuedAssets === assetCount) valuationStatus = "complete";
+      else if (valuedAssets > 0) valuationStatus = "partial";
+      else valuationStatus = "empty";
+    }
 
     return {
       totalValueEur,
       totalInvestedEur,
       unrealizedGainEur,
-      unrealizedGainPercentage
+      unrealizedGainPercentage,
+      valuationStatus,
+      valuedAssets,
+      unavailableAssets,
+      lastSuccessfulPriceAt
     };
   }
 
@@ -69,15 +101,22 @@ export class PortfolioService {
 
     for (const [assetId, pos] of Object.entries(positions)) {
       if (pos.balance > 0) {
-        const result = await this.priceProvider.getCurrentPriceEur(assetId).catch(() => ({ price: 0, state: "unavailable" as const }));
-        const currentPrice = result.state !== "unavailable" ? result.price : 0;
-        const value = pos.balance * currentPrice;
-        totalValueEur += value;
-        allocations.push({
-          assetId,
-          weight: 0,
-          valueEur: value
-        });
+        let result: PriceResult;
+        try {
+          result = await this.priceProvider.getCurrentPriceEur(assetId);
+        } catch (error) {
+          result = { price: null, state: "unavailable" };
+        }
+        
+        if (result.price !== null) {
+          const value = pos.balance * result.price;
+          totalValueEur += value;
+          allocations.push({
+            assetId,
+            weight: 0,
+            valueEur: value
+          });
+        }
       }
     }
 
@@ -92,8 +131,7 @@ export class PortfolioService {
 
   async recalculateFifo(): Promise<void> {
     const txs = await this.repository.getTransactions();
-    const fifoCalculator = new (await import("./fifo")).FifoCalculator();
-    const result = fifoCalculator.calculate(txs);
+    const result = this.fifoCalculator.calculate(txs);
     
     await this.repository.saveFifoResults(
       result.lots,
@@ -103,16 +141,12 @@ export class PortfolioService {
   }
 
   async getRealizedGains() {
-    // Re-calculate FIFO to ensure it is up to date, or rely on a DB query.
-    // For now we just return from calculator, but ideally it should be cached in DB or query DB.
     const txs = await this.repository.getTransactions();
-    const fifoCalculator = new (await import("./fifo")).FifoCalculator();
-    return fifoCalculator.calculate(txs).realizedGains;
+    return this.fifoCalculator.calculate(txs).realizedGains;
   }
 
   async getFifoLots() {
     const txs = await this.repository.getTransactions();
-    const fifoCalculator = new (await import("./fifo")).FifoCalculator();
-    return fifoCalculator.calculate(txs).lots;
+    return this.fifoCalculator.calculate(txs).lots;
   }
 }

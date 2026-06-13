@@ -1,7 +1,7 @@
 import type { TransactionInput } from "./types";
 import type { RealizedGain } from "./schemas";
 
-export interface Lot {
+export interface FifoLot {
   id: string;
   assetId: string;
   transactionId: string;
@@ -22,9 +22,9 @@ export interface LotConsumption {
 }
 
 export class FifoCalculator {
-  calculate(transactions: TransactionInput[]): { lots: Lot[], consumptions: LotConsumption[], realizedGains: RealizedGain[] } {
+  calculate(transactions: TransactionInput[]): { lots: FifoLot[], consumptions: LotConsumption[], realizedGains: RealizedGain[] } {
     const sorted = [...transactions].sort((a, b) => a.date - b.date);
-    const lots: Lot[] = [];
+    const lots: FifoLot[] = [];
     const consumptions: LotConsumption[] = [];
     const realizedGains: RealizedGain[] = [];
 

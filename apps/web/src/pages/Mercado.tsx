@@ -28,6 +28,11 @@ export function Mercado() {
     enabled: !!selectedAsset
   });
 
+  const { data: txsRes } = useQuery({
+    queryKey: ['transactions'],
+    queryFn: () => window.cryptoControl.transactions.list()
+  });
+
   const assets = assetsRes?.ok ? assetsRes.data : [];
   const currentPrice = priceRes?.ok ? priceRes.data.price : null;
 
@@ -39,11 +44,64 @@ export function Mercado() {
   }, [assets, search]);
 
   let variation24h = null;
+  let chartStartTime = 0;
   if (period === "24h" && historyRes?.ok && historyRes.data && historyRes.data.points.length > 0) {
     const firstPrice = historyRes.data.points[0].value;
     const lastPrice = historyRes.data.points[historyRes.data.points.length - 1].value;
     variation24h = ((lastPrice - firstPrice) / firstPrice) * 100;
   }
+  
+  if (historyRes?.ok && historyRes.data && historyRes.data.points.length > 0) {
+    chartStartTime = historyRes.data.points[0].time as number;
+  }
+
+  const operations = useMemo(() => {
+    if (!txsRes?.ok || !txsRes.data || !chartStartTime) return [];
+    
+    const ops: { time: import('lightweight-charts').Time; type: string; label: string; color: string }[] = [];
+    
+    for (const tx of txsRes.data) {
+      // Only include operations within the chart's visible timeframe (with a small buffer)
+      if (tx.date < chartStartTime - 86400000) continue;
+
+      for (const leg of tx.legs) {
+        if (leg.assetId === selectedAsset) {
+          // It's related to this asset
+          let type = '';
+          let label = '';
+          let color = '';
+          
+          if (tx.type === 'buy' && leg.legType === 'destination') {
+            type = 'buy';
+            label = `Compra ${leg.amount}`;
+            color = '#10B981'; // green
+          } else if (tx.type === 'sell' && leg.legType === 'source') {
+            type = 'sell';
+            label = `Venta ${leg.amount}`;
+            color = '#EF4444'; // red
+          } else if (tx.type === 'convert' && leg.legType === 'destination') {
+            type = 'buy';
+            label = `Conv. (In) ${leg.amount}`;
+            color = '#3B82F6'; // blue
+          } else if (tx.type === 'convert' && leg.legType === 'source') {
+            type = 'sell';
+            label = `Conv. (Out) ${leg.amount}`;
+            color = '#F59E0B'; // orange
+          }
+          
+          if (type) {
+            ops.push({
+              time: Math.floor(tx.date / 1000) as import('lightweight-charts').Time, // assuming lightweight-charts expects seconds for Time
+              type,
+              label,
+              color
+            });
+          }
+        }
+      }
+    }
+    return ops;
+  }, [txsRes, selectedAsset, chartStartTime]);
 
   return (
     <div className="mercado-page">
@@ -100,9 +158,10 @@ export function Mercado() {
             ) : historyRes?.ok && historyRes.data ? (
               <MarketChart 
                 data={historyRes.data.points.map((p: { time: number; value: number }) => ({
-                  time: p.time as import('lightweight-charts').Time, 
+                  time: (Math.floor(p.time / 1000)) as import('lightweight-charts').Time, 
                   value: p.value
                 }))} 
+                operations={operations}
                 provider={historyRes.data.provider}
                 isCached={historyRes.data.isCached}
               />

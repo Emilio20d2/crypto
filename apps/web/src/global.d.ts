@@ -1,7 +1,7 @@
-import { CryptoControlAPI } from "@crypto-control/core";
+import { FullCryptoControlAPI } from "@crypto-control/core";
 
 declare global {
   interface Window {
-    cryptoControl: CryptoControlAPI;
+    cryptoControl: FullCryptoControlAPI;
   }
 }

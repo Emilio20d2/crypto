@@ -1,4 +1,4 @@
-import { PortfolioRepository, TransactionInput, TransactionLegInput, TransactionType, LegType } from "@crypto-control/portfolio";
+import { PortfolioRepository, TransactionInput, TransactionLegInput, TransactionType, LegType, FifoLot, LotConsumption, RealizedGain } from "@crypto-control/portfolio";
 import { getDb } from "./db";
 import { transactions, transactionLegs, lots, lotConsumptions, realizedGains } from "./schema";
 
@@ -35,7 +35,7 @@ export class DatabasePortfolioRepository implements PortfolioRepository {
     }));
   }
 
-  async saveFifoResults(lotsData: any[], consumptionsData: any[], realizedGainsData: any[]): Promise<void> {
+  async saveFifoResults(lotsData: FifoLot[], consumptionsData: LotConsumption[], realizedGainsData: RealizedGain[]): Promise<void> {
     const { lots, lotConsumptions, realizedGains } = await import("./schema");
     
     // We should do this in a transaction if Drizzle supports it easily,
