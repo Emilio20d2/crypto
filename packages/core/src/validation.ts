@@ -27,7 +27,8 @@ export const TransactionLegSchema = z.object({
   assetId: z.string().uuid(),
   accountId: z.string().uuid().optional(),
   amount: z.number(), // Positivo = entrada, Negativo = salida
-  legType: z.enum(["source", "destination", "fee"])
+  legType: z.enum(["source", "destination", "fee"]),
+  valuationEur: z.number().optional()
 });
 
 export const FeeSchema = z.object({

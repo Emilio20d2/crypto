@@ -10,7 +10,8 @@
   "private": true,
   "dependencies": {
     "better-sqlite3": "^12.10.0",
-    "drizzle-orm": "^0.45.2"
+    "drizzle-orm": "^0.45.2",
+    "@crypto-control/portfolio": "0.1.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

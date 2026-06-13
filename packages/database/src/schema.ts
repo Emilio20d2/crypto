@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, uniqueIndex, index, primaryKey } from "drizzle-orm/sqlite-core";
 
 export const assets = sqliteTable("assets", {
   id: text("id").primaryKey(), // Ej. "bitcoin"
@@ -33,7 +33,8 @@ export const transactionLegs = sqliteTable("transaction_legs", {
   assetId: text("asset_id").notNull().references(() => assets.id),
   accountId: text("account_id").references(() => accounts.id),
   amount: real("amount").notNull(), // Positivo = entrada, Negativo = salida
-  legType: text("leg_type").notNull() // "source" | "destination" | "fee"
+  legType: text("leg_type").notNull(), // "source" | "destination" | "fee"
+  valuationEur: real("valuation_eur") // Total value in EUR
 });
 
 export const fees = sqliteTable("fees", {
@@ -43,11 +44,42 @@ export const fees = sqliteTable("fees", {
   amount: real("amount").notNull()
 });
 
+export const lots = sqliteTable("lots", {
+  id: text("id").primaryKey(),
+  assetId: text("asset_id").notNull().references(() => assets.id),
+  transactionId: text("transaction_id").notNull().references(() => transactions.id, { onDelete: "cascade" }),
+  date: integer("date").notNull(),
+  originalAmount: real("original_amount").notNull(),
+  remainingAmount: real("remaining_amount").notNull(),
+  unitAcquisitionPriceEur: real("unit_acquisition_price_eur").notNull(),
+  isFullyConsumed: integer("is_fully_consumed").notNull().default(0) // boolean
+});
+
+export const lotConsumptions = sqliteTable("lot_consumptions", {
+  id: text("id").primaryKey(),
+  lotId: text("lot_id").notNull().references(() => lots.id, { onDelete: "cascade" }),
+  transactionId: text("transaction_id").notNull().references(() => transactions.id, { onDelete: "cascade" }), // The sell/convert transaction
+  amountConsumed: real("amount_consumed").notNull(),
+  unitSellPriceEur: real("unit_sell_price_eur").notNull(),
+  realizedGainEur: real("realized_gain_eur").notNull(),
+  date: integer("date").notNull()
+});
+
 export const priceHistory = sqliteTable("price_history", {
   assetId: text("asset_id").notNull().references(() => assets.id),
+  quoteCurrency: text("quote_currency").notNull().default("EUR"),
   timestamp: integer("timestamp").notNull(),
-  priceEur: real("price_eur").notNull(),
-  source: text("source").notNull()
+  price: real("price").notNull(),
+  provider: text("provider").notNull(),
+  interval: text("interval").notNull(), // '1m', '5m', '1h', '1d' etc.
+  fetchedAt: integer("fetched_at").notNull()
+}, (table) => {
+  return {
+    pk: primaryKey({ columns: [table.assetId, table.quoteCurrency, table.timestamp, table.provider, table.interval] }),
+    idx1: index("idx_price_history_query").on(table.assetId, table.quoteCurrency, table.interval, table.timestamp),
+    idx2: index("idx_price_history_fetched").on(table.fetchedAt),
+    idx3: index("idx_price_history_provider").on(table.provider)
+  };
 });
 
 export const portfolioSnapshots = sqliteTable("portfolio_snapshots", {

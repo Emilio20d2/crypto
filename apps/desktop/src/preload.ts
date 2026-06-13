@@ -1,9 +1,14 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { IPCAPI, CreateTransactionInput } from "@crypto-control/core";
+import type { FullCryptoControlAPI, CreateTransactionInput } from "@crypto-control/core";
 
-const api: IPCAPI = {
+const cryptoControl: FullCryptoControlAPI = {
+  assets: {
+    list: () => ipcRenderer.invoke("assets:list")
+  },
   portfolio: {
     getSummary: () => ipcRenderer.invoke("portfolio:get-summary"),
+    getPositions: () => ipcRenderer.invoke("portfolio:get-positions"),
+    getAllocation: () => ipcRenderer.invoke("portfolio:get-allocation"),
   },
   transactions: {
     list: () => ipcRenderer.invoke("transactions:list"),
@@ -11,12 +16,9 @@ const api: IPCAPI = {
     update: (id: string, data: CreateTransactionInput) => ipcRenderer.invoke("transactions:update", id, data),
     delete: (id: string) => ipcRenderer.invoke("transactions:delete", id),
   },
-  assets: {
-    list: () => ipcRenderer.invoke("assets:list"),
-  },
   market: {
-    getCurrentPrice: (assetId: string, currency?: string) => ipcRenderer.invoke("market:get-current-price", assetId, currency),
-    getHistoricalPrices: (assetId: string, period: string, currency?: string) => ipcRenderer.invoke("market:get-historical-prices", assetId, period, currency),
+    getCurrentPrice: (input: { assetId: string, quoteCurrency: string }) => ipcRenderer.invoke("market:get-current-price", input),
+    getHistoricalPrices: (input: { assetId: string, quoteCurrency: string, period: string }) => ipcRenderer.invoke("market:get-historical-prices", input),
   },
   settings: {
     get: (key: string) => ipcRenderer.invoke("settings:get", key),
@@ -24,4 +26,4 @@ const api: IPCAPI = {
   }
 };
 
-contextBridge.exposeInMainWorld("api", api);
+contextBridge.exposeInMainWorld("cryptoControl", cryptoControl);

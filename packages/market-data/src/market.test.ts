@@ -2,14 +2,25 @@ import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { CoinbaseProvider } from "./coinbase";
 import { CoinGeckoProvider } from "./coingecko";
 import { MarketService } from "./index";
+import * as mapping from "./mapping";
 
 const originalFetch = global.fetch;
 
 describe("Market Providers y Resiliencia", () => {
   let marketService: MarketService;
   
+  const mockMeta = {
+    cryptoControlId: "bitcoin",
+    coinbaseProductId: "BTC-EUR",
+    coinGeckoId: "bitcoin",
+    symbol: "BTC",
+    quoteCurrency: "EUR",
+    supportedProviders: ["coinbase", "coingecko"]
+  };
+  
   beforeEach(() => {
     marketService = new MarketService();
+    vi.spyOn(mapping, 'getAssetMetadata').mockReturnValue(mockMeta);
   });
 
   afterEach(() => {
@@ -20,10 +31,10 @@ describe("Market Providers y Resiliencia", () => {
   test("Coinbase - Fetch current price (success)", async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ data: { amount: "50000.50" } })
+      json: async () => ({ price: "50000.50" })
     });
     const cb = new CoinbaseProvider();
-    const price = await cb.getCurrentPrice("bitcoin", "EUR");
+    const price = await cb.getCurrentPrice(mockMeta);
     expect(price).toBe(50000.50);
   });
 
@@ -33,7 +44,7 @@ describe("Market Providers y Resiliencia", () => {
       json: async () => ({ bitcoin: { eur: 49000.00 } })
     });
     const cg = new CoinGeckoProvider();
-    const price = await cg.getCurrentPrice("bitcoin", "eur");
+    const price = await cg.getCurrentPrice(mockMeta);
     expect(price).toBe(49000.00);
   });
 
@@ -74,9 +85,9 @@ describe("Market Providers y Resiliencia", () => {
       })
     });
     const cg = new CoinGeckoProvider();
-    const history = await cg.getHistoricalPrices("bitcoin", "1h", "eur");
-    expect(history.length).toBe(2); // Solo los ultimos 60 min
-    expect(history[0].price).toBe(41000);
+    const history = await cg.getHistoricalPrices(mockMeta, "1h");
+    expect(history.length).toBe(3); // 1h param translates to 1 day on CoinGecko
+    expect(history[0].price).toBe(40000);
   });
 
   test("CoinGecko - Historical Prices periodos mapean bien (7d)", async () => {
@@ -85,9 +96,8 @@ describe("Market Providers y Resiliencia", () => {
       json: async () => ({ prices: [] })
     });
     const cg = new CoinGeckoProvider();
-    await cg.getHistoricalPrices("bitcoin", "7d", "eur");
-    // Verify it called with days=7
-    expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("days=7"));
+    await cg.getHistoricalPrices(mockMeta, "7d");
+    expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("days=7"), expect.anything());
   });
 
   test("Respuesta inválida / Activo inexistente", async () => {
@@ -96,6 +106,6 @@ describe("Market Providers y Resiliencia", () => {
       status: 404
     });
     const cg = new CoinGeckoProvider();
-    await expect(cg.getCurrentPrice("fake-coin", "eur")).rejects.toThrow();
+    await expect(cg.getCurrentPrice(mockMeta)).rejects.toThrow();
   });
 });

@@ -38,108 +38,127 @@ function setupDatabase() {
 }
 
 function setupIpcHandlers() {
-  ipcMain.handle("portfolio:get-summary", async () => {
-    return { totalValueEur: 0 };
-  });
+  const { MarketService } = require("@crypto-control/market-data");
+  const { PortfolioService, PortfolioCalculator } = require("@crypto-control/portfolio");
+  const { DatabasePortfolioRepository } = require("@crypto-control/database");
 
-  ipcMain.handle("transactions:list", async () => {
+  const marketService = new MarketService();
+  
+  // We lazily instantiate the portfolio service per request or once the DB is ready
+  const getPortfolioService = () => {
+    const db = getDb();
+    const repo = new DatabasePortfolioRepository(db);
+    const calc = new PortfolioCalculator();
+    return new PortfolioService(repo, calc, marketService);
+  };
+
+  // Helper to wrap IPC handlers with Result
+  const withResult = (fn: (...args: any[]) => Promise<any>) => async (...args: any[]) => {
     try {
-      const db = getDb();
-      return await db.select().from(schema.transactions).all();
+      const data = await fn(...args);
+      return { ok: true, data };
     } catch (e: any) {
-      return { success: false, error: e.message };
+      console.error("IPC Error:", e);
+      return { ok: false, error: e.message, code: e.code };
     }
-  });
+  };
 
-  ipcMain.handle("transactions:create", async (_, payload) => {
-    try {
-      const db = getDb();
-      const parsed = CreateTransactionSchema.parse(payload);
+  ipcMain.handle("portfolio:get-summary", withResult(async () => {
+    return await getPortfolioService().getSummary();
+  }));
+
+  ipcMain.handle("portfolio:get-positions", withResult(async () => {
+    return await getPortfolioService().getPositions();
+  }));
+
+  ipcMain.handle("portfolio:get-allocation", withResult(async () => {
+    return await getPortfolioService().getAllocation();
+  }));
+
+  ipcMain.handle("transactions:list", withResult(async () => {
+    const db = getDb();
+    return await db.select().from(schema.transactions).all();
+  }));
+
+  ipcMain.handle("transactions:create", withResult(async (_, payload) => {
+    const db = getDb();
+    const parsed = CreateTransactionSchema.parse(payload);
+    
+    return db.transaction((tx: any) => {
+      const txId = crypto.randomUUID();
       
-      return db.transaction((tx: any) => {
-        const txId = crypto.randomUUID();
-        
-        tx.insert(schema.transactions).values({
-          id: txId,
-          type: parsed.type,
-          date: parsed.date,
-          externalId: parsed.externalId,
-          notes: parsed.notes,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        }).run();
+      tx.insert(schema.transactions).values({
+        id: txId,
+        type: parsed.type,
+        date: parsed.date,
+        externalId: parsed.externalId,
+        notes: parsed.notes,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }).run();
 
-        for (const leg of parsed.legs) {
-          tx.insert(schema.transactionLegs).values({
+      for (const leg of parsed.legs) {
+        tx.insert(schema.transactionLegs).values({
+          id: crypto.randomUUID(),
+          transactionId: txId,
+          assetId: leg.assetId,
+          accountId: leg.accountId,
+          amount: leg.amount,
+          legType: leg.legType,
+          valuationEur: leg.valuationEur
+        }).run();
+      }
+
+      if (parsed.fees) {
+        for (const fee of parsed.fees) {
+          tx.insert(schema.fees).values({
             id: crypto.randomUUID(),
             transactionId: txId,
-            assetId: leg.assetId,
-            accountId: leg.accountId,
-            amount: leg.amount,
-            legType: leg.legType
+            assetId: fee.assetId,
+            amount: fee.amount
           }).run();
         }
+      }
+      
+      return { id: txId };
+    });
+  }));
 
-        if (parsed.fees) {
-          for (const fee of parsed.fees) {
-            tx.insert(schema.fees).values({
-              id: crypto.randomUUID(),
-              transactionId: txId,
-              assetId: fee.assetId,
-              amount: fee.amount
-            }).run();
-          }
-        }
-        
-        return { success: true, id: txId };
-      });
-    } catch (e: any) {
-      console.error("IPC Error transactions:create", e);
-      return { success: false, error: e.message };
-    }
-  });
+  ipcMain.handle("transactions:update", withResult(async (_, id: string, payload) => {
+    return null; // TODO implement
+  }));
 
-  ipcMain.handle("transactions:update", async (_, id: string, payload) => {
-    return { success: true };
-  });
+  ipcMain.handle("transactions:delete", withResult(async (_, id: string) => {
+    const db = getDb();
+    await db.delete(schema.transactions).where(eq(schema.transactions.id, id)).run();
+    return null;
+  }));
 
-  ipcMain.handle("transactions:delete", async (_, id: string) => {
-    try {
-      const db = getDb();
-      await db.delete(schema.transactions).where(eq(schema.transactions.id, id)).run();
-      return { success: true };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
+  ipcMain.handle("assets:list", withResult(async () => {
+    const db = getDb();
+    return await db.select().from(schema.assets).all();
+  }));
 
-  ipcMain.handle("assets:list", async () => {
-    try {
-      const db = getDb();
-      return await db.select().from(schema.assets).all();
-    } catch (e) {
-      return [];
-    }
-  });
+  ipcMain.handle("market:get-current-price", withResult(async (_, input: {assetId: string, quoteCurrency?: string}) => {
+    const price = await marketService.getCurrentPrice(input.assetId);
+    return {
+      price,
+      provider: "market-service",
+      timestamp: Date.now()
+    };
+  }));
 
-  const { MarketService } = require("@crypto-control/market-data");
-  const marketService = new MarketService();
-
-  ipcMain.handle("market:get-current-price", async (_, assetId: string, currency: string = "EUR") => {
-    try {
-      return await marketService.getCurrentPrice(assetId, currency);
-    } catch (e: any) {
-      return { error: e.message };
-    }
-  });
-
-  ipcMain.handle("market:get-historical-prices", async (_, assetId: string, period: string, currency: string = "EUR") => {
-    try {
-      return await marketService.getHistoricalPrices(assetId, period, currency);
-    } catch (e: any) {
-      return { error: e.message };
-    }
-  });
+  ipcMain.handle("market:get-historical-prices", withResult(async (_, input: {assetId: string, period: string, quoteCurrency?: string}) => {
+    const points = await marketService.getHistoricalPrices(input.assetId, input.period);
+    return {
+      points: points.map((p: any) => ({ time: Math.floor(p.timestamp / 1000), value: p.price })),
+      provider: "market-service",
+      requestedPeriod: input.period,
+      actualInterval: "auto",
+      fetchedAt: Date.now(),
+      isCached: false
+    };
+  }));
 }
 
 function createWindow() {

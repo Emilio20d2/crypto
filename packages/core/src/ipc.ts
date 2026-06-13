@@ -1,29 +1,19 @@
-import type { CreateTransactionInput, Asset, Account } from "./validation";
+import type { CreateTransactionInput } from "./validation";
+import { CryptoControlAPI, Result } from "./types";
 
-// Interfaz que el proceso Main expone al Renderer mediante ContextBridge
-export interface IPCAPI {
-  portfolio: {
-    getSummary: () => Promise<{ totalValueEur: number }>;
-  };
+export interface FullCryptoControlAPI extends CryptoControlAPI {
   transactions: {
-    list: () => Promise<any[]>;
-    create: (data: CreateTransactionInput) => Promise<{ success: boolean; id?: string; error?: string }>;
-    update: (id: string, data: CreateTransactionInput) => Promise<{ success: boolean }>;
-    delete: (id: string) => Promise<{ success: boolean }>;
-  };
-  assets: {
-    list: () => Promise<any[]>;
-  };
-  market: {
-    getCurrentPrice: (assetId: string, currency?: string) => Promise<any>;
-    getHistoricalPrices: (assetId: string, period: string, currency?: string) => Promise<any>;
+    list: () => Promise<Result<any[]>>;
+    create: (data: CreateTransactionInput) => Promise<Result<{ id?: string }>>;
+    update: (id: string, data: CreateTransactionInput) => Promise<Result<null>>;
+    delete: (id: string) => Promise<Result<null>>;
   };
   settings: {
-    get: (key: string) => Promise<string | null>;
-    update: (key: string, value: string) => Promise<{ success: boolean }>;
+    get: (key: string) => Promise<Result<string | null>>;
+    update: (key: string, value: string) => Promise<Result<null>>;
   };
 }
 
 export interface ElectronWindow {
-  api: IPCAPI;
+  cryptoControl: FullCryptoControlAPI;
 }

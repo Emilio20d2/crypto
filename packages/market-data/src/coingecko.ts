@@ -1,65 +1,74 @@
-import { MarketDataProvider, PricePoint, AssetMetadata } from "./interfaces";
+import { MarketDataProvider, HistoricalPriceData } from "./interfaces";
+import { MarketTimeoutError, MarketRateLimitError, MarketInvalidResponseError, MarketNotFoundError } from "./errors";
+import { AssetMetadata } from "./mapping";
+
+const COINGECKO_API_URL = "https://api.coingecko.com/api/v3";
 
 export class CoinGeckoProvider implements MarketDataProvider {
-  async healthCheck(): Promise<boolean> {
-    try {
-      const res = await fetch("https://api.coingecko.com/api/v3/ping");
-      return res.ok;
-    } catch (e) {
-      return false;
-    }
-  }
+  readonly name = "coingecko";
 
-  async getCurrentPrice(assetId: string, currency: string = "eur"): Promise<number> {
-    const res = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${assetId}&vs_currencies=${currency}`);
-    if (!res.ok) throw new Error("CoinGecko: Error fetching current price");
-    const data = await res.json();
-    if (!data[assetId] || !data[assetId][currency.toLowerCase()]) {
-      throw new Error("CoinGecko: Asset or currency not found");
-    }
-    return data[assetId][currency.toLowerCase()];
-  }
-
-  async getHistoricalPrices(assetId: string, period: string, currency: string = "eur"): Promise<PricePoint[]> {
-    let days = "1";
-    switch (period) {
-      case "1h":
-        days = "1"; // Obtendremos 24h y filtraremos
-        break;
-      case "24h": days = "1"; break;
-      case "7d": days = "7"; break;
-      case "30d": days = "30"; break;
-      case "1y": days = "365"; break;
-      case "all": days = "max"; break;
-      default: days = "1";
-    }
-
-    const res = await fetch(`https://api.coingecko.com/api/v3/coins/${assetId}/market_chart?vs_currency=${currency.toLowerCase()}&days=${days}`);
-    if (!res.ok) throw new Error(`CoinGecko: Error fetching historical prices for ${period}`);
+  private async fetchWithTimeout(url: string, signal?: AbortSignal) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), 5000);
     
-    const data = await res.json();
-    let prices: [number, number][] = data.prices;
-
-    if (period === "1h") {
-      const oneHourAgo = Date.now() - 60 * 60 * 1000;
-      prices = prices.filter(p => p[0] >= oneHourAgo);
+    if (signal) {
+      signal.addEventListener("abort", () => controller.abort());
     }
 
-    return prices.map(p => ({
-      timestamp: p[0],
-      price: p[1]
-    }));
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(id);
+
+      if (response.status === 404) throw new MarketNotFoundError(`Asset not found at ${url}`);
+      if (response.status === 429) {
+        const retryAfter = response.headers.get("retry-after");
+        throw new MarketRateLimitError(retryAfter ? parseInt(retryAfter) * 1000 : undefined, "Rate limit exceeded for CoinGecko");
+      }
+      if (!response.ok) throw new MarketInvalidResponseError(`CoinGecko API error: ${response.status} ${response.statusText}`);
+
+      return await response.json();
+    } catch (error: any) {
+      clearTimeout(id);
+      if (error.name === "AbortError" || error.message?.includes("timeout")) {
+        throw new MarketTimeoutError("CoinGecko API timed out");
+      }
+      throw error;
+    }
   }
 
-  async getAssetMetadata(assetId: string): Promise<AssetMetadata | null> {
-    const res = await fetch(`https://api.coingecko.com/api/v3/coins/${assetId}?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    return {
-      id: data.id,
-      symbol: data.symbol.toUpperCase(),
-      name: data.name,
-      logoUrl: data.image?.small
-    };
+  async getCurrentPrice(meta: AssetMetadata, signal?: AbortSignal): Promise<number> {
+    const currencyLower = meta.quoteCurrency.toLowerCase();
+    const data = await this.fetchWithTimeout(
+      `${COINGECKO_API_URL}/simple/price?ids=${meta.coinGeckoId}&vs_currencies=${currencyLower}`,
+      signal
+    );
+
+    if (data && data[meta.coinGeckoId] && data[meta.coinGeckoId][currencyLower]) {
+      return data[meta.coinGeckoId][currencyLower];
+    }
+    throw new MarketInvalidResponseError("Invalid current price data from CoinGecko");
+  }
+
+  async getHistoricalPrices(meta: AssetMetadata, period: string, signal?: AbortSignal): Promise<HistoricalPriceData[]> {
+    let days = "1";
+    if (period === "7d") days = "7";
+    else if (period === "30d") days = "30";
+    else if (period === "1y") days = "365";
+    else if (period === "all") days = "max";
+
+    const currencyLower = meta.quoteCurrency.toLowerCase();
+    const data = await this.fetchWithTimeout(
+      `${COINGECKO_API_URL}/coins/${meta.coinGeckoId}/market_chart?vs_currency=${currencyLower}&days=${days}`,
+      signal
+    );
+
+    if (data && Array.isArray(data.prices)) {
+      return data.prices.map((p: [number, number]) => ({
+        timestamp: p[0],
+        price: p[1]
+      }));
+    }
+    
+    throw new MarketInvalidResponseError("Invalid historical data from CoinGecko");
   }
 }

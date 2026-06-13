@@ -1,84 +1,51 @@
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 export function Portfolio() {
-  const [loading, setLoading] = useState(true);
-  const [data, setData] = useState<{totalValue: number, totalInvested: number, totalProfit: number, totalProfitPct: number, positions: any[], lastSync: string} | null>(null);
+  const { data: summaryRes, isLoading: loadingSummary, error: summaryErr } = useQuery({
+    queryKey: ['portfolio', 'summary'],
+    queryFn: () => window.cryptoControl.portfolio.getSummary()
+  });
 
-  useEffect(() => {
-    async function loadPortfolio() {
-      try {
-        // Obtenemos los activos reales de la DB vía IPC
-        // @ts-expect-error IPC
-        const assets = await window.api.assets.list();
-        
-        // Mock rápido de datos de cartera combinados con precios reales
-        let totalValue = 0;
-        let totalInvested = 0;
-        
-        const positions = await Promise.all(assets.map(async (a: {id: string; symbol: string; name: string}) => {
-          // @ts-expect-error IPC
-          const priceRes = await window.api.market.getCurrentPrice(a.id);
-          const price = priceRes.error ? 0 : priceRes;
-          const balance = 1.5; // Mock: se conectará a la BD de operaciones reales
-          const avgPrice = price * 0.8; // Mock
-          const invested = balance * avgPrice;
-          const value = balance * price;
-          
-          totalValue += value;
-          totalInvested += invested;
+  const { data: positionsRes, isLoading: loadingPositions, error: positionsErr } = useQuery({
+    queryKey: ['portfolio', 'positions'],
+    queryFn: () => window.cryptoControl.portfolio.getPositions()
+  });
 
-          return {
-            ...a,
-            balance,
-            currentPrice: price,
-            avgPrice,
-            value,
-            profit: value - invested,
-            profitPct: ((value - invested) / invested) * 100,
-            target: price * 1.5,
-            progress: 60 // Mock
-          };
-        }));
+  const { data: assetsRes } = useQuery({
+    queryKey: ['assets'],
+    queryFn: () => window.cryptoControl.assets.list()
+  });
 
-        setData({
-          totalValue,
-          totalInvested,
-          totalProfit: totalValue - totalInvested,
-          totalProfitPct: totalInvested > 0 ? ((totalValue - totalInvested) / totalInvested) * 100 : 0,
-          positions,
-          lastSync: new Date().toLocaleString()
-        });
-      } catch (e) {
-        console.error("Error al cargar la cartera", e);
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadPortfolio();
-  }, []);
+  if (loadingSummary || loadingPositions) return <div className="page-title">Cargando cartera...</div>;
+  
+  if (summaryErr || positionsErr || (summaryRes && !summaryRes.ok) || (positionsRes && !positionsRes.ok)) {
+    return <div className="error-banner">No se pudo cargar la cartera</div>;
+  }
 
-  if (loading) return <div className="page-title">Cargando cartera...</div>;
-  if (!data) return <div className="error-banner">No se pudo cargar la cartera</div>;
+  const summary = summaryRes?.ok ? summaryRes.data : null;
+  const portfolioData = positionsRes?.ok ? positionsRes.data : null;
+  const assets = assetsRes?.ok ? assetsRes.data : [];
+
+  if (!summary || !portfolioData) return null;
 
   return (
     <div className="portfolio-page">
-      <h1 className="page-title">Visión General</h1>
+      <h1 className="page-title">Cartera</h1>
       
       <div className="summary-cards" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', marginBottom: '30px' }}>
         <div className="card">
           <h3>Valor Total</h3>
-          <h2>{data.totalValue.toLocaleString("es-ES", { style: "currency", currency: "EUR" })}</h2>
-          <div className="last-sync">Última sincronización: {data.lastSync}</div>
+          <h2>{summary.totalValueEur.toLocaleString("es-ES", { style: "currency", currency: "EUR" })}</h2>
         </div>
         <div className="card">
           <h3>Capital Invertido</h3>
-          <h2>{data.totalInvested.toLocaleString("es-ES", { style: "currency", currency: "EUR" })}</h2>
+          <h2>{summary.totalInvestedEur.toLocaleString("es-ES", { style: "currency", currency: "EUR" })}</h2>
         </div>
         <div className="card">
-          <h3>Ganancia/Pérdida</h3>
-          <h2 style={{ color: data.totalProfit >= 0 ? "#5ae37a" : "#ff3232" }}>
-            {data.totalProfit >= 0 ? "+" : ""}{data.totalProfit.toLocaleString("es-ES", { style: "currency", currency: "EUR" })} 
-            ({data.totalProfitPct.toFixed(2)}%)
+          <h3>Ganancia/Pérdida (No realizada)</h3>
+          <h2 style={{ color: summary.unrealizedGainEur >= 0 ? "#5ae37a" : "#ff3232" }}>
+            {summary.unrealizedGainEur >= 0 ? "+" : ""}{summary.unrealizedGainEur.toLocaleString("es-ES", { style: "currency", currency: "EUR" })} 
+            ({summary.unrealizedGainPercentage.toFixed(2)}%)
           </h2>
         </div>
       </div>
@@ -90,31 +57,24 @@ export function Portfolio() {
             <tr style={{ borderBottom: '1px solid #eaf6ff' }}>
               <th style={{ padding: '10px' }}>Activo</th>
               <th style={{ padding: '10px' }}>Balance</th>
-              <th style={{ padding: '10px' }}>Precio Medio</th>
-              <th style={{ padding: '10px' }}>Precio Actual</th>
-              <th style={{ padding: '10px' }}>Valor</th>
-              <th style={{ padding: '10px' }}>G/P</th>
-              <th style={{ padding: '10px' }}>Objetivo</th>
+              <th style={{ padding: '10px' }}>Precio Medio Compra</th>
+              <th style={{ padding: '10px' }}>Coste Base</th>
             </tr>
           </thead>
           <tbody>
-            {data.positions.map((p: {id: string; name: string; symbol: string; balance: number; avgPrice: number; currentPrice: number; value: number; profit: number; profitPct: number; target: number; progress: number}) => (
-              <tr key={p.id} style={{ borderBottom: '1px solid #f9f9f9' }}>
-                <td style={{ padding: '10px' }}>
-                  <strong>{p.name}</strong> <span style={{ color: '#888' }}>{p.symbol}</span>
-                </td>
-                <td style={{ padding: '10px' }}>{p.balance} {p.symbol}</td>
-                <td style={{ padding: '10px' }}>{p.avgPrice.toLocaleString("es-ES", { style: "currency", currency: "EUR" })}</td>
-                <td style={{ padding: '10px' }}>{p.currentPrice.toLocaleString("es-ES", { style: "currency", currency: "EUR" })}</td>
-                <td style={{ padding: '10px' }}>{p.value.toLocaleString("es-ES", { style: "currency", currency: "EUR" })}</td>
-                <td style={{ padding: '10px', color: p.profit >= 0 ? "#5ae37a" : "#ff3232" }}>
-                  {p.profit >= 0 ? "+" : ""}{p.profitPct.toFixed(2)}%
-                </td>
-                <td style={{ padding: '10px' }}>
-                  {p.target.toLocaleString("es-ES", { style: "currency", currency: "EUR" })} ({p.progress}%)
-                </td>
-              </tr>
-            ))}
+            {Object.entries(portfolioData.positions).map(([assetId, pos]) => {
+              const asset = assets.find((a: any) => a.id === assetId);
+              return (
+                <tr key={assetId} style={{ borderBottom: '1px solid #f9f9f9' }}>
+                  <td style={{ padding: '10px' }}>
+                    <strong>{asset?.name || assetId}</strong> <span style={{ color: '#888' }}>{asset?.symbol || assetId}</span>
+                  </td>
+                  <td style={{ padding: '10px' }}>{pos.balance}</td>
+                  <td style={{ padding: '10px' }}>{pos.averagePriceEur ? pos.averagePriceEur.toLocaleString("es-ES", { style: "currency", currency: "EUR" }) : "-"}</td>
+                  <td style={{ padding: '10px' }}>{pos.totalInvestedEur.toLocaleString("es-ES", { style: "currency", currency: "EUR" })}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

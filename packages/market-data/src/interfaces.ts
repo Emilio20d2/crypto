@@ -1,20 +1,12 @@
-export interface AssetMetadata {
-  id: string;
-  symbol: string;
-  name: string;
-  logoUrl?: string;
-}
+import { AssetMetadata } from "./mapping";
 
-export interface PricePoint {
+export interface HistoricalPriceData {
   timestamp: number;
   price: number;
 }
 
 export interface MarketDataProvider {
-  getCurrentPrice(assetId: string, currency?: string): Promise<number>;
-  getHistoricalPrices(assetId: string, period: string, currency?: string): Promise<PricePoint[]>;
-  getAssetMetadata(assetId: string): Promise<AssetMetadata | null>;
-  healthCheck(): Promise<boolean>;
+  readonly name: string;
+  getCurrentPrice(meta: AssetMetadata, signal?: AbortSignal): Promise<number>;
+  getHistoricalPrices(meta: AssetMetadata, period: string, signal?: AbortSignal): Promise<HistoricalPriceData[]>;
 }
-
-// Periodos: "1h", "24h", "7d", "30d", "1y", "all"
