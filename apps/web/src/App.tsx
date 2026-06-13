@@ -6,7 +6,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Operaciones } from "./pages/Operaciones";
 import { Mercado } from "./pages/Mercado";
 import { Coinbase } from "./pages/Coinbase";
-import logoUrl from "./assets/logo.png";
+import logoUrl from "./assets/logo.svg";
 
 const queryClient = new QueryClient({
   defaultOptions: {

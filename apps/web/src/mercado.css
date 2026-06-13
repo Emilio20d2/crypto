@@ -156,18 +156,47 @@
   .mercado-layout {
     flex-direction: column;
     height: auto;
+    gap: 12px;
   }
 
+  /* Sidebar → lista horizontal scrollable en móvil */
   .mercado-sidebar {
     width: 100%;
+    flex-direction: column;
     border-right: none;
     padding-right: 0;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 16px;
-    max-height: 280px;
-    overflow-y: auto;
+    gap: 8px;
   }
 
-  .market-header { flex-direction: column; align-items: flex-start; }
+  .asset-list {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    gap: 8px;
+    padding-bottom: 4px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .asset-list::-webkit-scrollbar { display: none; }
+
+  .asset-item {
+    flex-direction: column;
+    align-items: center;
+    padding: 10px 12px;
+    min-width: 72px;
+    text-align: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .asset-info { align-items: center; }
+  .asset-name  { font-size: 0.78rem; }
+  .asset-symbol { font-size: 0.7rem; }
+
+  .market-header { flex-direction: column; align-items: flex-start; gap: 4px; }
   .current-price .price-value { font-size: 1.5rem; }
+
+  /* Gráfica más compacta en móvil */
+  .mercado-chart-wrap { height: 260px; }
 }

@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { MarketChart } from "../components/MarketChart";
 import { CryptoLogo } from "../components/CryptoLogo";
@@ -13,6 +13,13 @@ export function Mercado() {
   const [selectedAsset, setSelectedAsset] = useState<string>("BTC");
   const [period, setPeriod] = useState<Period>("24h");
   const [search, setSearch] = useState("");
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+
+  useEffect(() => {
+    const handler = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener("resize", handler);
+    return () => window.removeEventListener("resize", handler);
+  }, []);
 
   const { data: assetsRes } = useQuery({
     queryKey: ["assets"],
@@ -141,7 +148,7 @@ export function Mercado() {
 
           <div style={{ flex: 1, minHeight: 0 }}>
             {loadingHistory ? (
-              <div className="skeleton" style={{ height: 400, borderRadius: "var(--radius-md)" }} />
+              <div className="skeleton" style={{ height: isMobile ? 260 : 400, borderRadius: "var(--radius-md)" }} />
             ) : historyRes?.ok && historyRes.data ? (
               <MarketChart
                 data={historyRes.data.points.map((p: { time: number; value: number }) => ({
@@ -151,9 +158,10 @@ export function Mercado() {
                 operations={operations}
                 provider={historyRes.data.provider}
                 isCached={historyRes.data.isCached}
+                height={isMobile ? 260 : 400}
               />
             ) : (
-              <div className="error-box">
+              <div className="error-box" style={{ height: isMobile ? 260 : 400 }}>
                 <div>
                   <p style={{ margin: "0 0 12px" }}>No se pudo cargar la gráfica</p>
                   <Button variant="secondary" onClick={() => refetchHistory()}>

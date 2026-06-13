@@ -8,9 +8,10 @@ export interface MarketChartProps {
   provider?: string;
   isCached?: boolean;
   emptyStateMessage?: string;
+  height?: number;
 }
 
-export function MarketChart({ data, operations = [], provider, isCached, emptyStateMessage = "No hay datos disponibles" }: MarketChartProps) {
+export function MarketChart({ data, operations = [], provider, isCached, emptyStateMessage = "No hay datos disponibles", height = 400 }: MarketChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Area"> | null>(null);
@@ -41,7 +42,7 @@ export function MarketChart({ data, operations = [], provider, isCached, emptySt
         secondsVisible: false,
       },
       width: chartContainerRef.current.clientWidth,
-      height: 400,
+      height,
     });
     
     chartRef.current = chart;
@@ -100,7 +101,13 @@ export function MarketChart({ data, operations = [], provider, isCached, emptySt
         chartRef.current = null;
       }
     };
-  }, []); // Only run once on mount
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- chart created once; height handled separately
+
+  useEffect(() => {
+    if (chartRef.current) {
+      chartRef.current.applyOptions({ height });
+    }
+  }, [height]);
 
   useEffect(() => {
     if (seriesRef.current && data.length > 0) {
@@ -150,7 +157,7 @@ export function MarketChart({ data, operations = [], provider, isCached, emptySt
           {emptyStateMessage}
         </div>
       )}
-      <div ref={chartContainerRef} style={{ width: "100%", height: "400px" }} />
+      <div ref={chartContainerRef} style={{ width: "100%", height: `${height}px` }} />
       <div 
         ref={tooltipRef} 
         style={{
