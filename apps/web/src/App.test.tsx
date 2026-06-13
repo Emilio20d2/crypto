@@ -45,6 +45,8 @@ beforeEach(() => {
       update: async () => ({ ok: true as const, data: null })
     },
     coinbase: {
+      importCredentialsFile: async () => ({ ok: true as const, data: { connected: false, canceled: true, keyDisplayName: "", algorithm: "ES256" as const, permissions: { canView: false, canTrade: false, canTransfer: false } } }),
+      connectFromJson: async () => ({ ok: true as const, data: { connected: true, keyDisplayName: "••••abcd", algorithm: "ES256" as const, permissions: { canView: true, canTrade: false, canTransfer: false } } }),
       connect: async () => ({ ok: true as const, data: { connected: true } }),
       disconnect: async () => ({ ok: true as const, data: null }),
       getStatus: async () => ({ ok: true as const, data: { connected: false, lastSyncAt: null, lastSyncItemsProcessed: null, lastSyncStatus: null, lastSyncError: null } }),

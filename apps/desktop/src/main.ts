@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import * as path from "path";
 import { initializeDatabase, runMigrations, getDb, schema } from "@crypto-control/database";
 import { CreateTransactionSchema, CurrentPriceResultSchema, HistoricalPriceResultSchema, TransactionInputListSchema } from "@crypto-control/core";
@@ -258,19 +258,90 @@ function setupIpcHandlers() {
   }));
 
   // Coinbase sync handlers
-  const { CoinbaseCredentialsManager, CoinbaseClient, CoinbaseSyncService } =
-    require("@crypto-control/coinbase-sync") as typeof import("@crypto-control/coinbase-sync");
+  const {
+    CoinbaseCredentialsManager,
+    CoinbaseClient,
+    CoinbaseSyncService,
+    parseCdpJson,
+    CdpParseError,
+  } = require("@crypto-control/coinbase-sync") as typeof import("@crypto-control/coinbase-sync");
 
   const credsMgr = new CoinbaseCredentialsManager();
+
+  async function importCdpCredentials(jsonContent: string) {
+    const parsed = parseCdpJson(jsonContent);
+
+    const client = new CoinbaseClient(parsed.keyName, parsed.privateKeyPem);
+
+    let permissions = { canView: true, canTrade: false, canTransfer: false };
+    try {
+      const perms = await client.getKeyPermissions();
+      if (!perms.can_view) {
+        throw new Error(
+          "La clave no tiene permiso de lectura (can_view = false). Crea una clave CDP con al menos permisos de solo lectura."
+        );
+      }
+      permissions = {
+        canView:    perms.can_view,
+        canTrade:   perms.can_trade,
+        canTransfer:perms.can_transfer,
+      };
+    } catch (e) {
+      const msg = (e as Error).message ?? "";
+      if (msg.includes("can_view") || msg.includes("401") || msg.includes("403")) throw e;
+      // Permissions endpoint unavailable — fall back to connection test
+      await client.testConnection();
+    }
+
+    credsMgr.saveCredentials({
+      apiKeyName:      parsed.keyName,
+      privateKeyPem:   parsed.privateKeyPem,
+      algorithm:       parsed.algorithm,
+      keyDisplayName:  parsed.keyDisplayName,
+    });
+
+    return {
+      connected:      true,
+      canceled:       false,
+      keyDisplayName: parsed.keyDisplayName,
+      algorithm:      parsed.algorithm,
+      permissions,
+    };
+  }
+
+  ipcMain.handle("coinbase:import-credentials-file", withResult(async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow!, {
+      title: "Seleccionar credenciales de Coinbase CDP",
+      properties: ["openFile"],
+      filters: [{ name: "Credenciales Coinbase CDP", extensions: ["json"] }],
+    });
+
+    if (canceled || !filePaths[0]) {
+      return { connected: false, canceled: true, keyDisplayName: "", algorithm: "ES256" as const, permissions: { canView: false, canTrade: false, canTransfer: false } };
+    }
+
+    const jsonContent = fs.readFileSync(filePaths[0], "utf8");
+    try {
+      return await importCdpCredentials(jsonContent);
+    } finally {
+      // Overwrite local reference (best effort — V8 may keep it in memory longer)
+      // Not an assignment we can zero out since jsonContent is const, but it goes out of scope here
+    }
+  }));
+
+  ipcMain.handle("coinbase:connect-from-json", withResult(async (_, jsonContent: string) => {
+    if (typeof jsonContent !== "string" || !jsonContent.trim()) {
+      throw new Error("No se recibió contenido JSON.");
+    }
+    return await importCdpCredentials(jsonContent);
+  }));
 
   ipcMain.handle("coinbase:connect", withResult(async (_, creds: { apiKeyName: string; privateKeyPem: string }) => {
     if (!creds?.apiKeyName || !creds?.privateKeyPem) {
       throw new Error("Se requieren apiKeyName y privateKeyPem");
     }
-    // Test the connection before saving credentials
     const client = new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem);
     await client.testConnection();
-    // Only save after successful connection test
     credsMgr.saveCredentials(creds);
     return { connected: true };
   }));
@@ -297,9 +368,13 @@ function setupIpcHandlers() {
       lastSyncError: null,
     };
 
+    const keyInfo = connected ? credsMgr.getKeyInfo() : null;
+
     return {
       connected,
       ...syncStatus,
+      keyDisplayName: keyInfo?.keyDisplayName ?? null,
+      algorithm:      keyInfo?.algorithm      ?? null,
     };
   }));
 

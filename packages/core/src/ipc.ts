@@ -8,12 +8,28 @@ export interface CoinbaseCredentials {
   privateKeyPem: string;
 }
 
+export interface CdpKeyPermissions {
+  canView: boolean;
+  canTrade: boolean;
+  canTransfer: boolean;
+}
+
+export interface CdpImportResult {
+  connected: boolean;
+  canceled?: boolean;
+  keyDisplayName: string;
+  algorithm: "ES256";
+  permissions: CdpKeyPermissions;
+}
+
 export interface CoinbaseStatus {
   connected: boolean;
   lastSyncAt: number | null;
   lastSyncItemsProcessed: number | null;
   lastSyncStatus: "success" | "error" | null;
   lastSyncError: string | null;
+  keyDisplayName?: string | null;
+  algorithm?: string | null;
 }
 
 export interface CoinbaseSyncResult {
@@ -34,6 +50,8 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
     update: (key: string, value: string) => Promise<Result<null>>;
   };
   coinbase: {
+    importCredentialsFile: () => Promise<Result<CdpImportResult>>;
+    connectFromJson: (jsonContent: string) => Promise<Result<CdpImportResult>>;
     connect: (credentials: CoinbaseCredentials) => Promise<Result<{ connected: boolean }>>;
     disconnect: () => Promise<Result<null>>;
     getStatus: () => Promise<Result<CoinbaseStatus>>;

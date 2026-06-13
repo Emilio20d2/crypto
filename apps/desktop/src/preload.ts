@@ -6,29 +6,31 @@ const cryptoControl: FullCryptoControlAPI = {
     list: () => ipcRenderer.invoke("assets:list")
   },
   portfolio: {
-    getSummary: () => ipcRenderer.invoke("portfolio:get-summary"),
+    getSummary:   () => ipcRenderer.invoke("portfolio:get-summary"),
     getPositions: () => ipcRenderer.invoke("portfolio:get-positions"),
     getAllocation: () => ipcRenderer.invoke("portfolio:get-allocation"),
   },
   transactions: {
-    list: () => ipcRenderer.invoke("transactions:list"),
-    create: (data: CreateTransactionInput) => ipcRenderer.invoke("transactions:create", data),
+    list:   ()                                     => ipcRenderer.invoke("transactions:list"),
+    create: (data: CreateTransactionInput)         => ipcRenderer.invoke("transactions:create", data),
     update: (id: string, data: CreateTransactionInput) => ipcRenderer.invoke("transactions:update", id, data),
-    delete: (id: string) => ipcRenderer.invoke("transactions:delete", id),
+    delete: (id: string)                           => ipcRenderer.invoke("transactions:delete", id),
   },
   market: {
-    getCurrentPrice: (input: { assetId: string, quoteCurrency: string }) => ipcRenderer.invoke("market:get-current-price", input),
-    getHistoricalPrices: (input: { assetId: string, quoteCurrency: string, period: string }) => ipcRenderer.invoke("market:get-historical-prices", input),
+    getCurrentPrice:    (input: { assetId: string; quoteCurrency: string })                    => ipcRenderer.invoke("market:get-current-price", input),
+    getHistoricalPrices:(input: { assetId: string; quoteCurrency: string; period: string })    => ipcRenderer.invoke("market:get-historical-prices", input),
   },
   settings: {
-    get: (key: string) => ipcRenderer.invoke("settings:get", key),
-    update: (key: string, value: string) => ipcRenderer.invoke("settings:update", key, value),
+    get:    (key: string)               => ipcRenderer.invoke("settings:get", key),
+    update: (key: string, value: string)=> ipcRenderer.invoke("settings:update", key, value),
   },
   coinbase: {
-    connect: (credentials: CoinbaseCredentials) => ipcRenderer.invoke("coinbase:connect", credentials),
-    disconnect: () => ipcRenderer.invoke("coinbase:disconnect"),
-    getStatus: () => ipcRenderer.invoke("coinbase:get-status"),
-    sync: () => ipcRenderer.invoke("coinbase:sync"),
+    importCredentialsFile: ()                           => ipcRenderer.invoke("coinbase:import-credentials-file"),
+    connectFromJson:       (jsonContent: string)        => ipcRenderer.invoke("coinbase:connect-from-json", jsonContent),
+    connect:               (credentials: CoinbaseCredentials) => ipcRenderer.invoke("coinbase:connect", credentials),
+    disconnect:            ()                           => ipcRenderer.invoke("coinbase:disconnect"),
+    getStatus:             ()                           => ipcRenderer.invoke("coinbase:get-status"),
+    sync:                  ()                           => ipcRenderer.invoke("coinbase:sync"),
   },
 };
 

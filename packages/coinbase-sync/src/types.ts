@@ -57,3 +57,25 @@ export interface CoinbaseSyncResult {
   newTransactions: number;
   skippedDuplicates: number;
 }
+
+export interface KeyPermissionsResponse {
+  can_view: boolean;
+  can_trade: boolean;
+  can_transfer: boolean;
+  portfolio_uuid?: string;
+  is_default?: boolean;
+}
+
+export interface CdpKeyPermissions {
+  canView: boolean;
+  canTrade: boolean;
+  canTransfer: boolean;
+}
+
+export interface CdpImportResult {
+  connected: boolean;
+  canceled?: boolean;
+  keyDisplayName: string;
+  algorithm: "ES256";
+  permissions: CdpKeyPermissions;
+}
