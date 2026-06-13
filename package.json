@@ -8,7 +8,7 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "npm run dev --workspaces --if-present",
+    "dev": "concurrently -n \"vite,electron\" -c \"cyan,magenta\" \"npm run dev -w web\" \"wait-on tcp:5173 && VITE_DEV_SERVER_URL=http://localhost:5173 npm run dev -w @crypto-control/desktop\"",
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",

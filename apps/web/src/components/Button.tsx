@@ -35,3 +35,30 @@ export function Button({
     </button>
   );
 }
+
+export function IconButton({
+  variant = "ghost",
+  size = "md",
+  loading = false,
+  disabled,
+  children,
+  className = "",
+  ...props
+}: ButtonProps) {
+  const cls = [
+    "btn",
+    "btn-icon",
+    `btn-${variant}`,
+    size === "sm" ? "btn-sm" : "",
+    loading ? "btn-loading" : "",
+    className,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return (
+    <button className={cls} disabled={disabled || loading} {...props}>
+      {loading ? " " : children}
+    </button>
+  );
+}

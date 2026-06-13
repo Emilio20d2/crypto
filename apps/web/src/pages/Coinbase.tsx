@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "../components/Button";
 import { Badge } from "../components/Badge";
+import { Card, CardHeader, CardTitle, CardContent } from "../components/Card";
+import { FormField } from "../components/FormField";
 import type { CdpImportResult } from "@crypto-control/core";
 
 type ConnectionState = "checking" | "disconnected" | "connecting" | "connected" | "syncing" | "error";
@@ -247,159 +249,167 @@ export function Coinbase() {
       <h1 className="page-title">Coinbase</h1>
 
       {/* Estado + acciones */}
-      <div className="card" style={{ marginBottom: 20 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-          <Badge variant={STATE_VARIANT[connectionState]}>{STATE_LABEL[connectionState]}</Badge>
+      <Card style={{ marginBottom: "24px" }}>
+        <CardContent>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+            <Badge variant={STATE_VARIANT[connectionState]}>{STATE_LABEL[connectionState]}</Badge>
+            {isConnected && keyInfo && (
+              <span style={{ fontSize: "0.85rem", color: "var(--text-secondary)", fontFamily: "var(--font-mono, monospace)" }}>
+                Clave: {keyInfo.keyDisplayName}
+              </span>
+            )}
+          </div>
+
+          {errorMsg   && <div className="banner banner-error"   style={{ marginBottom: 12 }}>{errorMsg}</div>}
+          {successMsg && <div className="banner banner-success" style={{ marginBottom: 12 }}>{successMsg}</div>}
+          {warnMsg    && <div className="banner banner-warning" style={{ marginBottom: 12 }}>{warnMsg}</div>}
+
+          {/* Información de la clave conectada */}
           {isConnected && keyInfo && (
-            <span style={{ fontSize: "0.85rem", color: "var(--text-secondary)", fontFamily: "var(--font-mono, monospace)" }}>
-              Clave: {keyInfo.keyDisplayName}
-            </span>
-          )}
-        </div>
-
-        {errorMsg   && <div className="banner banner-error"   style={{ marginBottom: 12 }}>{errorMsg}</div>}
-        {successMsg && <div className="banner banner-success" style={{ marginBottom: 12 }}>{successMsg}</div>}
-        {warnMsg    && <div className="banner banner-warning" style={{ marginBottom: 12 }}>{warnMsg}</div>}
-
-        {/* Información de la clave conectada */}
-        {isConnected && keyInfo && (
-          <div style={{ marginBottom: 16, display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
-              Tipo de clave:{" "}
-              <strong style={{ color: "var(--text-primary)" }}>ECDSA · {keyInfo.algorithm}</strong>
+            <div style={{ marginBottom: 16, display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                Tipo de clave:{" "}
+                <strong style={{ color: "var(--text-primary)" }}>ECDSA · {keyInfo.algorithm}</strong>
+              </div>
+              {keyInfo.permissions && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <PermissionRow label="Lectura"        active={keyInfo.permissions.canView} />
+                  <PermissionRow label="Operaciones"    active={keyInfo.permissions.canTrade} />
+                  <PermissionRow label="Transferencias" active={keyInfo.permissions.canTransfer} />
+                </div>
+              )}
             </div>
-            {keyInfo.permissions && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <PermissionRow label="Lectura"        active={keyInfo.permissions.canView} />
-                <PermissionRow label="Operaciones"    active={keyInfo.permissions.canTrade} />
-                <PermissionRow label="Transferencias" active={keyInfo.permissions.canTransfer} />
-              </div>
+          )}
+
+          {/* Última sincronización */}
+          {syncStatus.lastSyncAt && (
+            <div style={{ marginBottom: 16, fontSize: "0.875rem", color: "var(--text-secondary)" }}>
+              Última sincronización:{" "}
+              <strong style={{ color: "var(--text-primary)" }}>{formatDate(syncStatus.lastSyncAt)}</strong>
+              {syncStatus.lastSyncItemsProcessed !== null && (
+                <> · <strong style={{ color: "var(--text-primary)" }}>{syncStatus.lastSyncItemsProcessed}</strong> procesadas</>
+              )}
+              {syncStatus.lastSyncStatus === "error" && syncStatus.lastSyncError && (
+                <div style={{ color: "var(--color-danger)", marginTop: 4 }}>
+                  Error: {syncStatus.lastSyncError}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {isConnected && (
+              <>
+                <Button onClick={handleSync} loading={isBusy} disabled={isBusy}>
+                  {isBusy ? "Sincronizando..." : "Sincronizar ahora"}
+                </Button>
+                <Button variant="danger" onClick={handleDisconnect} disabled={isBusy}>
+                  Desconectar
+                </Button>
+              </>
+            )}
+            {isBusy && !isConnected && (
+              <span style={{ fontSize: "0.875rem", color: "var(--text-secondary)", alignSelf: "center" }}>
+                Por favor espera...
+              </span>
             )}
           </div>
-        )}
-
-        {/* Última sincronización */}
-        {syncStatus.lastSyncAt && (
-          <div style={{ marginBottom: 16, fontSize: "0.875rem", color: "var(--text-secondary)" }}>
-            Última sincronización:{" "}
-            <strong style={{ color: "var(--text-primary)" }}>{formatDate(syncStatus.lastSyncAt)}</strong>
-            {syncStatus.lastSyncItemsProcessed !== null && (
-              <> · <strong style={{ color: "var(--text-primary)" }}>{syncStatus.lastSyncItemsProcessed}</strong> procesadas</>
-            )}
-            {syncStatus.lastSyncStatus === "error" && syncStatus.lastSyncError && (
-              <div style={{ color: "var(--color-danger)", marginTop: 4 }}>
-                Error: {syncStatus.lastSyncError}
-              </div>
-            )}
-          </div>
-        )}
-
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {isConnected && (
-            <>
-              <Button onClick={handleSync} loading={isBusy} disabled={isBusy}>
-                {isBusy ? "Sincronizando..." : "Sincronizar ahora"}
-              </Button>
-              <Button variant="danger" onClick={handleDisconnect} disabled={isBusy}>
-                Desconectar
-              </Button>
-            </>
-          )}
-          {isBusy && !isConnected && (
-            <span style={{ fontSize: "0.875rem", color: "var(--text-secondary)", alignSelf: "center" }}>
-              Por favor espera...
-            </span>
-          )}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* Formulario de conexión */}
       {isDisconnected && (
-        <div className="card" style={{ marginBottom: 20 }}>
-          <p className="section-title" style={{ marginBottom: 8 }}>Conectar Coinbase</p>
-          <p style={{ fontSize: "0.875rem", color: "var(--text-secondary)", marginBottom: 20, lineHeight: 1.6 }}>
-            Importa directamente el archivo JSON descargado desde{" "}
-            <strong>Coinbase Developer Platform › API Keys</strong>.
-            Crea una clave con el algoritmo <strong>ECDSA</strong> y permisos de <strong>solo lectura (View)</strong>.
-          </p>
+        <Card style={{ marginBottom: "24px" }}>
+          <CardHeader>
+            <CardTitle>Conectar Coinbase</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p style={{ fontSize: "0.875rem", color: "var(--text-secondary)", marginBottom: 20, lineHeight: 1.6 }}>
+              Importa directamente el archivo JSON descargado desde{" "}
+              <strong>Coinbase Developer Platform › API Keys</strong>.
+              Crea una clave con el algoritmo <strong>ECDSA</strong> y permisos de <strong>solo lectura (View)</strong>.
+            </p>
 
-          {/* Opción principal */}
-          <Button
-            variant="primary"
-            onClick={handleImportFile}
-            disabled={isBusy}
-            loading={isBusy && importMode === "none"}
-            style={{ width: "100%", marginBottom: 12 }}
-          >
-            Seleccionar archivo JSON de CDP
-          </Button>
+            {/* Opción principal */}
+            <Button
+              variant="primary"
+              onClick={handleImportFile}
+              disabled={isBusy}
+              loading={isBusy && importMode === "none"}
+              style={{ width: "100%", marginBottom: 12 }}
+            >
+              Seleccionar archivo JSON de CDP
+            </Button>
 
-          {importMode === "none" && (
-            <>
-              <div style={{
-                display: "flex", alignItems: "center", gap: 12, marginBottom: 12,
-                color: "var(--text-muted)", fontSize: "0.85rem",
-              }}>
-                <hr style={{ flex: 1, border: "none", borderTop: "1px solid var(--border)" }} />
-                o
-                <hr style={{ flex: 1, border: "none", borderTop: "1px solid var(--border)" }} />
-              </div>
-              <Button
-                variant="secondary"
-                onClick={() => { setImportMode("paste"); setErrorMsg(""); }}
-                disabled={isBusy}
-                style={{ width: "100%" }}
-              >
-                Pegar JSON de credenciales
-              </Button>
-            </>
-          )}
-
-          {/* Opción secundaria: pegar JSON */}
-          {importMode === "paste" && (
-            <div style={{ marginTop: 4 }}>
-              <div className="form-group">
-                <label htmlFor="cb-paste-json">
-                  Pega aquí el contenido completo del archivo JSON de CDP
-                </label>
-                <textarea
-                  id="cb-paste-json"
-                  ref={pasteRef}
-                  rows={8}
-                  placeholder={'{\n  "name": "organizations/.../apiKeys/...",\n  "privateKey": "-----BEGIN EC PRIVATE KEY-----\\n..."\n}'}
-                  autoComplete="off"
-                  spellCheck={false}
-                  style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: "0.8rem" }}
-                />
-              </div>
-              <div style={{ display: "flex", gap: 10 }}>
-                <Button onClick={handlePasteSubmit} disabled={isBusy} loading={isBusy}>
-                  Conectar
+            {importMode === "none" && (
+              <>
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 12, marginBottom: 12,
+                  color: "var(--text-muted)", fontSize: "0.85rem",
+                }}>
+                  <hr style={{ flex: 1, border: "none", borderTop: "1px solid var(--border)" }} />
+                  o
+                  <hr style={{ flex: 1, border: "none", borderTop: "1px solid var(--border)" }} />
+                </div>
+                <Button
+                  variant="secondary"
+                  onClick={() => { setImportMode("paste"); setErrorMsg(""); }}
+                  disabled={isBusy}
+                  style={{ width: "100%" }}
+                >
+                  Pegar JSON de credenciales
                 </Button>
-                <Button variant="ghost" onClick={() => { setImportMode("none"); setErrorMsg(""); }} disabled={isBusy}>
-                  Cancelar
-                </Button>
+              </>
+            )}
+
+            {/* Opción secundaria: pegar JSON */}
+            {importMode === "paste" && (
+              <div style={{ marginTop: 4 }}>
+                <FormField label="Pega aquí el contenido completo del archivo JSON de CDP" htmlFor="cb-paste-json">
+                  <textarea
+                    id="cb-paste-json"
+                    className="ui-input"
+                    ref={pasteRef}
+                    rows={8}
+                    placeholder={'{\n  "name": "organizations/.../apiKeys/...",\n  "privateKey": "-----BEGIN EC PRIVATE KEY-----\\n..."\n}'}
+                    autoComplete="off"
+                    spellCheck={false}
+                    style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: "0.8rem", resize: "vertical", padding: "12px" }}
+                  />
+                </FormField>
+                <div style={{ display: "flex", gap: 10, marginTop: "16px" }}>
+                  <Button onClick={handlePasteSubmit} disabled={isBusy} loading={isBusy}>
+                    Conectar
+                  </Button>
+                  <Button variant="ghost" onClick={() => { setImportMode("none"); setErrorMsg(""); }} disabled={isBusy}>
+                    Cancelar
+                  </Button>
+                </div>
+                <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: 10, lineHeight: 1.5 }}>
+                  El JSON se procesa exclusivamente en el proceso principal. Nunca se almacena en la base de datos
+                  ni queda accesible desde DevTools.
+                </p>
               </div>
-              <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: 10, lineHeight: 1.5 }}>
-                El JSON se procesa exclusivamente en el proceso principal. Nunca se almacena en la base de datos
-                ni queda accesible desde DevTools.
-              </p>
-            </div>
-          )}
-        </div>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {/* Información */}
-      <div className="card">
-        <p className="section-title">Acerca de la integración</p>
-        <ul style={{ fontSize: "0.875rem", color: "var(--text-secondary)", lineHeight: 2, paddingLeft: 20, margin: 0 }}>
-          <li>Importa automáticamente compras, ventas y conversiones de Coinbase</li>
-          <li>La sincronización es incremental: solo importa operaciones nuevas</li>
-          <li>Las operaciones duplicadas se detectan y omiten automáticamente</li>
-          <li>Los valores en EUR se calculan a partir del precio de ejecución</li>
-          <li>Los pares cripto/cripto se marcan como pendientes de valoración EUR</li>
-        </ul>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Acerca de la integración</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ul style={{ fontSize: "0.875rem", color: "var(--text-secondary)", lineHeight: 2, paddingLeft: 20, margin: 0 }}>
+            <li>Importa automáticamente compras, ventas y conversiones de Coinbase</li>
+            <li>La sincronización es incremental: solo importa operaciones nuevas</li>
+            <li>Las operaciones duplicadas se detectan y omiten automáticamente</li>
+            <li>Los valores en EUR se calculan a partir del precio de ejecución</li>
+            <li>Los pares cripto/cripto se marcan como pendientes de valoración EUR</li>
+          </ul>
+        </CardContent>
+      </Card>
     </div>
   );
 }

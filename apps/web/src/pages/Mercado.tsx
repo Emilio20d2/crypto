@@ -2,18 +2,32 @@ import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { MarketChart } from "../components/MarketChart";
 import { CryptoLogo } from "../components/CryptoLogo";
-import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
+import { Card, CardHeader, CardContent } from "../components/Card";
+import { Input } from "../components/Input";
+import { PeriodSelector } from "../components/PeriodSelector";
+import type { Period } from "../components/PeriodSelector";
+import { PriceDisplay } from "../components/PriceDisplay";
+import { ErrorState } from "../components/ErrorState";
+import { LoadingState } from "../components/LoadingState";
 import "../mercado.css";
 
-const PERIODS = ["1h", "24h", "7d", "30d", "1y", "all"] as const;
-type Period = typeof PERIODS[number];
+const PERIOD_MAP: Record<Period, "1h" | "24h" | "7d" | "30d" | "1y" | "all"> = {
+  "1h": "1h",
+  "1d": "24h",
+  "1s": "7d",
+  "1m": "30d",
+  "1a": "1y",
+  "Todo": "all",
+};
 
 export function Mercado() {
   const [selectedAsset, setSelectedAsset] = useState<string>("BTC");
-  const [period, setPeriod] = useState<Period>("24h");
+  const [uiPeriod, setUiPeriod] = useState<Period>("1d");
   const [search, setSearch] = useState("");
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+
+  const backendPeriod = PERIOD_MAP[uiPeriod];
 
   useEffect(() => {
     const handler = () => setIsMobile(window.innerWidth <= 768);
@@ -33,8 +47,8 @@ export function Mercado() {
   });
 
   const { data: historyRes, isLoading: loadingHistory, refetch: refetchHistory } = useQuery({
-    queryKey: ["market", "history", selectedAsset, period],
-    queryFn: () => window.cryptoControl.market.getHistoricalPrices({ assetId: selectedAsset, period, quoteCurrency: "EUR" }),
+    queryKey: ["market", "history", selectedAsset, backendPeriod],
+    queryFn: () => window.cryptoControl.market.getHistoricalPrices({ assetId: selectedAsset, period: backendPeriod, quoteCurrency: "EUR" }),
     enabled: !!selectedAsset,
   });
 
@@ -54,14 +68,12 @@ export function Mercado() {
 
   const selectedAssetData = assets.find((a: { id: string; name: string }) => a.id === selectedAsset);
 
-  let variation24h: number | null = null;
+  let variationPeriod: number | null = null;
   let chartStartTime = 0;
-  if (period === "24h" && historyRes?.ok && historyRes.data?.points.length > 0) {
-    const pts = historyRes.data.points;
-    variation24h = ((pts[pts.length - 1].value - pts[0].value) / pts[0].value) * 100;
-  }
   if (historyRes?.ok && historyRes.data?.points.length > 0) {
-    chartStartTime = historyRes.data.points[0].time as number;
+    const pts = historyRes.data.points;
+    variationPeriod = ((pts[pts.length - 1].value - pts[0].value) / pts[0].value) * 100;
+    chartStartTime = pts[0].time as number;
   }
 
   const operations = useMemo(() => {
@@ -101,14 +113,13 @@ export function Mercado() {
       <div className="mercado-layout">
         {/* Sidebar con lista de activos */}
         <div className="mercado-sidebar">
-          <input
+          <Input
             type="text"
-            className="search-input"
             placeholder="Buscar activo..."
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
-          <div className="asset-list">
+          <div className="asset-list" style={{ marginTop: 8 }}>
             {filteredAssets.map((a: { id: string; name: string; symbol: string; logoUrl?: string | null }) => (
               <div
                 key={a.id}
@@ -129,61 +140,58 @@ export function Mercado() {
         </div>
 
         {/* Panel principal */}
-        <div className="mercado-main card">
-          <div className="market-header">
-            <h2>{selectedAssetData?.name ?? selectedAsset}</h2>
-            {typeof currentPrice === "number" && Number.isFinite(currentPrice) && (
-              <div className="current-price">
-                <span className="price-value">
-                  {currentPrice.toLocaleString("es-ES", { style: "currency", currency: "EUR" })}
-                </span>
-                {variation24h !== null && (
-                  <span className={`asset-change ${variation24h >= 0 ? "positive" : "negative"}`}>
-                    {variation24h >= 0 ? "+" : ""}{variation24h.toFixed(2)}%
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div style={{ flex: 1, minHeight: 0 }}>
-            {loadingHistory ? (
-              <div className="skeleton" style={{ height: isMobile ? 260 : 400, borderRadius: "var(--radius-md)" }} />
-            ) : historyRes?.ok && historyRes.data ? (
-              <MarketChart
-                data={historyRes.data.points.map((p: { time: number; value: number }) => ({
-                  time: p.time as import("lightweight-charts").Time,
-                  value: p.value,
-                }))}
-                operations={operations}
-                provider={historyRes.data.provider}
-                isCached={historyRes.data.isCached}
-                height={isMobile ? 260 : 400}
-              />
-            ) : (
-              <div className="error-box" style={{ height: isMobile ? 260 : 400 }}>
-                <div>
-                  <p style={{ margin: "0 0 12px" }}>No se pudo cargar la gráfica</p>
-                  <Button variant="secondary" onClick={() => refetchHistory()}>
-                    Reintentar
-                  </Button>
+        <Card className="mercado-main" style={{ padding: 0, overflow: "hidden" }}>
+          <CardHeader>
+            <div className="market-header" style={{ marginBottom: 0 }}>
+              <h2 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0 }}>{selectedAssetData?.name ?? selectedAsset}</h2>
+              {typeof currentPrice === "number" && Number.isFinite(currentPrice) && (
+                <div className="current-price">
+                  <PriceDisplay value={currentPrice} className="price-value" style={{ fontSize: "1.5rem", fontWeight: 700 }} />
+                  {variationPeriod !== null && (
+                    <span className={`asset-change ${variationPeriod >= 0 ? "text-positive" : "text-negative"}`}>
+                      {variationPeriod >= 0 ? "+" : ""}{variationPeriod.toFixed(2)}%
+                    </span>
+                  )}
                 </div>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          </CardHeader>
 
-          <div className="period-selector">
-            {PERIODS.map(p => (
-              <button
-                key={p}
-                className={period === p ? "active" : ""}
-                onClick={() => setPeriod(p)}
-              >
-                {p}
-              </button>
-            ))}
-          </div>
-        </div>
+          <CardContent style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+            <div style={{ flex: 1, minHeight: 0 }}>
+              {loadingHistory ? (
+                <div style={{ height: isMobile ? 260 : 400, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <LoadingState text="Cargando datos de mercado..." />
+                </div>
+              ) : historyRes?.ok && historyRes.data ? (
+                <MarketChart
+                  data={historyRes.data.points.map((p: { time: number; value: number }) => ({
+                    time: p.time as import("lightweight-charts").Time,
+                    value: p.value,
+                  }))}
+                  operations={operations}
+                  provider={historyRes.data.provider}
+                  isCached={historyRes.data.isCached}
+                  height={isMobile ? 260 : 400}
+                />
+              ) : (
+                <div style={{ height: isMobile ? 260 : 400, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <ErrorState
+                    message="No se pudo cargar la gráfica del mercado."
+                    onRetry={() => refetchHistory()}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div style={{ marginTop: "16px" }}>
+              <PeriodSelector
+                activePeriod={uiPeriod}
+                onChange={setUiPeriod}
+              />
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

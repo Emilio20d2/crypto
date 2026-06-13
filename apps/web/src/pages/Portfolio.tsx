@@ -3,6 +3,11 @@ import { useEffect, useRef } from "react";
 import { createChart, LineSeries } from "lightweight-charts";
 import { CryptoLogo } from "../components/CryptoLogo";
 import { EmptyState } from "../components/EmptyState";
+import { Card, CardHeader, CardTitle, CardContent } from "../components/Card";
+import { StatCard } from "../components/StatCard";
+import { ErrorState } from "../components/ErrorState";
+import { ResponsiveTable } from "../components/ResponsiveTable";
+import { PriceDisplay } from "../components/PriceDisplay";
 import type { AssetAllocation } from "@crypto-control/portfolio";
 
 function Sparkline({ data, positive = true }: { data: { time: number; value: number }[]; positive?: boolean }) {
@@ -24,8 +29,8 @@ function Sparkline({ data, positive = true }: { data: { time: number; value: num
     });
 
     const series = chart.addSeries(LineSeries, {
-      color: positive ? "#16a34a" : "#ef4444",
-      lineWidth: 1,
+      color: positive ? "var(--color-success-text)" : "var(--color-danger)",
+      lineWidth: 2,
       priceLineVisible: false,
       lastValueVisible: false,
     });
@@ -47,7 +52,7 @@ function PortfolioRowSparkline({ assetId }: { assetId: string }) {
   });
 
   if (!historyRes?.ok || !historyRes.data || historyRes.data.points.length < 2) {
-    return <span className="text-secondary-color text-sm">—</span>;
+    return <span className="text-muted-color text-sm">—</span>;
   }
 
   const pts = historyRes.data.points;
@@ -55,7 +60,6 @@ function PortfolioRowSparkline({ assetId }: { assetId: string }) {
   return <Sparkline data={pts} positive={positive} />;
 }
 
-const eur = (n: number) => n.toLocaleString("es-ES", { style: "currency", currency: "EUR" });
 const pct = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
 
 export function Portfolio() {
@@ -80,9 +84,9 @@ export function Portfolio() {
       <div>
         <h1 className="page-title">Cartera</h1>
         <div className="stat-grid">
-          {[...Array(4)].map((_, i) => <div key={i} className="stat-card skeleton" style={{ height: 90 }} />)}
+          {[...Array(4)].map((_, i) => <div key={i} className="ui-stat-card skeleton" style={{ height: 90 }} />)}
         </div>
-        <div className="card skeleton" style={{ height: 300 }} />
+        <Card className="skeleton" style={{ height: 300 }} />
       </div>
     );
   }
@@ -91,9 +95,9 @@ export function Portfolio() {
     return (
       <div>
         <h1 className="page-title">Cartera</h1>
-        <div className="card">
-          <EmptyState icon="⚠️" title="Error al cargar la cartera" description="No se pudo obtener la información de la cartera. Inténtalo de nuevo." />
-        </div>
+        <Card>
+          <ErrorState message="No se pudo obtener la información de la cartera. Inténtalo de nuevo." />
+        </Card>
       </div>
     );
   }
@@ -108,18 +112,19 @@ export function Portfolio() {
     return (
       <div>
         <h1 className="page-title">Cartera</h1>
-        <div className="card">
-          <EmptyState
-            icon="💼"
-            title="Todavía no hay operaciones registradas"
-            description="Añade tu primera compra, venta o conversión para comenzar a controlar tu cartera de criptomonedas."
-          />
-        </div>
+        <Card>
+          <CardContent style={{ padding: "48px 24px" }}>
+            <EmptyState
+              icon="💼"
+              title="Todavía no hay operaciones registradas"
+              description="Añade tu primera compra, venta o conversión para comenzar a controlar tu cartera de criptomonedas."
+            />
+          </CardContent>
+        </Card>
       </div>
     );
   }
 
-  // Variación 24h calculada a partir del historial dinámico
   let totalNow = 0;
   let total24h = 0;
   let hasHistory = false;
@@ -149,130 +154,124 @@ export function Portfolio() {
     <div>
       <h1 className="page-title">Cartera</h1>
 
-      {/* Tarjetas de resumen */}
       <div className="stat-grid">
-        <div className="stat-card">
-          <p className="stat-label">Valor Total</p>
-          <p className="stat-value">{eur(summary.totalValueEur)}</p>
-          {variation24h !== null && (
-            <p className={`stat-sub ${variation24h >= 0 ? "text-positive" : "text-negative"}`}>
-              {pct(variation24h)} hoy
-            </p>
-          )}
-        </div>
-
-        <div className="stat-card">
-          <p className="stat-label">Capital Invertido</p>
-          <p className="stat-value">{eur(summary.totalInvestedEur)}</p>
-        </div>
-
-        <div className="stat-card">
-          <p className="stat-label">Ganancia / Pérdida</p>
-          <p className={`stat-value ${summary.unrealizedGainEur >= 0 ? "text-positive" : "text-negative"}`}>
-            {summary.unrealizedGainEur >= 0 ? "+" : ""}{eur(summary.unrealizedGainEur)}
-          </p>
-          <p className={`stat-sub ${summary.unrealizedGainEur >= 0 ? "text-positive" : "text-negative"}`}>
-            {pct(summary.unrealizedGainPercentage)}
-          </p>
-        </div>
-
-        <div className="stat-card">
-          {targetValue !== null && !isNaN(targetValue) ? (
-            <>
-              <p className="stat-label">
-                Objetivo — {eur(targetValue)}
-              </p>
-              <p className="stat-value">{targetPct.toFixed(1)}%</p>
-              <div className="progress" style={{ marginTop: 10 }}>
+        <StatCard
+          label="Valor Total"
+          value={<PriceDisplay value={summary.totalValueEur} />}
+          subValue={
+            variation24h !== null && (
+              <span className={variation24h >= 0 ? "text-positive" : "text-negative"}>
+                {pct(variation24h)} hoy
+              </span>
+            )
+          }
+        />
+        <StatCard
+          label="Capital Invertido"
+          value={<PriceDisplay value={summary.totalInvestedEur} />}
+        />
+        <StatCard
+          label="Ganancia / Pérdida"
+          value={
+            <span className={summary.unrealizedGainEur >= 0 ? "text-positive" : "text-negative"}>
+              {summary.unrealizedGainEur >= 0 ? "+" : ""}
+              <PriceDisplay value={summary.unrealizedGainEur} />
+            </span>
+          }
+          subValue={
+            <span className={summary.unrealizedGainEur >= 0 ? "text-positive" : "text-negative"}>
+              {pct(summary.unrealizedGainPercentage)}
+            </span>
+          }
+        />
+        <StatCard
+          label={targetValue !== null && !isNaN(targetValue) ? `Objetivo — ${new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(targetValue)}` : "Objetivo"}
+          value={
+            targetValue !== null && !isNaN(targetValue) ? (
+              `${targetPct.toFixed(1)}%`
+            ) : (
+              <span style={{ fontSize: "1rem", color: "var(--text-secondary)", fontWeight: 400 }}>No configurado</span>
+            )
+          }
+          subValue={
+            targetValue !== null && !isNaN(targetValue) ? (
+              <div className="progress" style={{ marginTop: 6 }}>
                 <div className="progress-bar" style={{ width: `${targetPct}%` }} />
               </div>
-            </>
-          ) : (
-            <>
-              <p className="stat-label">Objetivo</p>
-              <p className="stat-value" style={{ fontSize: "1rem", color: "var(--text-secondary)", fontWeight: 400 }}>
-                No configurado
-              </p>
-            </>
-          )}
-        </div>
+            ) : undefined
+          }
+        />
       </div>
 
-      {/* Tabla de posiciones */}
-      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-        <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid var(--border)" }}>
-          <p className="section-title" style={{ margin: 0 }}>Posiciones</p>
+      <Card style={{ padding: 0, overflow: "hidden" }}>
+        <CardHeader style={{ paddingBottom: 16, borderBottom: "1px solid var(--border)" }}>
+          <CardTitle style={{ fontSize: "1rem" }}>Posiciones</CardTitle>
+        </CardHeader>
+
+        <div className="portfolio-desktop-view">
+          <ResponsiveTable
+            headers={[
+              "Activo",
+              <div className="text-right">Balance</div>,
+              <div className="text-right">Precio Medio</div>,
+              <div className="text-right">Precio Actual</div>,
+              <div className="text-center">Tendencia</div>,
+              <div className="text-right">Valor</div>,
+              <div className="text-right">Coste Base</div>,
+              <div className="text-right">Rentabilidad</div>,
+              <div className="text-right">Peso</div>
+            ]}
+          >
+            {allocationData.map((alloc: AssetAllocation) => {
+              const pos   = portfolioData[alloc.assetId];
+              if (!pos) return null;
+              const asset = assets.find((a: { id: string; name: string; symbol: string; logoUrl?: string | null }) => a.id === alloc.assetId);
+
+              const currentPrice   = pos.balance > 0 ? alloc.valueEur / pos.balance : 0;
+              const unrealizedGain = alloc.valueEur - pos.totalInvestedEur;
+              const unrealizedPct  = pos.totalInvestedEur > 0 ? (unrealizedGain / pos.totalInvestedEur) * 100 : 0;
+
+              return (
+                <tr key={alloc.assetId}>
+                  <td>
+                    <div className="asset-identity">
+                      <CryptoLogo logoUrl={asset?.logoUrl} symbol={asset?.symbol || alloc.assetId} size={32} />
+                      <div>
+                        <div className="asset-identity-name">{asset?.name || alloc.assetId}</div>
+                        <div className="asset-identity-symbol">{asset?.symbol || alloc.assetId}</div>
+                        {pos.hasPendingValuation && <span className="valuation-pending">Pendiente valoración</span>}
+                      </div>
+                    </div>
+                  </td>
+                  <td className="num font-semibold">
+                    {pos.balance.toLocaleString("es-ES", { maximumFractionDigits: 6 })}
+                  </td>
+                  <td className="num text-secondary-color">
+                    {pos.averagePriceEur != null ? <PriceDisplay value={pos.averagePriceEur} /> : "—"}
+                  </td>
+                  <td className="num">
+                    {currentPrice > 0 ? <PriceDisplay value={currentPrice} /> : "—"}
+                  </td>
+                  <td className="ctr">
+                    <PortfolioRowSparkline assetId={alloc.assetId} />
+                  </td>
+                  <td className="num font-semibold"><PriceDisplay value={alloc.valueEur} /></td>
+                  <td className="num text-secondary-color"><PriceDisplay value={pos.totalInvestedEur} /></td>
+                  <td className="num font-semibold">
+                    <span className={unrealizedGain >= 0 ? "text-positive" : "text-negative"}>
+                      {unrealizedGain >= 0 ? "+" : ""}<PriceDisplay value={unrealizedGain} />
+                    </span>
+                    <div className={`text-xs ${unrealizedGain >= 0 ? "text-positive" : "text-negative"}`}>
+                      {pct(unrealizedPct)}
+                    </div>
+                  </td>
+                  <td className="num">{alloc.weight.toFixed(1)}%</td>
+                </tr>
+              );
+            })}
+          </ResponsiveTable>
         </div>
 
-        {/* Vista escritorio */}
-        <div className="portfolio-desktop-view" style={{ overflowX: "auto" }}>
-          <table className="data-table" style={{ minWidth: 640 }}>
-            <thead>
-              <tr>
-                <th>Activo</th>
-                <th className="num">Balance</th>
-                <th className="num">Precio Medio</th>
-                <th className="num">Precio Actual</th>
-                <th className="ctr">Tendencia</th>
-                <th className="num">Valor</th>
-                <th className="num">Coste Base</th>
-                <th className="num">Rentabilidad</th>
-                <th className="num">Peso</th>
-              </tr>
-            </thead>
-            <tbody>
-              {allocationData.map((alloc: AssetAllocation) => {
-                const pos   = portfolioData[alloc.assetId];
-                if (!pos) return null;
-                const asset = assets.find((a: { id: string; name: string; symbol: string; logoUrl?: string | null }) => a.id === alloc.assetId);
-
-                const currentPrice   = pos.balance > 0 ? alloc.valueEur / pos.balance : 0;
-                const unrealizedGain = alloc.valueEur - pos.totalInvestedEur;
-                const unrealizedPct  = pos.totalInvestedEur > 0 ? (unrealizedGain / pos.totalInvestedEur) * 100 : 0;
-
-                return (
-                  <tr key={alloc.assetId}>
-                    <td>
-                      <div className="asset-identity">
-                        <CryptoLogo logoUrl={asset?.logoUrl} symbol={asset?.symbol || alloc.assetId} size={28} />
-                        <div>
-                          <div className="asset-identity-name">{asset?.name || alloc.assetId}</div>
-                          <div className="asset-identity-symbol">{asset?.symbol || alloc.assetId}</div>
-                          {pos.hasPendingValuation && <span className="valuation-pending">Pendiente valoración</span>}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="num font-semibold">
-                      {pos.balance.toLocaleString("es-ES", { maximumFractionDigits: 6 })}
-                    </td>
-                    <td className="num text-secondary-color">
-                      {pos.averagePriceEur != null ? eur(pos.averagePriceEur) : "—"}
-                    </td>
-                    <td className="num">
-                      {currentPrice > 0 ? eur(currentPrice) : "—"}
-                    </td>
-                    <td className="ctr">
-                      <PortfolioRowSparkline assetId={alloc.assetId} />
-                    </td>
-                    <td className="num font-semibold">{eur(alloc.valueEur)}</td>
-                    <td className="num text-secondary-color">{eur(pos.totalInvestedEur)}</td>
-                    <td className="num font-semibold">
-                      <span className={unrealizedGain >= 0 ? "text-positive" : "text-negative"}>
-                        {unrealizedGain >= 0 ? "+" : ""}{eur(unrealizedGain)}
-                      </span>
-                      <div className={`text-xs ${unrealizedGain >= 0 ? "text-positive" : "text-negative"}`}>
-                        {pct(unrealizedPct)}
-                      </div>
-                    </td>
-                    <td className="num">{alloc.weight.toFixed(1)}%</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Vista móvil */}
         <div className="portfolio-cards">
           {allocationData.map((alloc: AssetAllocation) => {
             const pos   = portfolioData[alloc.assetId];
@@ -294,7 +293,7 @@ export function Portfolio() {
                     </div>
                   </div>
                   <div style={{ textAlign: "right" }}>
-                    <div className="font-semibold">{eur(alloc.valueEur)}</div>
+                    <div className="font-semibold"><PriceDisplay value={alloc.valueEur} /></div>
                     <div className="text-secondary-color text-xs">{alloc.weight.toFixed(1)}% cartera</div>
                   </div>
                 </div>
@@ -305,11 +304,11 @@ export function Portfolio() {
                 </div>
                 <div className="portfolio-card-row">
                   <span className="portfolio-card-label">Precio Medio</span>
-                  <span className="portfolio-card-value">{pos.averagePriceEur != null ? eur(pos.averagePriceEur) : "—"}</span>
+                  <span className="portfolio-card-value">{pos.averagePriceEur != null ? <PriceDisplay value={pos.averagePriceEur} /> : "—"}</span>
                 </div>
                 <div className="portfolio-card-row">
                   <span className="portfolio-card-label">Precio Actual</span>
-                  <span className="portfolio-card-value">{currentPrice > 0 ? eur(currentPrice) : "—"}</span>
+                  <span className="portfolio-card-value">{currentPrice > 0 ? <PriceDisplay value={currentPrice} /> : "—"}</span>
                 </div>
                 <div className="portfolio-card-row">
                   <span className="portfolio-card-label">Tendencia</span>
@@ -317,13 +316,13 @@ export function Portfolio() {
                 </div>
                 <div className="portfolio-card-row">
                   <span className="portfolio-card-label">Coste Base</span>
-                  <span className="portfolio-card-value">{eur(pos.totalInvestedEur)}</span>
+                  <span className="portfolio-card-value"><PriceDisplay value={pos.totalInvestedEur} /></span>
                 </div>
                 <div className="portfolio-card-row">
                   <span className="portfolio-card-label">Rentabilidad</span>
                   <div className="portfolio-card-value">
                     <span className={`font-semibold ${unrealizedGain >= 0 ? "text-positive" : "text-negative"}`}>
-                      {unrealizedGain >= 0 ? "+" : ""}{eur(unrealizedGain)}
+                      {unrealizedGain >= 0 ? "+" : ""}<PriceDisplay value={unrealizedGain} />
                     </span>
                     <div className={`text-xs ${unrealizedGain >= 0 ? "text-positive" : "text-negative"}`}>
                       {pct(unrealizedPct)}
@@ -340,7 +339,7 @@ export function Portfolio() {
             );
           })}
         </div>
-      </div>
+      </Card>
     </div>
   );
 }

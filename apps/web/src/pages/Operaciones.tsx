@@ -7,6 +7,12 @@ import { Button } from "../components/Button";
 import { TxBadge } from "../components/Badge";
 import { EmptyState } from "../components/EmptyState";
 import { CryptoLogo } from "../components/CryptoLogo";
+import { Card, CardHeader, CardTitle, CardContent } from "../components/Card";
+import { FormField } from "../components/FormField";
+import { Input } from "../components/Input";
+import { Select } from "../components/Select";
+import { ResponsiveTable } from "../components/ResponsiveTable";
+import { LoadingState } from "../components/LoadingState";
 
 const uiSchema = z.object({
   type: z.enum(["buy", "sell", "convert", "transfer_in", "transfer_out", "reward", "staking", "airdrop", "fee", "adjustment"]),
@@ -119,164 +125,151 @@ export function Operaciones() {
       <h1 className="page-title">Operaciones</h1>
 
       {/* Formulario */}
-      <div className="card" style={{ marginBottom: 20 }}>
-        <p className="section-title">Registrar Operación</p>
+      <Card style={{ marginBottom: "24px" }}>
+        <CardHeader>
+          <CardTitle>Registrar Operación</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {errorMsg   && <div className="banner banner-error">{errorMsg}</div>}
+          {successMsg && <div className="banner banner-success">{successMsg}</div>}
 
-        {errorMsg   && <div className="banner banner-error">{errorMsg}</div>}
-        {successMsg && <div className="banner banner-success">{successMsg}</div>}
+          <form onSubmit={handleSubmit(onSubmit)} noValidate>
+            <FormField label="Tipo de operación" htmlFor="type">
+              <Select id="type" {...register("type")}>
+                <option value="buy">Compra</option>
+                <option value="sell">Venta</option>
+                <option value="convert">Conversión</option>
+                <option value="transfer_in">Entrada (transferencia)</option>
+                <option value="transfer_out">Salida (transferencia)</option>
+                <option value="reward">Recompensa</option>
+                <option value="staking">Staking</option>
+                <option value="airdrop">Airdrop</option>
+                <option value="fee">Comisión</option>
+                <option value="adjustment">Ajuste</option>
+              </Select>
+            </FormField>
 
-        <form onSubmit={handleSubmit(onSubmit)} noValidate>
-          <div className="form-group">
-            <label htmlFor="type">Tipo de operación</label>
-            <select id="type" {...register("type")}>
-              <option value="buy">Compra</option>
-              <option value="sell">Venta</option>
-              <option value="convert">Conversión</option>
-              <option value="transfer_in">Entrada (transferencia)</option>
-              <option value="transfer_out">Salida (transferencia)</option>
-              <option value="reward">Recompensa</option>
-              <option value="staking">Staking</option>
-              <option value="airdrop">Airdrop</option>
-              <option value="fee">Comisión</option>
-              <option value="adjustment">Ajuste</option>
-            </select>
-          </div>
+            <FormField label="Fecha y hora" htmlFor="date" error={errors.date?.message}>
+              <Input id="date" type="datetime-local" error={!!errors.date} {...register("date")} />
+            </FormField>
 
-          <div className="form-group">
-            <label htmlFor="date">Fecha y hora</label>
-            <input id="date" type="datetime-local" {...register("date")} />
-            {errors.date && <span className="error-msg">{errors.date.message}</span>}
-          </div>
+            <FormField label={needsDestination ? "Activo origen" : "Activo"} htmlFor="sourceAsset" error={errors.sourceAsset?.message}>
+              <Select id="sourceAsset" error={!!errors.sourceAsset} {...register("sourceAsset")}>
+                <option value="">Selecciona un activo</option>
+                {assets.map((a: { id: string; name: string; symbol: string }) => (
+                  <option key={a.id} value={a.id}>{a.name} ({a.symbol})</option>
+                ))}
+              </Select>
+            </FormField>
 
-          <div className="form-group">
-            <label htmlFor="sourceAsset">{needsDestination ? "Activo origen" : "Activo"}</label>
-            <select id="sourceAsset" {...register("sourceAsset")}>
-              <option value="">Selecciona un activo</option>
-              {assets.map((a: { id: string; name: string; symbol: string }) => (
-                <option key={a.id} value={a.id}>{a.name} ({a.symbol})</option>
-              ))}
-            </select>
-            {errors.sourceAsset && <span className="error-msg">{errors.sourceAsset.message}</span>}
-          </div>
+            <FormField label={needsDestination ? "Cantidad entregada" : "Cantidad"} htmlFor="amount" error={errors.amount?.message}>
+              <Input id="amount" type="number" step="any" error={!!errors.amount} {...register("amount", { valueAsNumber: true })} />
+            </FormField>
 
-          <div className="form-group">
-            <label htmlFor="amount">{needsDestination ? "Cantidad entregada" : "Cantidad"}</label>
-            <input id="amount" type="number" step="any" {...register("amount", { valueAsNumber: true })} />
-            {errors.amount && <span className="error-msg">{errors.amount.message}</span>}
-          </div>
+            {hasPriceField && (
+              <FormField label="Precio unitario (€) — opcional" htmlFor="priceEur" error={errors.priceEur?.message}>
+                <Input id="priceEur" type="number" step="any" error={!!errors.priceEur} {...register("priceEur", { valueAsNumber: true })} />
+              </FormField>
+            )}
 
-          {hasPriceField && (
-            <div className="form-group">
-              <label htmlFor="priceEur">Precio unitario (€) — opcional</label>
-              <input id="priceEur" type="number" step="any" {...register("priceEur", { valueAsNumber: true })} />
-              {errors.priceEur && <span className="error-msg">{errors.priceEur.message}</span>}
+            {needsDestination && (
+              <>
+                <FormField label="Activo destino" htmlFor="destinationAsset">
+                  <Select id="destinationAsset" {...register("destinationAsset")}>
+                    <option value="">Selecciona un activo</option>
+                    {assets.map((a: { id: string; name: string; symbol: string }) => (
+                      <option key={a.id} value={a.id}>{a.name} ({a.symbol})</option>
+                    ))}
+                  </Select>
+                </FormField>
+                <FormField label="Cantidad recibida" htmlFor="destinationAmount">
+                  <Input id="destinationAmount" type="number" step="any" {...register("destinationAmount", { valueAsNumber: true })} />
+                </FormField>
+              </>
+            )}
+
+            <FormField label="Comisión (opcional)" htmlFor="feeAmount" error={errors.feeAmount?.message}>
+              <Input id="feeAmount" type="number" step="any" error={!!errors.feeAmount} {...register("feeAmount", { valueAsNumber: true })} />
+            </FormField>
+
+            <div className="form-actions" style={{ marginTop: "24px" }}>
+              <Button type="submit" loading={submitting}>
+                Guardar operación
+              </Button>
             </div>
-          )}
-
-          {needsDestination && (
-            <>
-              <div className="form-group">
-                <label htmlFor="destinationAsset">Activo destino</label>
-                <select id="destinationAsset" {...register("destinationAsset")}>
-                  <option value="">Selecciona un activo</option>
-                  {assets.map((a: { id: string; name: string; symbol: string }) => (
-                    <option key={a.id} value={a.id}>{a.name} ({a.symbol})</option>
-                  ))}
-                </select>
-              </div>
-              <div className="form-group">
-                <label htmlFor="destinationAmount">Cantidad recibida</label>
-                <input id="destinationAmount" type="number" step="any" {...register("destinationAmount", { valueAsNumber: true })} />
-              </div>
-            </>
-          )}
-
-          <div className="form-group">
-            <label htmlFor="feeAmount">Comisión (opcional)</label>
-            <input id="feeAmount" type="number" step="any" {...register("feeAmount", { valueAsNumber: true })} />
-            {errors.feeAmount && <span className="error-msg">{errors.feeAmount.message}</span>}
-          </div>
-
-          <div className="form-actions">
-            <Button type="submit" loading={submitting}>
-              Guardar operación
-            </Button>
-          </div>
-        </form>
-      </div>
+          </form>
+        </CardContent>
+      </Card>
 
       {/* Historial */}
-      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-        <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid var(--border)" }}>
-          <p className="section-title" style={{ margin: 0 }}>Historial de operaciones</p>
-        </div>
+      <Card style={{ padding: 0, overflow: "hidden" }}>
+        <CardHeader style={{ paddingBottom: 16, borderBottom: "1px solid var(--border)" }}>
+          <CardTitle style={{ fontSize: "1rem" }}>Historial de operaciones</CardTitle>
+        </CardHeader>
 
         {loadingTxs && (
-          <div style={{ padding: 24 }}>
-            {[...Array(3)].map((_, i) => (
-              <div key={i} className="skeleton" style={{ height: 44, marginBottom: 8, borderRadius: "var(--radius-md)" }} />
-            ))}
+          <div style={{ padding: 24, display: "flex", justifyContent: "center" }}>
+            <LoadingState text="Cargando historial..." />
           </div>
         )}
 
         {!loadingTxs && transactions.length === 0 && (
-          <EmptyState
-            icon="📋"
-            title="Sin operaciones registradas"
-            description="Las compras, ventas y conversiones que registres aparecerán aquí."
-          />
+          <CardContent style={{ padding: "48px 24px" }}>
+            <EmptyState
+              icon="📋"
+              title="Sin operaciones registradas"
+              description="Las compras, ventas y conversiones que registres aparecerán aquí."
+            />
+          </CardContent>
         )}
 
         {transactions.length > 0 && (
           <>
             {/* Desktop */}
-            <div className="portfolio-desktop-view" style={{ overflowX: "auto" }}>
-              <table className="data-table" style={{ minWidth: 520 }}>
-                <thead>
-                  <tr>
-                    <th>Fecha</th>
-                    <th>Tipo</th>
-                    <th>Activo</th>
-                    <th className="num">Cantidad</th>
-                    <th className="ctr">Acción</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...transactions].sort((a, b) => b.date - a.date).map(tx => {
-                    const mainLeg  = tx.legs.find(l => l.legType === "destination") ?? tx.legs[0];
-                    const srcLeg   = tx.legs.find(l => l.legType === "source");
-                    const asset    = assets.find((a: { id: string; name: string; symbol: string; logoUrl?: string | null }) => a.id === mainLeg?.assetId);
+            <div className="portfolio-desktop-view">
+              <ResponsiveTable
+                headers={[
+                  "Fecha",
+                  "Tipo",
+                  "Activo",
+                  <div className="text-right">Cantidad</div>,
+                  <div className="text-center">Acción</div>
+                ]}
+              >
+                {[...transactions].sort((a, b) => b.date - a.date).map(tx => {
+                  const mainLeg  = tx.legs.find(l => l.legType === "destination") ?? tx.legs[0];
+                  const srcLeg   = tx.legs.find(l => l.legType === "source");
+                  const asset    = assets.find((a: { id: string; name: string; symbol: string; logoUrl?: string | null }) => a.id === mainLeg?.assetId);
 
-                    return (
-                      <tr key={tx.id}>
-                        <td className="text-secondary-color text-sm">{formatDate(tx.date)}</td>
-                        <td><TxBadge type={tx.type} /></td>
-                        <td>
-                          <div className="asset-identity">
-                            <CryptoLogo logoUrl={asset?.logoUrl} symbol={asset?.symbol ?? mainLeg?.assetId ?? "?"} size={24} />
-                            <div>
-                              <div className="font-semibold">{asset?.symbol ?? mainLeg?.assetId ?? "?"}</div>
-                              {tx.type === "convert" && srcLeg && (
-                                <div className="text-secondary-color text-xs">
-                                  desde {assets.find((a: { id: string; symbol: string }) => a.id === srcLeg.assetId)?.symbol ?? srcLeg.assetId}
-                                </div>
-                              )}
-                            </div>
+                  return (
+                    <tr key={tx.id}>
+                      <td className="text-secondary-color text-sm">{formatDate(tx.date)}</td>
+                      <td><TxBadge type={tx.type} /></td>
+                      <td>
+                        <div className="asset-identity">
+                          <CryptoLogo logoUrl={asset?.logoUrl} symbol={asset?.symbol ?? mainLeg?.assetId ?? "?"} size={28} />
+                          <div>
+                            <div className="font-semibold">{asset?.symbol ?? mainLeg?.assetId ?? "?"}</div>
+                            {tx.type === "convert" && srcLeg && (
+                              <div className="text-secondary-color text-xs">
+                                desde {assets.find((a: { id: string; symbol: string }) => a.id === srcLeg.assetId)?.symbol ?? srcLeg.assetId}
+                              </div>
+                            )}
                           </div>
-                        </td>
-                        <td className="num font-semibold">
-                          {mainLeg ? Math.abs(mainLeg.amount).toLocaleString("es-ES", { maximumFractionDigits: 8 }) : "—"}
-                        </td>
-                        <td className="ctr">
-                          <Button variant="danger" size="sm" onClick={() => handleDelete(tx.id)}>
-                            Eliminar
-                          </Button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                        </div>
+                      </td>
+                      <td className="num font-semibold">
+                        {mainLeg ? Math.abs(mainLeg.amount).toLocaleString("es-ES", { maximumFractionDigits: 8 }) : "—"}
+                      </td>
+                      <td className="ctr">
+                        <Button variant="danger" size="sm" onClick={() => handleDelete(tx.id)}>
+                          Eliminar
+                        </Button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </ResponsiveTable>
             </div>
 
             {/* Móvil */}
@@ -291,7 +284,9 @@ export function Operaciones() {
                         <CryptoLogo logoUrl={asset?.logoUrl} symbol={asset?.symbol ?? mainLeg?.assetId ?? "?"} size={28} />
                         <div>
                           <div className="font-semibold">{asset?.symbol ?? mainLeg?.assetId}</div>
-                          <TxBadge type={tx.type} />
+                          <div style={{ marginTop: 4 }}>
+                            <TxBadge type={tx.type} />
+                          </div>
                         </div>
                       </div>
                       <div style={{ textAlign: "right" }}>
@@ -312,7 +307,7 @@ export function Operaciones() {
             </div>
           </>
         )}
-      </div>
+      </Card>
     </div>
   );
 }
