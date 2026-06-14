@@ -1,56 +1,104 @@
-import { forwardRef } from "react";
-import type { HTMLAttributes } from "react";
+import React from "react";
 
-export const Card = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
-  ({ className = "", style, ...props }, ref) => (
+export function Card({ children, className = "", style }: { children?: React.ReactNode; className?: string; style?: React.CSSProperties }) {
+  return (
     <div
-      ref={ref}
       className={`ui-card ${className}`}
-      style={style}
-      {...props}
-    />
-  )
-);
-Card.displayName = "Card";
+      style={{
+        background: "var(--bg-surface)",
+        borderRadius: "var(--radius-lg)",
+        border: "1px solid var(--border-color)",
+        boxShadow: "var(--shadow-sm)",
+        display: "flex",
+        flexDirection: "column",
+        ...style
+      }}
+    >
+      {children}
+    </div>
+  );
+}
 
-export const CardHeader = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
-  ({ className = "", ...props }, ref) => (
-    <div ref={ref} className={`ui-card-header ${className}`} {...props} />
-  )
-);
-CardHeader.displayName = "CardHeader";
+export function CardHeader({ children, className = "", style }: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
+  return (
+    <div
+      className={`ui-card-header ${className}`}
+      style={{
+        padding: "var(--card-padding-desktop)",
+        paddingBottom: "16px",
+        display: "flex",
+        flexDirection: "column",
+        gap: "4px",
+        ...style
+      }}
+    >
+      {children}
+    </div>
+  );
+}
 
-export const CardTitle = forwardRef<HTMLHeadingElement, HTMLAttributes<HTMLHeadingElement>>(
-  ({ className = "", ...props }, ref) => (
-    <h3 ref={ref} className={`ui-card-title ${className}`} {...props} />
-  )
-);
-CardTitle.displayName = "CardTitle";
+export function CardTitle({ children, className = "", style }: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
+  return (
+    <h3
+      className={`ui-card-title ${className}`}
+      style={{
+        fontSize: "16px",
+        fontWeight: 600,
+        color: "var(--text-primary)",
+        margin: 0,
+        lineHeight: 1.2,
+        ...style
+      }}
+    >
+      {children}
+    </h3>
+  );
+}
 
-export const CardDescription = forwardRef<HTMLParagraphElement, HTMLAttributes<HTMLParagraphElement>>(
-  ({ className = "", ...props }, ref) => (
-    <p ref={ref} className={`ui-card-description ${className}`} {...props} />
-  )
-);
-CardDescription.displayName = "CardDescription";
+export function CardDescription({ children, className = "", style }: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
+  return (
+    <p
+      className={`ui-card-description ${className}`}
+      style={{
+        fontSize: "13px",
+        color: "var(--text-secondary)",
+        margin: 0,
+        ...style
+      }}
+    >
+      {children}
+    </p>
+  );
+}
 
-export const CardContent = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
-  ({ className = "", ...props }, ref) => (
-    <div ref={ref} className={`ui-card-content ${className}`} {...props} />
-  )
-);
-CardContent.displayName = "CardContent";
+export function CardContent({ children, className = "", style }: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
+  return (
+    <div
+      className={`ui-card-content ${className}`}
+      style={{
+        padding: "0 var(--card-padding-desktop) var(--card-padding-desktop)",
+        flex: 1,
+        ...style
+      }}
+    >
+      {children}
+    </div>
+  );
+}
 
-export const CardFooter = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
-  ({ className = "", ...props }, ref) => (
-    <div ref={ref} className={`ui-card-footer ${className}`} {...props} />
-  )
-);
-CardFooter.displayName = "CardFooter";
-
-export const CardActions = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
-  ({ className = "", ...props }, ref) => (
-    <div ref={ref} className={`ui-card-actions ${className}`} {...props} />
-  )
-);
-CardActions.displayName = "CardActions";
+export function CardFooter({ children, className = "", style }: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
+  return (
+    <div
+      className={`ui-card-footer ${className}`}
+      style={{
+        padding: "16px var(--card-padding-desktop)",
+        borderTop: "1px solid var(--border-color)",
+        display: "flex",
+        alignItems: "center",
+        ...style
+      }}
+    >
+      {children}
+    </div>
+  );
+}

@@ -1,6 +1,7 @@
-import { useQuery, useQueries } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
-import { createChart, LineSeries } from "lightweight-charts";
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { createChart, LineSeries, ColorType } from "lightweight-charts";
+import { Wallet } from "lucide-react";
 import { CryptoLogo } from "../components/CryptoLogo";
 import { EmptyState } from "../components/EmptyState";
 import { Card, CardHeader, CardTitle, CardContent } from "../components/Card";
@@ -8,9 +9,10 @@ import { StatCard } from "../components/StatCard";
 import { ErrorState } from "../components/ErrorState";
 import { ResponsiveTable } from "../components/ResponsiveTable";
 import { PriceDisplay } from "../components/PriceDisplay";
-import type { AssetAllocation } from "@crypto-control/portfolio";
+import { ErrorBoundary } from "../components/ErrorBoundary";
 
-function Sparkline({ data, positive = true }: { data: { time: number; value: number }[]; positive?: boolean }) {
+function Sparkline({ data, positive = true }: { data: { time: number; close: number }[]; positive?: boolean }) {
+// ... resto del componente Sparkline (sin cambios) ...
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -19,7 +21,7 @@ function Sparkline({ data, positive = true }: { data: { time: number; value: num
     const chart = createChart(containerRef.current, {
       width: 80,
       height: 28,
-      layout: { background: { color: "transparent" }, textColor: "transparent" },
+      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "transparent" },
       grid: { vertLines: { visible: false }, horzLines: { visible: false } },
       rightPriceScale: { visible: false },
       timeScale: { visible: false },
@@ -35,7 +37,7 @@ function Sparkline({ data, positive = true }: { data: { time: number; value: num
       lastValueVisible: false,
     });
 
-    series.setData(data.map(d => ({ time: d.time as import("lightweight-charts").Time, value: d.value })));
+    series.setData(data.map(d => ({ time: d.time as any, value: d.close })));
     chart.timeScale().fitContent();
 
     return () => { chart.remove(); };
@@ -44,80 +46,64 @@ function Sparkline({ data, positive = true }: { data: { time: number; value: num
   return <div ref={containerRef} style={{ width: 80, height: 28 }} />;
 }
 
-function PortfolioRowSparkline({ assetId }: { assetId: string }) {
-  const { data: historyRes } = useQuery({
-    queryKey: ["market", "history", assetId, "24h"],
-    queryFn: () => window.cryptoControl.market.getHistoricalPrices({ assetId, period: "24h", quoteCurrency: "EUR" }),
-    staleTime: 60_000,
-  });
-
-  if (!historyRes?.ok || !historyRes.data || historyRes.data.points.length < 2) {
-    return <span className="text-muted-color text-sm">—</span>;
-  }
-
-  const pts = historyRes.data.points;
-  const positive = pts[pts.length - 1].value >= pts[0].value;
-  return <Sparkline data={pts} positive={positive} />;
-}
-
-const pct = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
+const pct = (n: number) => `${n > 0 ? "+" : ""}${n.toFixed(2)}%`;
 
 export function Portfolio() {
-  const { data: summaryRes,    isLoading: l1 } = useQuery({ queryKey: ["portfolio", "summary"],    queryFn: () => window.cryptoControl.portfolio.getSummary() });
-  const { data: positionsRes,  isLoading: l2 } = useQuery({ queryKey: ["portfolio", "positions"],  queryFn: () => window.cryptoControl.portfolio.getPositions() });
-  const { data: allocationRes, isLoading: l3 } = useQuery({ queryKey: ["portfolio", "allocation"], queryFn: () => window.cryptoControl.portfolio.getAllocation() });
-  const { data: assetsRes }                     = useQuery({ queryKey: ["assets"],                  queryFn: () => window.cryptoControl.assets.list() });
-  const { data: targetRes }                     = useQuery({ queryKey: ["settings", "portfolio_target"], queryFn: () => window.cryptoControl.settings.get("portfolio_target") });
+  const [selectedPortfolioId, setSelectedPortfolioId] = useState<string | null>(null);
 
-  const allocationData = allocationRes?.ok ? allocationRes.data : [];
-
-  const histories = useQueries({
-    queries: allocationData.map((alloc: AssetAllocation) => ({
-      queryKey: ["market", "history", alloc.assetId, "24h"],
-      queryFn: () => window.cryptoControl.market.getHistoricalPrices({ assetId: alloc.assetId, period: "24h", quoteCurrency: "EUR" }),
-      staleTime: 60_000,
-    })),
+  const { data: statusRes, isLoading: l1 } = useQuery({ 
+    queryKey: ["coinbase", "status"], 
+    queryFn: () => window.cryptoControl.coinbase.getStatus() 
   });
 
-  if (l1 || l2 || l3) {
+  const connected = statusRes?.ok ? statusRes.data.connected : false;
+
+  const { data: portfoliosRes, isLoading: l2 } = useQuery({ 
+    queryKey: ["coinbase", "portfolios"], 
+    queryFn: () => window.cryptoControl.coinbase.listPortfolios(),
+    enabled: connected
+  });
+
+  useEffect(() => {
+    if (portfoliosRes?.ok && portfoliosRes.data && portfoliosRes.data.length > 0 && !selectedPortfolioId) {
+      setSelectedPortfolioId(portfoliosRes.data[0].uuid);
+    }
+  }, [portfoliosRes, selectedPortfolioId]);
+
+  const { data: breakdownRes, isLoading: l3 } = useQuery({ 
+    queryKey: ["coinbase", "breakdown", selectedPortfolioId], 
+    queryFn: () => window.cryptoControl.coinbase.getPortfolioBreakdown(selectedPortfolioId!, "EUR"),
+    enabled: !!selectedPortfolioId,
+    refetchInterval: 60000 // Refresca cada minuto
+  });
+
+  const { data: assetsRes } = useQuery({ 
+    queryKey: ["assets"], 
+    queryFn: () => window.cryptoControl.assets.list() 
+  });
+
+  if (l1 || (connected && l2) || (selectedPortfolioId && l3)) {
     return (
       <div>
         <h1 className="page-title">Cartera</h1>
         <div className="stat-grid">
           {[...Array(4)].map((_, i) => <div key={i} className="ui-stat-card skeleton" style={{ height: 90 }} />)}
         </div>
-        <Card className="skeleton" style={{ height: 300 }} />
+        <Card className="skeleton" style={{ height: 300, marginTop: "var(--card-gap)" }} />
       </div>
     );
   }
 
-  if ((summaryRes && !summaryRes.ok) || (positionsRes && !positionsRes.ok) || (allocationRes && !allocationRes.ok)) {
-    return (
-      <div>
-        <h1 className="page-title">Cartera</h1>
-        <Card>
-          <ErrorState message="No se pudo obtener la información de la cartera. Inténtalo de nuevo." />
-        </Card>
-      </div>
-    );
-  }
-
-  const summary      = summaryRes?.data;
-  const portfolioData = positionsRes?.data;
-  const assets        = assetsRes?.ok ? assetsRes.data : [];
-
-  if (!summary || !portfolioData) return null;
-
-  if (allocationData.length === 0) {
+  if (!connected) {
     return (
       <div>
         <h1 className="page-title">Cartera</h1>
         <Card>
           <CardContent style={{ padding: "48px 24px" }}>
             <EmptyState
-              icon="💼"
-              title="Todavía no hay operaciones registradas"
-              description="Añade tu primera compra, venta o conversión para comenzar a controlar tu cartera de criptomonedas."
+              icon={<Wallet size={48} strokeWidth={1.5} color="var(--text-muted)" />}
+              title="Coinbase no conectado"
+              description="La página de cartera profesional sincroniza tu balance directamente desde Coinbase. Ve a Ajustes > Conexión para importar tu clave CDP."
             />
           </CardContent>
         </Card>
@@ -125,39 +111,66 @@ export function Portfolio() {
     );
   }
 
-  let totalNow = 0;
-  let total24h = 0;
-  let hasHistory = false;
+  if (breakdownRes && !breakdownRes.ok) {
+    return (
+      <div>
+        <h1 className="page-title">Cartera</h1>
+        <Card>
+          <ErrorState message="No se pudo obtener la información de la cartera de Coinbase. Revisa tu conexión de red o permisos API." />
+        </Card>
+      </div>
+    );
+  }
 
-  for (let i = 0; i < allocationData.length; i++) {
-    const alloc = allocationData[i];
-    const pos   = portfolioData[alloc.assetId];
-    const hist  = histories[i]?.data;
-    if (hist?.ok && hist.data && hist.data.points.length >= 2) {
-      const pts = hist.data.points;
-      if (pos) {
-        totalNow += pos.balance * pts[pts.length - 1].value;
-        total24h += pos.balance * pts[0].value;
-        hasHistory = true;
-      }
+  const breakdown = breakdownRes?.data;
+  const assets = assetsRes?.ok ? assetsRes.data : [];
+
+  if (!breakdown || !breakdown.balances) return null;
+
+  const { balances, positions, state, capturedAt } = breakdown;
+
+  const totalValue = balances.totalBalance?.value ?? 0;
+  // Sum up unrealized pnl from spots
+  const totalUnrealizedPnl = positions.reduce((sum: number, p: any) => sum + (p.unrealizedPnl || 0), 0);
+  const totalInvested = totalValue - totalUnrealizedPnl;
+  const totalUnrealizedPct = totalInvested > 0 ? (totalUnrealizedPnl / totalInvested) * 100 : 0;
+
+  // Let's approximate 24h variation using markets if available
+  let past24hValue = 0;
+  let has24hData = false;
+  
+  for (const pos of positions) {
+    if (pos.isCash) {
+      past24hValue += pos.totalBalanceFiat || 0;
+    } else if (pos.market && pos.market.pricePercentageChange24h !== null) {
+      const currentFiat = pos.totalBalanceFiat || 0;
+      const pctChange = pos.market.pricePercentageChange24h; // e.g. 5.5 for 5.5%
+      // prevPrice = currentPrice / (1 + pctChange/100)
+      const pastFiat = currentFiat / (1 + pctChange / 100);
+      past24hValue += pastFiat;
+      has24hData = true;
+    } else {
+      past24hValue += pos.totalBalanceFiat || 0; // Assume no change if no data
     }
   }
 
-  const variation24h = hasHistory && total24h > 0
-    ? ((totalNow - total24h) / total24h) * 100
-    : null;
-
-  const targetValue = targetRes?.ok && targetRes.data ? parseFloat(targetRes.data) : null;
-  const targetPct   = targetValue ? Math.min((summary.totalValueEur / targetValue) * 100, 100) : 0;
+  const variation24h = has24hData && past24hValue > 0 ? ((totalValue - past24hValue) / past24hValue) * 100 : null;
 
   return (
     <div>
-      <h1 className="page-title">Cartera</h1>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 24 }}>
+        <h1 className="page-title" style={{ margin: 0 }}>Cartera</h1>
+        <span className="text-sm text-secondary-color">
+          Fuente: <strong style={{ color: "var(--color-primary)" }}>Coinbase</strong>
+          {state === "cached" && " (Modo sin conexión)"}
+          {state === "live" && ` • Actualizado a las ${new Date(capturedAt).toLocaleTimeString()}`}
+        </span>
+      </div>
 
       <div className="stat-grid">
         <StatCard
           label="Valor Total"
-          value={<PriceDisplay value={summary.totalValueEur} />}
+          value={<PriceDisplay value={totalValue} />}
           subValue={
             variation24h !== null && (
               <span className={variation24h >= 0 ? "text-positive" : "text-negative"}>
@@ -168,44 +181,32 @@ export function Portfolio() {
         />
         <StatCard
           label="Capital Invertido"
-          value={<PriceDisplay value={summary.totalInvestedEur} />}
+          value={<PriceDisplay value={totalInvested} />}
         />
         <StatCard
           label="Ganancia / Pérdida"
           value={
-            <span className={summary.unrealizedGainEur >= 0 ? "text-positive" : "text-negative"}>
-              {summary.unrealizedGainEur >= 0 ? "+" : ""}
-              <PriceDisplay value={summary.unrealizedGainEur} />
+            <span className={totalUnrealizedPnl >= 0 ? "text-positive" : "text-negative"}>
+              {totalUnrealizedPnl >= 0 ? "+" : ""}
+              <PriceDisplay value={totalUnrealizedPnl} />
             </span>
           }
           subValue={
-            <span className={summary.unrealizedGainEur >= 0 ? "text-positive" : "text-negative"}>
-              {pct(summary.unrealizedGainPercentage)}
+            <span className={totalUnrealizedPnl >= 0 ? "text-positive" : "text-negative"}>
+              {pct(totalUnrealizedPct)}
             </span>
           }
         />
         <StatCard
-          label={targetValue !== null && !isNaN(targetValue) ? `Objetivo — ${new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(targetValue)}` : "Objetivo"}
-          value={
-            targetValue !== null && !isNaN(targetValue) ? (
-              `${targetPct.toFixed(1)}%`
-            ) : (
-              <span style={{ fontSize: "1rem", color: "var(--text-secondary)", fontWeight: 400 }}>No configurado</span>
-            )
-          }
-          subValue={
-            targetValue !== null && !isNaN(targetValue) ? (
-              <div className="progress" style={{ marginTop: 6 }}>
-                <div className="progress-bar" style={{ width: `${targetPct}%` }} />
-              </div>
-            ) : undefined
-          }
+          label="Saldo Fiat (Efectivo)"
+          value={<PriceDisplay value={balances.totalCashEquivalentBalance?.value ?? 0} />}
+          subValue={<span className="text-secondary-color">Disponible para operar</span>}
         />
       </div>
 
       <Card style={{ padding: 0, overflow: "hidden" }}>
         <CardHeader style={{ paddingBottom: 16, borderBottom: "1px solid var(--border)" }}>
-          <CardTitle style={{ fontSize: "1rem" }}>Posiciones</CardTitle>
+          <CardTitle style={{ fontSize: "1rem" }}>Posiciones (Spot)</CardTitle>
         </CardHeader>
 
         <div className="portfolio-desktop-view">
@@ -213,59 +214,93 @@ export function Portfolio() {
             headers={[
               "Activo",
               <div className="text-right">Balance</div>,
-              <div className="text-right">Precio Medio</div>,
               <div className="text-right">Precio Actual</div>,
-              <div className="text-center">Tendencia</div>,
-              <div className="text-right">Valor</div>,
-              <div className="text-right">Coste Base</div>,
-              <div className="text-right">Rentabilidad</div>,
-              <div className="text-right">Peso</div>
+              <div className="text-right">Precio de Compra</div>,
+              <div className="text-center">24h</div>,
+              <div className="text-right">Valor Fiat</div>,
+              <div className="text-right">Ganancia</div>,
+              <div className="text-right">Distribución</div>
             ]}
           >
-            {allocationData.map((alloc: AssetAllocation) => {
-              const pos   = portfolioData[alloc.assetId];
-              if (!pos) return null;
-              const asset = assets.find((a: { id: string; name: string; symbol: string; logoUrl?: string | null }) => a.id === alloc.assetId);
+            {positions.map((pos: any) => {
+              const symbol = pos.asset;
+              const isEur = symbol === "EUR";
+              const currentFiat = pos.totalBalanceFiat || 0;
+              const balanceStr = isEur 
+                ? new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(pos.totalBalanceCrypto || pos.totalBalanceFiat)
+                : pos.totalBalanceCrypto?.toLocaleString("es-ES", { maximumFractionDigits: 8 });
 
-              const currentPrice   = pos.balance > 0 ? alloc.valueEur / pos.balance : 0;
-              const unrealizedGain = alloc.valueEur - pos.totalInvestedEur;
-              const unrealizedPct  = pos.totalInvestedEur > 0 ? (unrealizedGain / pos.totalInvestedEur) * 100 : 0;
+              const currentPrice = pos.market?.price;
+              const avgEntry = pos.averageEntryPrice?.value;
+              const unrealized = pos.unrealizedPnl;
+              const costBasis = pos.costBasis?.value;
+              
+              const hasUnrealized = unrealized !== null && unrealized !== undefined;
+              const hasCostBasis = costBasis !== null && costBasis !== undefined;
+              
+              let roi: number | null = null;
+              if (hasCostBasis && hasUnrealized) {
+                if (costBasis > 0) {
+                  roi = (unrealized / costBasis) * 100;
+                } else if (costBasis === 0 && unrealized > 0) {
+                  roi = 100; // infinito/ganancia neta
+                } else if (costBasis === 0 && unrealized === 0) {
+                  roi = 0;
+                }
+              }
+
+              const allocation = pos.allocation ? pos.allocation * 100 : 0;
+
+              const assetInfo = assets.find((a: any) => a.symbol === symbol || a.id === symbol);
+              const name = assetInfo?.name || symbol;
+              const logoUrl = pos.assetImageUrl || assetInfo?.logoUrl;
+              
+              const sparklinePts = pos.sparkline || [];
+              const positive24h = sparklinePts.length > 0 ? sparklinePts[sparklinePts.length - 1].close >= sparklinePts[0].close : true;
 
               return (
-                <tr key={alloc.assetId}>
+                <tr key={pos.accountUuid || symbol}>
                   <td>
                     <div className="asset-identity">
-                      <CryptoLogo logoUrl={asset?.logoUrl} symbol={asset?.symbol || alloc.assetId} size={32} />
+                      <CryptoLogo logoUrl={logoUrl} symbol={symbol} size={32} />
                       <div>
-                        <div className="asset-identity-name">{asset?.name || alloc.assetId}</div>
-                        <div className="asset-identity-symbol">{asset?.symbol || alloc.assetId}</div>
-                        {pos.hasPendingValuation && <span className="valuation-pending">Pendiente valoración</span>}
+                        <div className="asset-identity-name">{name}</div>
+                        <div className="asset-identity-symbol">{symbol}</div>
                       </div>
                     </div>
                   </td>
-                  <td className="num font-semibold">
-                    {pos.balance.toLocaleString("es-ES", { maximumFractionDigits: 6 })}
+                  <td className="num font-semibold">{balanceStr}</td>
+                  <td className="num">
+                    {!isEur && currentPrice !== null && currentPrice !== undefined ? <PriceDisplay value={currentPrice} /> : "—"}
                   </td>
                   <td className="num text-secondary-color">
-                    {pos.averagePriceEur != null ? <PriceDisplay value={pos.averagePriceEur} /> : "—"}
+                    {!isEur ? (avgEntry !== null && avgEntry !== undefined ? <PriceDisplay value={avgEntry} /> : <span className="text-secondary-color text-xs">N/D</span>) : "—"}
                   </td>
-                  <td className="num">
-                    {currentPrice > 0 ? <PriceDisplay value={currentPrice} /> : "—"}
+                  <td className="ctr" style={{ width: 100 }}>
+                    {!isEur && sparklinePts.length > 0 ? (
+                      <ErrorBoundary>
+                        <Sparkline data={sparklinePts} positive={positive24h} />
+                      </ErrorBoundary>
+                    ) : "—"}
                   </td>
-                  <td className="ctr">
-                    <PortfolioRowSparkline assetId={alloc.assetId} />
-                  </td>
-                  <td className="num font-semibold"><PriceDisplay value={alloc.valueEur} /></td>
-                  <td className="num text-secondary-color"><PriceDisplay value={pos.totalInvestedEur} /></td>
                   <td className="num font-semibold">
-                    <span className={unrealizedGain >= 0 ? "text-positive" : "text-negative"}>
-                      {unrealizedGain >= 0 ? "+" : ""}<PriceDisplay value={unrealizedGain} />
-                    </span>
-                    <div className={`text-xs ${unrealizedGain >= 0 ? "text-positive" : "text-negative"}`}>
-                      {pct(unrealizedPct)}
-                    </div>
+                    <PriceDisplay value={currentFiat} />
                   </td>
-                  <td className="num">{alloc.weight.toFixed(1)}%</td>
+                  <td className="num font-semibold">
+                    {!isEur ? (hasCostBasis && hasUnrealized ? (
+                      <>
+                        <span className={unrealized >= 0 ? "text-positive" : "text-negative"}>
+                          {unrealized >= 0 ? "+" : ""}<PriceDisplay value={unrealized} />
+                        </span>
+                        {roi !== null && (
+                          <div className={`text-xs ${unrealized >= 0 ? "text-positive" : "text-negative"}`}>
+                            {pct(roi)}
+                          </div>
+                        )}
+                      </>
+                    ) : <span className="text-secondary-color text-xs">N/D</span>) : "—"}
+                  </td>
+                  <td className="num">{allocation.toFixed(1)}%</td>
                 </tr>
               );
             })}
@@ -273,67 +308,80 @@ export function Portfolio() {
         </div>
 
         <div className="portfolio-cards">
-          {allocationData.map((alloc: AssetAllocation) => {
-            const pos   = portfolioData[alloc.assetId];
-            if (!pos) return null;
-            const asset = assets.find((a: { id: string; name: string; symbol: string; logoUrl?: string | null }) => a.id === alloc.assetId);
+          {/* Mobile view similar implementation */}
+          {positions.map((pos: any) => {
+            const symbol = pos.asset;
+            const isEur = symbol === "EUR";
+            const currentFiat = pos.totalBalanceFiat || 0;
+            const balanceStr = isEur 
+                ? new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(pos.totalBalanceCrypto || pos.totalBalanceFiat)
+                : pos.totalBalanceCrypto?.toLocaleString("es-ES", { maximumFractionDigits: 8 });
 
-            const currentPrice   = pos.balance > 0 ? alloc.valueEur / pos.balance : 0;
-            const unrealizedGain = alloc.valueEur - pos.totalInvestedEur;
-            const unrealizedPct  = pos.totalInvestedEur > 0 ? (unrealizedGain / pos.totalInvestedEur) * 100 : 0;
+            const unrealized = pos.unrealizedPnl;
+            const costBasis = pos.costBasis?.value;
+            const hasUnrealized = unrealized !== null && unrealized !== undefined;
+            const hasCostBasis = costBasis !== null && costBasis !== undefined;
 
+            let roi: number | null = null;
+            if (hasCostBasis && hasUnrealized) {
+              if (costBasis > 0) {
+                roi = (unrealized / costBasis) * 100;
+              } else if (costBasis === 0 && unrealized > 0) {
+                roi = 100;
+              } else if (costBasis === 0 && unrealized === 0) {
+                roi = 0;
+              }
+            }
+
+            const assetInfo = assets.find((a: any) => a.symbol === symbol || a.id === symbol);
+            const logoUrl = pos.assetImageUrl || assetInfo?.logoUrl;
+            
             return (
-              <div key={alloc.assetId} className="portfolio-card">
+              <div key={pos.accountUuid || symbol} className="portfolio-card">
                 <div className="portfolio-card-header">
                   <div className="asset-identity">
-                    <CryptoLogo logoUrl={asset?.logoUrl} symbol={asset?.symbol || alloc.assetId} size={32} />
+                    <CryptoLogo logoUrl={logoUrl} symbol={symbol} size={32} />
                     <div>
-                      <div className="asset-identity-name">{asset?.name || alloc.assetId}</div>
-                      <div className="asset-identity-symbol">{asset?.symbol || alloc.assetId}</div>
+                      <div className="asset-identity-name">{assetInfo?.name || symbol}</div>
+                      <div className="asset-identity-symbol">{symbol}</div>
                     </div>
                   </div>
                   <div style={{ textAlign: "right" }}>
-                    <div className="font-semibold"><PriceDisplay value={alloc.valueEur} /></div>
-                    <div className="text-secondary-color text-xs">{alloc.weight.toFixed(1)}% cartera</div>
+                    <div className="font-semibold"><PriceDisplay value={currentFiat} /></div>
+                    <div className="text-secondary-color text-xs">{(pos.allocation ? pos.allocation * 100 : 0).toFixed(1)}% cartera</div>
                   </div>
                 </div>
 
                 <div className="portfolio-card-row">
                   <span className="portfolio-card-label">Balance</span>
-                  <span className="portfolio-card-value">{pos.balance.toLocaleString("es-ES", { maximumFractionDigits: 6 })}</span>
+                  <span className="portfolio-card-value">{balanceStr}</span>
                 </div>
-                <div className="portfolio-card-row">
-                  <span className="portfolio-card-label">Precio Medio</span>
-                  <span className="portfolio-card-value">{pos.averagePriceEur != null ? <PriceDisplay value={pos.averagePriceEur} /> : "—"}</span>
-                </div>
-                <div className="portfolio-card-row">
-                  <span className="portfolio-card-label">Precio Actual</span>
-                  <span className="portfolio-card-value">{currentPrice > 0 ? <PriceDisplay value={currentPrice} /> : "—"}</span>
-                </div>
-                <div className="portfolio-card-row">
-                  <span className="portfolio-card-label">Tendencia</span>
-                  <span className="portfolio-card-value"><PortfolioRowSparkline assetId={alloc.assetId} /></span>
-                </div>
-                <div className="portfolio-card-row">
-                  <span className="portfolio-card-label">Coste Base</span>
-                  <span className="portfolio-card-value"><PriceDisplay value={pos.totalInvestedEur} /></span>
-                </div>
-                <div className="portfolio-card-row">
-                  <span className="portfolio-card-label">Rentabilidad</span>
-                  <div className="portfolio-card-value">
-                    <span className={`font-semibold ${unrealizedGain >= 0 ? "text-positive" : "text-negative"}`}>
-                      {unrealizedGain >= 0 ? "+" : ""}<PriceDisplay value={unrealizedGain} />
-                    </span>
-                    <div className={`text-xs ${unrealizedGain >= 0 ? "text-positive" : "text-negative"}`}>
-                      {pct(unrealizedPct)}
+                {!isEur && (
+                  <>
+                    <div className="portfolio-card-row">
+                      <span className="portfolio-card-label">Precio Compra</span>
+                      <span className="portfolio-card-value">
+                        {pos.averageEntryPrice?.value !== null && pos.averageEntryPrice?.value !== undefined ? <PriceDisplay value={pos.averageEntryPrice.value} /> : <span className="text-secondary-color text-xs">N/D</span>}
+                      </span>
                     </div>
-                  </div>
-                </div>
-
-                {pos.hasPendingValuation && (
-                  <div style={{ marginTop: 8 }}>
-                    <span className="valuation-pending">Pendiente de valoración</span>
-                  </div>
+                    <div className="portfolio-card-row">
+                      <span className="portfolio-card-label">Rendimiento</span>
+                      <div className="portfolio-card-value">
+                        {hasCostBasis && hasUnrealized ? (
+                          <>
+                            <span className={`font-semibold ${unrealized >= 0 ? "text-positive" : "text-negative"}`}>
+                              {unrealized >= 0 ? "+" : ""}<PriceDisplay value={unrealized} />
+                            </span>
+                            {roi !== null && (
+                              <div className={`text-xs ${unrealized >= 0 ? "text-positive" : "text-negative"}`}>
+                                {pct(roi)}
+                              </div>
+                            )}
+                          </>
+                        ) : <span className="text-secondary-color text-xs">N/D</span>}
+                      </div>
+                    </div>
+                  </>
                 )}
               </div>
             );

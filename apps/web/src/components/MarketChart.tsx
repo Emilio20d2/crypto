@@ -111,10 +111,34 @@ export function MarketChart({ data, operations = [], provider, isCached, emptySt
 
   useEffect(() => {
     if (seriesRef.current && data.length > 0) {
-      seriesRef.current.setData(data);
+      // sanitizePoints: Garantizar tiempo Unix en segundos, sin duplicados, estrictamente ascendente, finito y mayor que cero.
+      const map = new Map<number, number>();
+      for (const pt of data) {
+        let ts = typeof pt.time === 'string' ? new Date(pt.time).getTime() / 1000 : (pt.time as number);
+        // Si el timestamp es muy grande (> 100 mil millones), probablemente está en ms, lo pasamos a s.
+        if (ts > 1e11) ts = Math.floor(ts / 1000);
+        else ts = Math.floor(ts);
+        
+        if (ts <= 0 || !Number.isFinite(pt.value) || pt.value <= 0) continue;
+        
+        // Almacenar el último valor conocido para cada segundo (deduplicación natural)
+        map.set(ts, pt.value);
+      }
+      
+      const sanitizedData = Array.from(map.entries())
+        .map(([time, value]) => ({ time: time as Time, value }))
+        .sort((a, b) => (a.time as number) - (b.time as number));
+        
+      if (sanitizedData.length < 2) {
+        // Lightweight Charts requiere al menos 2 puntos para AreaSeries, si no, lo vaciamos de forma segura
+        seriesRef.current.setData([]);
+        return;
+      }
+      
+      seriesRef.current.setData(sanitizedData);
       chartRef.current?.timeScale().fitContent();
 
-      const latest = data[data.length - 1];
+      const latest = sanitizedData[sanitizedData.length - 1];
       if (markersRef.current) {
         const markers: import('lightweight-charts').SeriesMarker<Time>[] = operations.map(op => ({
           time: op.time,
@@ -132,16 +156,27 @@ export function MarketChart({ data, operations = [], provider, isCached, emptySt
           text: 'Actual',
         });
         
-        // Sort markers by time as lightweight-charts requires them to be strictly ascending in time, 
-        // wait, actually lightweight-charts requires markers to be sorted by time
+        // Order markers by strict time
         markers.sort((a, b) => {
-          const ta = typeof a.time === 'string' ? new Date(a.time).getTime() : (a.time as number);
-          const tb = typeof b.time === 'string' ? new Date(b.time).getTime() : (b.time as number);
+          let ta = typeof a.time === 'string' ? new Date(a.time).getTime() / 1000 : (a.time as number);
+          let tb = typeof b.time === 'string' ? new Date(b.time).getTime() / 1000 : (b.time as number);
+          if (ta > 1e11) ta = Math.floor(ta / 1000);
+          if (tb > 1e11) tb = Math.floor(tb / 1000);
           return ta - tb;
         });
 
-        markersRef.current.setMarkers(markers);
+        // Eliminar marcadores duplicados en el mismo segundo exacto
+        const uniqueMarkers = markers.filter((m, i, arr) => {
+          if (i === 0) return true;
+          const prevTime = typeof arr[i-1].time === 'string' ? new Date(arr[i-1].time as string).getTime() / 1000 : (arr[i-1].time as number);
+          const currTime = typeof m.time === 'string' ? new Date(m.time as string).getTime() / 1000 : (m.time as number);
+          return Math.floor(currTime) !== Math.floor(prevTime);
+        });
+
+        markersRef.current.setMarkers(uniqueMarkers);
       }
+    } else if (seriesRef.current && data.length === 0) {
+      seriesRef.current.setData([]);
     }
   }, [data, operations]);
 

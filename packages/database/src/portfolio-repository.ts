@@ -1,6 +1,6 @@
 import { PortfolioRepository, TransactionInput, TransactionLegInput, TransactionType, LegType, FifoLot, LotConsumption, RealizedGain } from "@crypto-control/portfolio";
 import { getDb } from "./db";
-import { transactions, transactionLegs, lots, lotConsumptions, realizedGains } from "./schema";
+import { transactions, transactionLegs, lots, lotConsumptions, realizedGains, accounts } from "./schema";
 
 export class DatabasePortfolioRepository implements PortfolioRepository {
   constructor(private db: ReturnType<typeof getDb>) {}
@@ -33,6 +33,17 @@ export class DatabasePortfolioRepository implements PortfolioRepository {
       date: tx.date,
       legs: legsByTxId[tx.id] || []
     }));
+  }
+
+  async getAccountBalances(): Promise<Record<string, number>> {
+    const allAccounts = await this.db.select().from(accounts);
+    const balances: Record<string, number> = {};
+    for (const acc of allAccounts) {
+      if (acc.assetId && typeof acc.balance === 'number') {
+        balances[acc.assetId] = (balances[acc.assetId] || 0) + acc.balance;
+      }
+    }
+    return balances;
   }
 
   async saveFifoResults(lotsData: FifoLot[], consumptionsData: LotConsumption[], realizedGainsData: RealizedGain[]): Promise<void> {

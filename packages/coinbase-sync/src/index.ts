@@ -13,3 +13,6 @@ export type {
   CdpKeyPermissions,
   CdpImportResult,
 } from "./types";
+
+export { CoinbasePortfolioService } from "./portfolio-service";
+export type { CoinbasePortfolioView, CoinbaseSpotPositionView } from "./portfolio-service";

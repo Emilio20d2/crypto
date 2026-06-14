@@ -1,22 +1,27 @@
+import { AlertCircle } from "lucide-react";
+
 interface ErrorStateProps {
-  title?: string;
   message: string;
-  onRetry?: () => void;
-  className?: string;
 }
 
-import { Button } from "./Button";
-
-export function ErrorState({ title = "Ha ocurrido un error", message, onRetry, className = "" }: ErrorStateProps) {
+export function ErrorState({ message }: ErrorStateProps) {
   return (
-    <div className={`error-container ${className}`}>
-      <div className="error-title">{title}</div>
-      <p style={{ margin: "0 0 16px 0", maxWidth: 400 }}>{message}</p>
-      {onRetry && (
-        <Button variant="secondary" onClick={onRetry}>
-          Reintentar
-        </Button>
-      )}
+    <div style={{
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      textAlign: "center",
+      padding: "48px 24px",
+      color: "var(--text-secondary)"
+    }}>
+      <AlertCircle size={32} color="var(--color-danger)" style={{ marginBottom: "16px" }} />
+      <h3 style={{ fontSize: "16px", fontWeight: 600, color: "var(--color-danger)", margin: "0 0 8px 0" }}>
+        Ha ocurrido un error
+      </h3>
+      <p style={{ fontSize: "14px", maxWidth: "320px", margin: 0, lineHeight: 1.5 }}>
+        {message}
+      </p>
     </div>
   );
 }

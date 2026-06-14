@@ -1,19 +1,31 @@
-import type { ReactNode } from "react";
+import React from "react";
 
 interface EmptyStateProps {
-  icon?: string;
+  icon: React.ReactNode;
   title: string;
-  description?: string;
-  action?: ReactNode;
+  description: string;
 }
 
-export function EmptyState({ icon, title, description, action }: EmptyStateProps) {
+export function EmptyState({ icon, title, description }: EmptyStateProps) {
   return (
-    <div className="empty-state">
-      {icon && <div className="empty-state-icon">{icon}</div>}
-      <h3 className="empty-state-title">{title}</h3>
-      {description && <p className="empty-state-desc">{description}</p>}
-      {action}
+    <div style={{
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      textAlign: "center",
+      padding: "48px 24px",
+      color: "var(--text-secondary)"
+    }}>
+      <div style={{ color: "var(--text-muted)", marginBottom: "16px" }}>
+        {icon}
+      </div>
+      <h3 style={{ fontSize: "16px", fontWeight: 600, color: "var(--text-primary)", margin: "0 0 8px 0" }}>
+        {title}
+      </h3>
+      <p style={{ fontSize: "14px", maxWidth: "320px", margin: 0, lineHeight: 1.5 }}>
+        {description}
+      </p>
     </div>
   );
 }

@@ -2,19 +2,19 @@
 
 .mercado-layout {
   display: flex;
-  gap: 24px;
+  gap: var(--spacing-lg);
   height: calc(100vh - 120px);
   min-height: 0;
 }
 
 .mercado-sidebar {
-  width: 260px;
+  width: 280px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  border-right: 1px solid var(--border);
-  padding-right: 20px;
+  gap: var(--spacing-md);
+  border-right: 1px solid var(--border-color);
+  padding-right: var(--spacing-lg);
   overflow: hidden;
 }
 
@@ -25,62 +25,40 @@
   min-width: 0;
 }
 
-/* Input de búsqueda — hereda estilos de .form-group input pero sin wrapper */
-.search-input {
-  width: 100%;
-  height: var(--h-input);
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  font-size: 0.875rem;
-  color: var(--text-primary);
-  background: var(--bg-surface);
-  outline: none;
-  transition: border-color var(--t-fast), box-shadow var(--t-fast);
-  font-family: inherit;
-}
-.search-input:focus {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px rgba(50, 124, 255, 0.12);
-}
-.search-input::placeholder { color: var(--text-muted); }
-
 /* Lista de activos */
 .asset-list {
   flex: 1;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   min-height: 0;
+  padding-right: 4px;
 }
 
 .asset-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   padding: 10px 12px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background-color var(--t-fast);
+  transition: all var(--t-fast);
   border: 1px solid transparent;
 }
 
-.asset-item:hover { background: var(--bg-subtle); }
+.asset-item:hover { 
+  background: var(--bg-surface-hover); 
+}
 
 .asset-item.selected {
-  background: var(--color-primary-light);
-  border-color: var(--color-primary);
+  background: var(--bg-surface-active);
+  border-color: var(--border-color-strong);
 }
 
 .asset-info { display: flex; flex-direction: column; flex: 1; min-width: 0; }
-.asset-name  { font-weight: 600; font-size: 0.875rem; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.asset-symbol { font-size: 0.78rem; color: var(--text-secondary); }
-
-/* Variación precio */
-.asset-change { font-size: 0.78rem; font-weight: 600; }
-.asset-change.positive { color: var(--color-success-text); }
-.asset-change.negative { color: var(--color-danger); }
+.asset-name  { font-weight: 600; font-size: 14px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.asset-symbol { font-size: 12px; color: var(--text-secondary); }
 
 /* Precio en la cabecera */
 .market-header {
@@ -89,83 +67,31 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
-  margin-bottom: 20px;
-}
-
-.market-header h2 {
-  font-size: 1.25rem;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin: 0;
 }
 
 .current-price {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: 12px;
   flex-wrap: wrap;
 }
 
-.current-price .price-value {
-  font-size: 1.75rem;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.error-box {
-  height: 400px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-subtle);
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-md);
-  color: var(--text-secondary);
-  text-align: center;
-}
-
-/* Selector de periodos */
-.period-selector {
-  display: flex;
-  gap: 6px;
-  margin-top: 16px;
-  flex-wrap: wrap;
-}
-
-.period-selector button {
-  height: var(--h-btn-sm);
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  background: var(--bg-surface);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  color: var(--text-secondary);
-  font-size: 0.8rem;
-  font-weight: 600;
-  font-family: inherit;
-  transition: background-color var(--t-fast), color var(--t-fast), border-color var(--t-fast);
-  outline: none;
-}
-
-.period-selector button:hover  { background: var(--bg-hover); border-color: var(--color-primary); color: var(--color-primary); }
-.period-selector button.active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
-.period-selector button:focus-visible { box-shadow: 0 0 0 3px rgba(50,124,255,0.25); }
+.asset-change { font-size: 13px; font-weight: 600; }
 
 /* Responsive */
 @media (max-width: 768px) {
   .mercado-layout {
     flex-direction: column;
     height: auto;
-    gap: 12px;
+    gap: var(--spacing-md);
   }
 
-  /* Sidebar → lista horizontal scrollable en móvil */
   .mercado-sidebar {
     width: 100%;
     flex-direction: column;
     border-right: none;
     padding-right: 0;
-    gap: 8px;
+    gap: var(--spacing-sm);
   }
 
   .asset-list {
@@ -173,7 +99,7 @@
     flex-wrap: nowrap;
     overflow-x: auto;
     overflow-y: hidden;
-    gap: 8px;
+    gap: var(--spacing-sm);
     padding-bottom: 4px;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
@@ -183,20 +109,24 @@
   .asset-item {
     flex-direction: column;
     align-items: center;
-    padding: 10px 12px;
-    min-width: 72px;
+    padding: 12px;
+    min-width: 80px;
     text-align: center;
-    gap: 6px;
+    gap: 8px;
     flex-shrink: 0;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+  }
+
+  .asset-item.selected {
+    border-color: var(--color-primary);
+    background: var(--bg-surface-active);
   }
 
   .asset-info { align-items: center; }
-  .asset-name  { font-size: 0.78rem; }
-  .asset-symbol { font-size: 0.7rem; }
+  .asset-name  { font-size: 12px; }
+  .asset-symbol { font-size: 11px; }
 
   .market-header { flex-direction: column; align-items: flex-start; gap: 4px; }
-  .current-price .price-value { font-size: 1.5rem; }
-
-  /* Gráfica más compacta en móvil */
-  .mercado-chart-wrap { height: 260px; }
+  .current-price .price-value { font-size: 24px; }
 }

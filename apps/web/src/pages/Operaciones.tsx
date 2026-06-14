@@ -3,6 +3,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
+import { ClipboardList, Trash2 } from "lucide-react";
 import { Button } from "../components/Button";
 import { TxBadge } from "../components/Badge";
 import { EmptyState } from "../components/EmptyState";
@@ -16,6 +17,7 @@ import { LoadingState } from "../components/LoadingState";
 
 const uiSchema = z.object({
   type: z.enum(["buy", "sell", "convert", "transfer_in", "transfer_out", "reward", "staking", "airdrop", "fee", "adjustment"]),
+// ...
   date: z.string().min(1, "La fecha es obligatoria"),
   sourceAsset: z.string().min(1, "Selecciona el activo"),
   destinationAsset: z.string().optional(),
@@ -193,8 +195,8 @@ export function Operaciones() {
             </FormField>
 
             <div className="form-actions" style={{ marginTop: "24px" }}>
-              <Button type="submit" loading={submitting}>
-                Guardar operación
+              <Button type="submit" disabled={submitting}>
+                {submitting ? "Guardando..." : "Guardar operación"}
               </Button>
             </div>
           </form>
@@ -203,20 +205,20 @@ export function Operaciones() {
 
       {/* Historial */}
       <Card style={{ padding: 0, overflow: "hidden" }}>
-        <CardHeader style={{ paddingBottom: 16, borderBottom: "1px solid var(--border)" }}>
-          <CardTitle style={{ fontSize: "1rem" }}>Historial de operaciones</CardTitle>
+        <CardHeader style={{ paddingBottom: 16, borderBottom: "1px solid var(--border-color)" }}>
+          <CardTitle style={{ fontSize: "16px" }}>Historial de operaciones</CardTitle>
         </CardHeader>
 
         {loadingTxs && (
           <div style={{ padding: 24, display: "flex", justifyContent: "center" }}>
-            <LoadingState text="Cargando historial..." />
+            <LoadingState message="Cargando historial..." />
           </div>
         )}
 
         {!loadingTxs && transactions.length === 0 && (
           <CardContent style={{ padding: "48px 24px" }}>
             <EmptyState
-              icon="📋"
+              icon={<ClipboardList size={48} strokeWidth={1.5} color="var(--text-muted)" />}
               title="Sin operaciones registradas"
               description="Las compras, ventas y conversiones que registres aparecerán aquí."
             />
@@ -243,28 +245,32 @@ export function Operaciones() {
 
                   return (
                     <tr key={tx.id}>
-                      <td className="text-secondary-color text-sm">{formatDate(tx.date)}</td>
+                      <td className="text-secondary text-sm">{formatDate(tx.date)}</td>
                       <td><TxBadge type={tx.type} /></td>
                       <td>
-                        <div className="asset-identity">
+                        <div className="asset-identity" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                           <CryptoLogo logoUrl={asset?.logoUrl} symbol={asset?.symbol ?? mainLeg?.assetId ?? "?"} size={28} />
                           <div>
-                            <div className="font-semibold">{asset?.symbol ?? mainLeg?.assetId ?? "?"}</div>
+                            <div className="font-semibold" style={{ fontSize: "14px" }}>{asset?.symbol ?? mainLeg?.assetId ?? "?"}</div>
                             {tx.type === "convert" && srcLeg && (
-                              <div className="text-secondary-color text-xs">
+                              <div className="text-secondary text-xs">
                                 desde {assets.find((a: { id: string; symbol: string }) => a.id === srcLeg.assetId)?.symbol ?? srcLeg.assetId}
                               </div>
                             )}
                           </div>
                         </div>
                       </td>
-                      <td className="num font-semibold">
+                      <td className="num font-semibold text-right">
                         {mainLeg ? Math.abs(mainLeg.amount).toLocaleString("es-ES", { maximumFractionDigits: 8 }) : "—"}
                       </td>
-                      <td className="ctr">
-                        <Button variant="danger" size="sm" onClick={() => handleDelete(tx.id)}>
-                          Eliminar
-                        </Button>
+                      <td className="text-center">
+                        <button 
+                          onClick={() => handleDelete(tx.id)}
+                          style={{ background: "transparent", border: "none", cursor: "pointer", padding: "4px", color: "var(--text-muted)" }}
+                          title="Eliminar"
+                        >
+                          <Trash2 size={16} />
+                        </button>
                       </td>
                     </tr>
                   );

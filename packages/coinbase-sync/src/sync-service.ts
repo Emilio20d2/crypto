@@ -3,8 +3,8 @@ import { eq } from "drizzle-orm";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyDB = import("drizzle-orm/better-sqlite3").BetterSQLite3Database<any>;
 import type { CoinbaseClient } from "./client";
-import type { CoinbaseFill, CoinbaseSyncResult } from "./types";
-import { normalizeFill } from "./normalizer";
+import type { CoinbaseFill, CoinbaseSyncResult, V2Transaction, V2Account } from "./types";
+import { normalizeFill, normalizeV2Transactions, NormalizedTransaction } from "./normalizer";
 
 type DbSchema = typeof import("@crypto-control/database").schema;
 
@@ -84,10 +84,8 @@ export class CoinbaseSyncService {
     }
   }
 
-  private insertFill(fill: CoinbaseFill): void {
-    const normalized = normalizeFill(fill);
-
-    if (this.isDuplicate(normalized.externalId)) return;
+  private insertNormalized(normalized: NormalizedTransaction): boolean {
+    if (this.isDuplicate(normalized.externalId)) return false;
 
     this.ensureAssets(normalized.requiredAssets);
 
@@ -136,63 +134,159 @@ export class CoinbaseSyncService {
         }
       }
     });
+    
+    return true;
   }
 
   async sync(): Promise<CoinbaseSyncResult> {
+    console.log("[Coinbase Sync] Iniciando sincronización de cuentas V2 y V3...");
+    let newTransactions = 0;
+    let skippedDuplicates = 0;
+    let totalItemsProcessed = 0;
+
+    // --- PHASE 1: V2 Accounts & Transactions ---
+    try {
+      let accountsUri: string | undefined = undefined;
+      const allAccounts: V2Account[] = [];
+      
+      do {
+        const accountsRes = await this.client.getV2Accounts(accountsUri);
+        allAccounts.push(...accountsRes.data);
+        accountsUri = accountsRes.pagination?.next_uri || undefined;
+        if (accountsUri) await sleep(INTER_REQUEST_DELAY_MS);
+      } while (accountsUri);
+      
+      console.log(`[Coinbase Sync] Cuentas V2 encontradas: ${allAccounts.length}`);
+      
+      const now = Date.now();
+      for (const account of allAccounts) {
+        const assetId = account.currency?.code;
+        const balance = account.balance?.amount ? parseFloat(account.balance.amount) : 0;
+        
+        if (assetId) {
+          this.ensureAssets([{
+            id: assetId,
+            symbol: assetId,
+            name: account.currency.name || assetId,
+            type: ["EUR", "USD", "GBP"].includes(assetId) ? "fiat" : "crypto"
+          }]);
+        }
+
+        this.db.insert(this.schema.accounts).values({
+          id: account.id,
+          name: account.name || `${assetId} Wallet`,
+          type: "exchange",
+          assetId: assetId || null,
+          balance: balance,
+          createdAt: now
+        }).onConflictDoUpdate({
+          target: this.schema.accounts.id,
+          set: {
+            name: account.name || `${assetId} Wallet`,
+            assetId: assetId || null,
+            balance: balance
+          }
+        }).run();
+      }
+      
+      const allV2Txs: V2Transaction[] = [];
+      
+      for (const account of allAccounts) {
+        let txUri: string | undefined = undefined;
+        let stopPaginating = false;
+        
+        do {
+          const txRes = await this.client.getV2Transactions(account.id, txUri);
+          
+          for (const tx of txRes.data) {
+            totalItemsProcessed++;
+            
+            let isDup = false;
+            if (tx.type === "trade" && tx.trade?.id) isDup = this.isDuplicate(tx.trade.id);
+            else if (tx.type === "buy" && tx.buy?.id) isDup = this.isDuplicate(tx.buy.id);
+            else if (tx.type === "sell" && tx.sell?.id) isDup = this.isDuplicate(tx.sell.id);
+            else isDup = this.isDuplicate(tx.id);
+
+            if (isDup) {
+              stopPaginating = true;
+              skippedDuplicates++;
+            } else {
+              allV2Txs.push(tx);
+            }
+          }
+          
+          txUri = txRes.pagination?.next_uri || undefined;
+          if (txUri && !stopPaginating) await sleep(INTER_REQUEST_DELAY_MS);
+          else txUri = undefined;
+        } while (txUri);
+      }
+      
+      const normalizedV2 = normalizeV2Transactions(allV2Txs);
+      normalizedV2.sort((a, b) => a.date - b.date);
+      
+      for (const norm of normalizedV2) {
+        if (this.insertNormalized(norm)) {
+          newTransactions++;
+        } else {
+          skippedDuplicates++;
+        }
+      }
+    } catch (e) {
+      console.warn("[Coinbase Sync] Error sincronizando V2:", e);
+      throw e;
+    }
+
+    // --- PHASE 2: V3 Fills (Advanced Trade) ---
     const cursor = this.getSetting(SETTING_SYNC_CURSOR);
-
     let allFills: CoinbaseFill[] = [];
-
-    // Paginated fetch: collect all pages
     let pageCursor: string | undefined = undefined;
     let isFirstPage = true;
 
-    do {
-      const params: Parameters<typeof this.client.getFills>[0] = {
-        limit: String(PAGE_SIZE),
-      };
-      if (isFirstPage && cursor) {
-        params.start_sequence_timestamp = cursor;
+    try {
+      do {
+        const params: Parameters<typeof this.client.getFills>[0] = {
+          limit: String(PAGE_SIZE),
+        };
+        if (isFirstPage && cursor) {
+          params.start_sequence_timestamp = cursor;
+        }
+        if (pageCursor) {
+          params.cursor = pageCursor;
+        }
+
+        const response = await this.client.getFills(params);
+        allFills = allFills.concat(response.fills);
+        pageCursor = response.cursor || undefined;
+        isFirstPage = false;
+
+        if (pageCursor) {
+          await sleep(INTER_REQUEST_DELAY_MS);
+        }
+      } while (pageCursor);
+
+      allFills.sort(
+        (a, b) =>
+          new Date(a.sequence_timestamp).getTime() -
+          new Date(b.sequence_timestamp).getTime()
+      );
+
+      for (const fill of allFills) {
+        totalItemsProcessed++;
+        const norm = normalizeFill(fill);
+        if (this.insertNormalized(norm)) {
+          newTransactions++;
+        } else {
+          skippedDuplicates++;
+        }
       }
-      if (pageCursor) {
-        params.cursor = pageCursor;
+
+      if (allFills.length > 0) {
+        const latestFill = allFills[allFills.length - 1];
+        this.setSetting(SETTING_SYNC_CURSOR, latestFill.sequence_timestamp);
       }
-
-      const response = await this.client.getFills(params);
-      allFills = allFills.concat(response.fills);
-
-      // Coinbase returns empty string cursor when no more pages
-      pageCursor = response.cursor || undefined;
-      isFirstPage = false;
-
-      if (pageCursor) {
-        await sleep(INTER_REQUEST_DELAY_MS);
-      }
-    } while (pageCursor);
-
-    // Sort fills oldest→newest to process in chronological order
-    allFills.sort(
-      (a, b) =>
-        new Date(a.sequence_timestamp).getTime() -
-        new Date(b.sequence_timestamp).getTime()
-    );
-
-    let newTransactions = 0;
-    let skippedDuplicates = 0;
-
-    for (const fill of allFills) {
-      if (this.isDuplicate(fill.entry_id)) {
-        skippedDuplicates++;
-        continue;
-      }
-      this.insertFill(fill);
-      newTransactions++;
-    }
-
-    // Advance the cursor to the latest sequence_timestamp seen
-    if (allFills.length > 0) {
-      const latestFill = allFills[allFills.length - 1];
-      this.setSetting(SETTING_SYNC_CURSOR, latestFill.sequence_timestamp);
+    } catch (e) {
+      console.warn("[Coinbase Sync] Error sincronizando V3 Fills:", e);
+      throw e;
     }
 
     const syncRunId = crypto.randomUUID();
@@ -214,11 +308,11 @@ export class CoinbaseSyncService {
     this.setSetting(SETTING_LAST_SYNC_ERROR, "");
 
     console.log(
-      `[Coinbase Sync] Completado: ${newTransactions} nuevas, ${skippedDuplicates} duplicadas`
+      `[Coinbase Sync] Completado: ${newTransactions} nuevas, ${skippedDuplicates} duplicadas de ${totalItemsProcessed} procesadas.`
     );
 
     return {
-      itemsProcessed: allFills.length,
+      itemsProcessed: totalItemsProcessed,
       newTransactions,
       skippedDuplicates,
     };

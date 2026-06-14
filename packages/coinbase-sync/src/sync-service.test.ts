@@ -32,7 +32,7 @@ function createTestDb() {
 function makeClient(fillsResponse: FillsResponse): CoinbaseClient {
   return {
     getFills: vi.fn().mockResolvedValue(fillsResponse),
-    getAccounts: vi.fn().mockResolvedValue({ accounts: [], has_next: false, cursor: "", size: 0 }),
+    getV2Accounts: vi.fn().mockResolvedValue({ data: [], pagination: null }),
     testConnection: vi.fn().mockResolvedValue(undefined),
   } as unknown as CoinbaseClient;
 }
@@ -198,8 +198,8 @@ describe("CoinbaseSyncService", () => {
 
   test("error de red → syncWithErrorHandling registra status=error en syncRuns y settings", async () => {
     const client = {
-      getFills: vi.fn().mockRejectedValue(new Error("Network timeout")),
-      getAccounts: vi.fn(),
+      getFills: vi.fn(),
+      getV2Accounts: vi.fn().mockRejectedValue(new Error("Network timeout")),
       testConnection: vi.fn(),
     } as unknown as CoinbaseClient;
 

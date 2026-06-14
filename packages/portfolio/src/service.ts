@@ -34,7 +34,35 @@ export class PortfolioService {
 
   async getPositions(): Promise<PortfolioResult> {
     const txs = await this.repository.getTransactions();
-    return this.portfolioCalculator.calculate(txs);
+    const result = this.portfolioCalculator.calculate(txs);
+    
+    try {
+      const realBalances = await this.repository.getAccountBalances();
+      
+      for (const [assetId, balance] of Object.entries(realBalances)) {
+        if (!result.positions[assetId]) {
+          result.positions[assetId] = {
+            assetId,
+            balance: balance,
+            totalInvestedEur: 0,
+            averagePriceEur: null,
+            hasPendingValuation: false
+          };
+        } else {
+          result.positions[assetId].balance = balance;
+        }
+      }
+      
+      for (const assetId of Object.keys(result.positions)) {
+        if (realBalances[assetId] === undefined) {
+          result.positions[assetId].balance = 0;
+        }
+      }
+    } catch (e) {
+      console.warn("Could not fetch real balances, falling back to computed balances:", e);
+    }
+    
+    return result;
   }
 
   async getSummary(): Promise<PortfolioSummary> {
@@ -115,6 +143,12 @@ export class PortfolioService {
             assetId,
             weight: 0,
             valueEur: value
+          });
+        } else {
+          allocations.push({
+            assetId,
+            weight: 0,
+            valueEur: 0
           });
         }
       }

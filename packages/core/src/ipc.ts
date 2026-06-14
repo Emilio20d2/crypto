@@ -56,6 +56,9 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
     disconnect: () => Promise<Result<null>>;
     getStatus: () => Promise<Result<CoinbaseStatus>>;
     sync: () => Promise<Result<CoinbaseSyncResult>>;
+    listPortfolios: () => Promise<Result<any>>;
+    getPortfolioBreakdown: (portfolioUuid: string, currency: string) => Promise<Result<any>>;
+    getPortfolioSnapshots: (portfolioUuid: string) => Promise<Result<any>>;
   };
 }
 

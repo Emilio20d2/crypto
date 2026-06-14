@@ -31,6 +31,9 @@ const cryptoControl: FullCryptoControlAPI = {
     disconnect:            ()                           => ipcRenderer.invoke("coinbase:disconnect"),
     getStatus:             ()                           => ipcRenderer.invoke("coinbase:get-status"),
     sync:                  ()                           => ipcRenderer.invoke("coinbase:sync"),
+    listPortfolios:        ()                           => ipcRenderer.invoke("coinbase:list-portfolios"),
+    getPortfolioBreakdown: (portfolioUuid: string, currency: string) => ipcRenderer.invoke("coinbase:get-portfolio-breakdown", portfolioUuid, currency),
+    getPortfolioSnapshots: (portfolioUuid: string)      => ipcRenderer.invoke("coinbase:get-portfolio-snapshots", portfolioUuid),
   },
 };
 

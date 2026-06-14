@@ -1,5 +1,15 @@
 import * as crypto from "crypto";
-import type { FillsResponse, AccountsResponse, KeyPermissionsResponse } from "./types";
+import type { 
+  FillsResponse, 
+  AccountsResponse, 
+  KeyPermissionsResponse, 
+  V2AccountsResponse, 
+  V2TransactionsResponse,
+  PortfoliosResponse,
+  PortfolioBreakdownResponse,
+  ProductResponse,
+  CandlesResponse
+} from "./types";
 
 export type CoinbaseErrorCode =
   | "INVALID_JSON"
@@ -262,5 +272,44 @@ export class CoinbaseClient {
 
   async testConnection(): Promise<void> {
     await this.getAccounts();
+  }
+
+  // V2 Endpoints
+  async getV2Accounts(uri?: string): Promise<V2AccountsResponse> {
+    const fullPath = uri || "/v2/accounts?limit=100";
+    const [pathname, search] = fullPath.split("?");
+    const params = search ? Object.fromEntries(new URLSearchParams(search)) : undefined;
+    
+    return this.fetchWithRetry<V2AccountsResponse>("GET", pathname, params);
+  }
+
+  async getV2Transactions(accountId: string, uri?: string): Promise<V2TransactionsResponse> {
+    const fullPath = uri || `/v2/accounts/${accountId}/transactions?limit=100`;
+    const [pathname, search] = fullPath.split("?");
+    const params = search ? Object.fromEntries(new URLSearchParams(search)) : undefined;
+    
+    return this.fetchWithRetry<V2TransactionsResponse>("GET", pathname, params);
+  }
+
+  // --- V3 Brokerage Endpoints ---
+
+  async getPortfolios(): Promise<PortfoliosResponse> {
+    return this.fetchWithRetry<PortfoliosResponse>("GET", "/api/v3/brokerage/portfolios");
+  }
+
+  async getPortfolioBreakdown(portfolioUuid: string, currency: string = "EUR"): Promise<PortfolioBreakdownResponse> {
+    return this.fetchWithRetry<PortfolioBreakdownResponse>("GET", `/api/v3/brokerage/portfolios/${portfolioUuid}`, { currency });
+  }
+
+  async getProduct(productId: string): Promise<ProductResponse> {
+    return this.fetchWithRetry<ProductResponse>("GET", `/api/v3/brokerage/products/${productId}`);
+  }
+
+  async getCandles(productId: string, start: string, end: string, granularity: string): Promise<CandlesResponse> {
+    return this.fetchWithRetry<CandlesResponse>("GET", `/api/v3/brokerage/products/${productId}/candles`, {
+      start,
+      end,
+      granularity
+    });
   }
 }

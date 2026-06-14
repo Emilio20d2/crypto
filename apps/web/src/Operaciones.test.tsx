@@ -46,6 +46,9 @@ const mockAPI = () => {
       disconnect: async () => ({ ok: true as const, data: null }),
       getStatus: async () => ({ ok: true as const, data: { connected: false, lastSyncAt: null, lastSyncItemsProcessed: null, lastSyncStatus: null, lastSyncError: null } }),
       sync: async () => ({ ok: true as const, data: { itemsProcessed: 0, newTransactions: 0, skippedDuplicates: 0 } }),
+      listPortfolios: async () => ({ ok: true as const, data: [] }),
+      getPortfolioBreakdown: async () => ({ ok: true as const, data: {} }),
+      getPortfolioSnapshots: async () => ({ ok: true as const, data: [] }),
     }
   };
 };

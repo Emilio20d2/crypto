@@ -347,9 +347,9 @@ export function Coinbase() {
                   display: "flex", alignItems: "center", gap: 12, marginBottom: 12,
                   color: "var(--text-muted)", fontSize: "0.85rem",
                 }}>
-                  <hr style={{ flex: 1, border: "none", borderTop: "1px solid var(--border)" }} />
+                  <hr style={{ flex: 1, border: "none", borderTop: "1px solid var(--border-color)" }} />
                   o
-                  <hr style={{ flex: 1, border: "none", borderTop: "1px solid var(--border)" }} />
+                  <hr style={{ flex: 1, border: "none", borderTop: "1px solid var(--border-color)" }} />
                 </div>
                 <Button
                   variant="secondary"

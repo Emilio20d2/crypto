@@ -14,6 +14,8 @@ export const accounts = sqliteTable("accounts", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   type: text("type").notNull(), // "exchange" | "wallet" | "bank"
+  assetId: text("asset_id").references(() => assets.id),
+  balance: real("balance").notNull().default(0),
   createdAt: integer("created_at").notNull()
 });
 
@@ -129,4 +131,88 @@ export const syncRuns = sqliteTable("sync_runs", {
   timestamp: integer("timestamp").notNull(),
   status: text("status").notNull(),
   itemsProcessed: integer("items_processed").notNull()
+});
+
+// --- COINBASE V3 PURE CACHE TABLES ---
+
+export const coinbasePortfolios = sqliteTable("coinbase_portfolios", {
+  uuid: text("uuid").primaryKey(),
+  name: text("name").notNull(),
+  type: text("type").notNull(),
+  deleted: integer("deleted").notNull(), // boolean
+  currency: text("currency").notNull(),
+  capturedAt: integer("captured_at").notNull()
+});
+
+export const coinbasePortfolioSnapshots = sqliteTable("coinbase_portfolio_snapshots", {
+  id: text("id").primaryKey(),
+  portfolioUuid: text("portfolio_uuid").notNull().references(() => coinbasePortfolios.uuid, { onDelete: "cascade" }),
+  currency: text("currency").notNull(),
+  totalBalance: real("total_balance"),
+  totalCryptoBalance: real("total_crypto_balance"),
+  totalCashEquivalentBalance: real("total_cash_equivalent_balance"),
+  capturedAt: integer("captured_at").notNull(),
+  source: text("source").notNull().default("coinbase_portfolio_breakdown")
+});
+
+export const coinbaseSpotPositionSnapshots = sqliteTable("coinbase_spot_position_snapshots", {
+  id: text("id").primaryKey(),
+  portfolioUuid: text("portfolio_uuid").notNull().references(() => coinbasePortfolios.uuid, { onDelete: "cascade" }),
+  asset: text("asset").notNull(),
+  assetUuid: text("asset_uuid"),
+  accountUuid: text("account_uuid").notNull(),
+  totalBalanceFiat: real("total_balance_fiat"),
+  totalBalanceCrypto: real("total_balance_crypto"),
+  allocation: real("allocation"),
+  costBasisValue: real("cost_basis_value"),
+  costBasisCurrency: text("cost_basis_currency"),
+  averageEntryPriceValue: real("average_entry_price_value"),
+  averageEntryPriceCurrency: text("average_entry_price_currency"),
+  unrealizedPnl: real("unrealized_pnl"),
+  fundingPnl: real("funding_pnl"),
+  availableToTradeFiat: real("available_to_trade_fiat"),
+  availableToTradeCrypto: real("available_to_trade_crypto"),
+  availableToTransferFiat: real("available_to_transfer_fiat"),
+  availableToTransferCrypto: real("available_to_transfer_crypto"),
+  availableToSendFiat: real("available_to_send_fiat"),
+  availableToSendCrypto: real("available_to_send_crypto"),
+  assetImageUrl: text("asset_img_url"),
+  assetColor: text("asset_color"),
+  isCash: integer("is_cash").notNull().default(0), // boolean
+  accountType: text("account_type"),
+  capturedAt: integer("captured_at").notNull()
+});
+
+export const coinbaseMarketSnapshots = sqliteTable("coinbase_market_snapshots", {
+  productId: text("product_id").primaryKey(),
+  price: real("price"),
+  pricePercentageChange24h: real("price_percentage_change_24h"),
+  volume24h: real("volume_24h"),
+  volumePercentageChange24h: real("volume_percentage_change_24h"),
+  marketCap: real("market_cap"),
+  baseName: text("base_name"),
+  baseDisplaySymbol: text("base_display_symbol"),
+  quoteDisplaySymbol: text("quote_display_symbol"),
+  iconUrl: text("icon_url"),
+  status: text("status"),
+  tradingDisabled: integer("trading_disabled").default(0),
+  viewOnly: integer("view_only").default(0),
+  capturedAt: integer("captured_at").notNull()
+});
+
+export const coinbaseCandleCache = sqliteTable("coinbase_candle_cache", {
+  id: text("id").primaryKey(), // e.g. "BTC-EUR_3600_1680000000"
+  productId: text("product_id").notNull(),
+  granularity: text("granularity").notNull(),
+  start: integer("start").notNull(),
+  low: real("low").notNull(),
+  high: real("high").notNull(),
+  open: real("open").notNull(),
+  close: real("close").notNull(),
+  volume: real("volume").notNull(),
+  fetchedAt: integer("fetched_at").notNull()
+}, (table) => {
+  return {
+    idxProductTime: index("idx_coinbase_candle_prod_time").on(table.productId, table.granularity, table.start)
+  };
 });

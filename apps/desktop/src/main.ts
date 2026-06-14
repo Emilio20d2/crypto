@@ -273,6 +273,7 @@ function setupIpcHandlers() {
     CoinbaseClient,
     CoinbaseApiError,
     CoinbaseSyncService,
+    CoinbasePortfolioService,
     parseCdpJson,
   } = require("@crypto-control/coinbase-sync") as typeof import("@crypto-control/coinbase-sync");
 
@@ -415,6 +416,29 @@ function setupIpcHandlers() {
     const syncService = new CoinbaseSyncService(syncDb, schema, client);
     return await syncService.syncWithErrorHandling();
   }));
+
+  // --- V3 PORTFOLIO HANDLERS ---
+  const getPortfolioServiceInst = () => {
+    const syncDb = getDb();
+    return new CoinbasePortfolioService(syncDb, async () => {
+      const creds = credsMgr.getCredentials();
+      if (!creds) return null;
+      return new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem);
+    });
+  };
+
+  ipcMain.handle("coinbase:list-portfolios", withResult(async () => {
+    return await getPortfolioServiceInst().listPortfolios();
+  }));
+
+  ipcMain.handle("coinbase:get-portfolio-breakdown", withResult(async (_, portfolioUuid: string, currency: string) => {
+    return await getPortfolioServiceInst().getPortfolioBreakdown(portfolioUuid, currency);
+  }));
+
+  ipcMain.handle("coinbase:get-portfolio-snapshots", withResult(async (_, portfolioUuid: string) => {
+    return await getPortfolioServiceInst().getPortfolioSnapshots(portfolioUuid);
+  }));
+
 }
 
 function createWindow() {

@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Search, SearchX } from "lucide-react";
 import { MarketChart } from "../components/MarketChart";
 import { CryptoLogo } from "../components/CryptoLogo";
 import { EmptyState } from "../components/EmptyState";
@@ -10,20 +11,21 @@ import type { Period } from "../components/PeriodSelector";
 import { PriceDisplay } from "../components/PriceDisplay";
 import { ErrorState } from "../components/ErrorState";
 import { LoadingState } from "../components/LoadingState";
+import { ErrorBoundary } from "../components/ErrorBoundary";
 import "../mercado.css";
 
 const PERIOD_MAP: Record<Period, "1h" | "24h" | "7d" | "30d" | "1y" | "all"> = {
   "1h": "1h",
-  "1d": "24h",
-  "1s": "7d",
+  "24h": "24h",
+  "1w": "7d",
   "1m": "30d",
-  "1a": "1y",
-  "Todo": "all",
+  "1y": "1y",
+  "all": "all",
 };
 
 export function Mercado() {
   const [selectedAsset, setSelectedAsset] = useState<string>("BTC");
-  const [uiPeriod, setUiPeriod] = useState<Period>("1d");
+  const [uiPeriod, setUiPeriod] = useState<Period>("24h");
   const [search, setSearch] = useState("");
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
 
@@ -46,7 +48,7 @@ export function Mercado() {
     enabled: !!selectedAsset,
   });
 
-  const { data: historyRes, isLoading: loadingHistory, refetch: refetchHistory } = useQuery({
+  const { data: historyRes, isLoading: loadingHistory } = useQuery({
     queryKey: ["market", "history", selectedAsset, backendPeriod],
     queryFn: () => window.cryptoControl.market.getHistoricalPrices({ assetId: selectedAsset, period: backendPeriod, quoteCurrency: "EUR" }),
     enabled: !!selectedAsset,
@@ -113,12 +115,16 @@ export function Mercado() {
       <div className="mercado-layout">
         {/* Sidebar con lista de activos */}
         <div className="mercado-sidebar">
-          <Input
-            type="text"
-            placeholder="Buscar activo..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-          />
+          <div style={{ position: "relative" }}>
+            <Search size={16} color="var(--text-muted)" style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)" }} />
+            <Input
+              type="text"
+              placeholder="Buscar activo..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{ paddingLeft: "36px" }}
+            />
+          </div>
           <div className="asset-list" style={{ marginTop: 8 }}>
             {filteredAssets.map((a: { id: string; name: string; symbol: string; logoUrl?: string | null }) => (
               <div
@@ -126,7 +132,7 @@ export function Mercado() {
                 className={`asset-item ${selectedAsset === a.id ? "selected" : ""}`}
                 onClick={() => setSelectedAsset(a.id)}
               >
-                <CryptoLogo logoUrl={a.logoUrl} symbol={a.symbol} size={28} />
+                <CryptoLogo logoUrl={a.logoUrl} symbol={a.symbol} size={32} />
                 <div className="asset-info">
                   <span className="asset-name">{a.name}</span>
                   <span className="asset-symbol">{a.symbol}</span>
@@ -134,7 +140,11 @@ export function Mercado() {
               </div>
             ))}
             {filteredAssets.length === 0 && (
-              <EmptyState title="Sin resultados" description="No hay activos que coincidan con la búsqueda." />
+              <EmptyState 
+                icon={<SearchX size={32} strokeWidth={1.5} />} 
+                title="Sin resultados" 
+                description="No hay activos que coincidan con la búsqueda." 
+              />
             )}
           </div>
         </div>
@@ -143,10 +153,12 @@ export function Mercado() {
         <Card className="mercado-main" style={{ padding: 0, overflow: "hidden" }}>
           <CardHeader>
             <div className="market-header" style={{ marginBottom: 0 }}>
-              <h2 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0 }}>{selectedAssetData?.name ?? selectedAsset}</h2>
+              <h2 style={{ fontSize: "20px", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
+                {selectedAssetData?.name ?? selectedAsset}
+              </h2>
               {typeof currentPrice === "number" && Number.isFinite(currentPrice) && (
                 <div className="current-price">
-                  <PriceDisplay value={currentPrice} className="price-value" style={{ fontSize: "1.5rem", fontWeight: 700 }} />
+                  <PriceDisplay value={currentPrice} className="price-value" style={{ fontSize: "24px", fontWeight: 700, letterSpacing: "-0.02em" }} />
                   {variationPeriod !== null && (
                     <span className={`asset-change ${variationPeriod >= 0 ? "text-positive" : "text-negative"}`}>
                       {variationPeriod >= 0 ? "+" : ""}{variationPeriod.toFixed(2)}%
@@ -161,24 +173,25 @@ export function Mercado() {
             <div style={{ flex: 1, minHeight: 0 }}>
               {loadingHistory ? (
                 <div style={{ height: isMobile ? 260 : 400, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <LoadingState text="Cargando datos de mercado..." />
+                  <LoadingState message="Cargando datos de mercado..." />
                 </div>
               ) : historyRes?.ok && historyRes.data ? (
-                <MarketChart
-                  data={historyRes.data.points.map((p: { time: number; value: number }) => ({
-                    time: p.time as import("lightweight-charts").Time,
-                    value: p.value,
-                  }))}
-                  operations={operations}
-                  provider={historyRes.data.provider}
-                  isCached={historyRes.data.isCached}
-                  height={isMobile ? 260 : 400}
-                />
+                <ErrorBoundary>
+                  <MarketChart
+                    data={historyRes.data.points.map((p: { time: number; value: number }) => ({
+                      time: p.time as import("lightweight-charts").Time,
+                      value: p.value,
+                    }))}
+                    operations={operations}
+                    provider={historyRes.data.provider}
+                    isCached={historyRes.data.isCached}
+                    height={isMobile ? 260 : 400}
+                  />
+                </ErrorBoundary>
               ) : (
                 <div style={{ height: isMobile ? 260 : 400, display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <ErrorState
                     message="No se pudo cargar la gráfica del mercado."
-                    onRetry={() => refetchHistory()}
                   />
                 </div>
               )}
@@ -186,7 +199,7 @@ export function Mercado() {
 
             <div style={{ marginTop: "16px" }}>
               <PeriodSelector
-                activePeriod={uiPeriod}
+                value={uiPeriod}
                 onChange={setUiPeriod}
               />
             </div>
