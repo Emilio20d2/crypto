@@ -2988,6 +2988,15 @@ dd {
     padding-bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom, 0px));
   }
 
+  /* Web/browser: no bottom nav bar, no reserved space */
+  .app-shell[data-platform="web"] {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .fiscal-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .native-sidebar {
     display: none;
   }
@@ -3290,8 +3299,9 @@ dd {
   .portfolio-metrics,
   .sync-grid,
   .sentiment-meta,
-  .treasury-summary-grid {
-    grid-template-columns: 1fr;
+  .treasury-summary-grid,
+  .fiscal-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .sync-history-row {
@@ -3453,12 +3463,13 @@ dd {
     min-height: 68px;
   }
 
+  /* market grids keep 2 columns at 430px — content fits comfortably */
   .market-overview-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .market-macro-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .market-price-block strong,
@@ -3498,7 +3509,8 @@ dd {
     justify-self: start;
   }
 
-  .fiscal-summary-grid {
+  .fiscal-summary-grid,
+  .treasury-summary-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -3526,6 +3538,16 @@ dd {
 
   .mobile-topbar-section {
     display: none;
+  }
+}
+
+@media (max-width: 360px) {
+  .portfolio-metrics,
+  .sync-grid,
+  .sentiment-meta,
+  .market-overview-grid,
+  .market-macro-grid {
+    grid-template-columns: 1fr;
   }
 }
 

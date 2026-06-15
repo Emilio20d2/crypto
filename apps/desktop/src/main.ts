@@ -30,6 +30,13 @@ import {
 import crypto from "crypto";
 import { eq, and, or, asc, desc } from "drizzle-orm";
 import * as fs from "fs";
+import * as http from "http";
+
+if (app.isPackaged) {
+  process.env["KEYCHAIN_HELPER_PATH"] = path.join(
+    process.resourcesPath, "bin", "keychain-helper"
+  );
+}
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -234,6 +241,16 @@ function setupIpcHandlers() {
     const calc = new PortfolioCalculator();
     const fifoCalc = new FifoCalculator();
     return new PortfolioService(repo, calc, fifoCalc, marketService);
+  };
+
+  // HTTP dispatch map: captures all ipcMain.handle registrations so the same
+  // handlers can be called over HTTP (used by browser clients via Tailscale).
+  const httpDispatch = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+  const _origHandle = ipcMain.handle.bind(ipcMain);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (ipcMain as any).handle = (channel: string, listener: (event: any, ...args: unknown[]) => unknown) => {
+    httpDispatch.set(channel, (...args: unknown[]) => Promise.resolve(listener(null, ...args)));
+    return _origHandle(channel as any, listener as any);
   };
 
   // Helper to wrap IPC handlers with Result<T> — error shape matches core Result type
@@ -1522,6 +1539,58 @@ function setupIpcHandlers() {
   ipcMain.handle("coinbase:get-portfolio-snapshots", withResult(async (_, portfolioUuid: string) => {
     return await getPortfolioServiceInst().getPortfolioSnapshots(portfolioUuid);
   }));
+
+  // Local HTTP API bridge — exposes all IPC channels as POST /api/ipc
+  // Allows browser clients (Tailscale) to share the same backend and SQLite DB
+  const HTTP_PORT = 3001;
+  const CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+  };
+
+  const apiServer = http.createServer((req, res) => {
+    if (req.method === "OPTIONS") {
+      res.writeHead(200, CORS_HEADERS);
+      res.end();
+      return;
+    }
+
+    if (req.method !== "POST" || req.url !== "/api/ipc") {
+      res.writeHead(404, CORS_HEADERS);
+      res.end();
+      return;
+    }
+
+    let body = "";
+    req.on("data", (chunk) => { body += String(chunk); });
+    req.on("end", () => {
+      void (async () => {
+        try {
+          const { channel, args = [] } = JSON.parse(body) as { channel: string; args?: unknown[] };
+          const handler = httpDispatch.get(channel);
+          if (!handler) {
+            res.writeHead(404, { ...CORS_HEADERS, "Content-Type": "application/json" });
+            res.end(JSON.stringify({ ok: false, error: { code: "NOT_FOUND", message: `Unknown channel: ${channel}` } }));
+            return;
+          }
+          const result = await handler(...args);
+          res.writeHead(200, { ...CORS_HEADERS, "Content-Type": "application/json" });
+          res.end(JSON.stringify(result));
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          res.writeHead(500, { ...CORS_HEADERS, "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: { code: "SERVER_ERROR", message: msg } }));
+        }
+      })();
+    });
+  });
+
+  apiServer.on("error", (e) => console.error("[HTTP] API server error:", e));
+  apiServer.listen(HTTP_PORT, "0.0.0.0", () => {
+    console.log(`[HTTP] API bridge on port ${HTTP_PORT}`);
+  });
+  app.on("will-quit", () => apiServer.close());
 
 }
 

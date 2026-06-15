@@ -90,6 +90,9 @@ function MobileSidebarDrawer({ items, open, onClose }: { items: NavigationItem[]
   );
 }
 
+// Detect Electron via user-agent — browser clients don't have "Electron" in UA
+const isElectron = typeof navigator !== "undefined" && /electron/i.test(navigator.userAgent);
+
 export function AppShell({ items, children }: { items: NavigationItem[]; children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
@@ -98,14 +101,14 @@ export function AppShell({ items, children }: { items: NavigationItem[]; childre
     .sort((a, b) => b.to.length - a.to.length)[0];
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-platform={isElectron ? "electron" : "web"}>
       <NativeSidebar items={items} />
       <MobileTopbar activeLabel={activeItem?.label ?? "Crypto Control"} onOpen={() => setSidebarOpen(true)} />
       <main className="app-main">
         <div className="content-frame">{children}</div>
       </main>
       <MobileSidebarDrawer items={items} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-      <MobileNavigation items={items} />
+      {isElectron && <MobileNavigation items={items} />}
     </div>
   );
 }

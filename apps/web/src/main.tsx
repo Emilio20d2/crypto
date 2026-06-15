@@ -1,4 +1,5 @@
 
+import "./lib/setupApi"; // installs HTTP fallback when window.cryptoControl is absent
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App.tsx";

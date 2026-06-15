@@ -41,6 +41,10 @@
       {
         "from": "../../packages/database/drizzle",
         "to": "migrations"
+      },
+      {
+        "from": "bin/keychain-helper",
+        "to": "bin/keychain-helper"
       }
     ],
     "dmg": {
