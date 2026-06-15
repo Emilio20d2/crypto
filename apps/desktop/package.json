@@ -1,6 +1,8 @@
 {
   "name": "@crypto-control/desktop",
   "version": "0.1.0",
+  "description": "Crypto Control — gestión de cartera cripto con integración Coinbase",
+  "author": "Emilio",
   "dependencies": {
     "@crypto-control/coinbase-sync": "*",
     "@crypto-control/core": "*",
@@ -52,7 +54,7 @@
     }
   },
   "devDependencies": {
-    "electron": "^30.0.0",
+    "electron": "30.5.1",
     "electron-builder": "^24.13.3",
     "typescript": "^5.4.5"
   }

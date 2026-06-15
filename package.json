@@ -16,8 +16,12 @@
   },
   "devDependencies": {
     "concurrently": "^10.0.3",
+    "electron-builder": "^24.13.3",
     "playwright-core": "^1.60.0",
     "typescript": "^5.4.5",
     "wait-on": "^9.0.10"
+  },
+  "dependencies": {
+    "app-builder-bin": "^4.2.0"
   }
 }
