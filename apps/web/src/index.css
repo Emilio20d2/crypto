@@ -3386,10 +3386,9 @@ dd {
   }
 
   .position-card-metrics {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .position-card-metrics strong,
   .position-card-value strong,
   .position-card-value small {
     white-space: normal;

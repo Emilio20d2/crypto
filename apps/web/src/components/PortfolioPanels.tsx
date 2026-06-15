@@ -53,7 +53,7 @@ function formatPercentPoints(value: number | null | undefined, fallback = "Pendi
     : fallback;
 }
 
-function formatMoneyPerCoin(value: number | null | undefined, fallback = "Pendiente Coinbase") {
+function formatMoneyPerCoin(value: number | null | undefined, fallback = "Pendiente") {
   return typeof value === "number" && Number.isFinite(value) ? `${formatMoney(value)} / moneda` : fallback;
 }
 
@@ -227,17 +227,19 @@ function PositionCard({ position, name, logoUrl, onSelect }: { position: any; na
 
       <span className="position-card-metrics">
         <span><small>Cantidad</small><strong>{formatCrypto(position.totalBalanceCrypto, "Pendiente")} {position.asset}</strong></span>
-        <span><small>Invertido Coinbase</small><strong>{formatMoney(invested, "Pendiente Coinbase")}</strong></span>
+        <span><small>Invertido</small><strong>{formatMoney(invested, "Pendiente")}</strong></span>
         <span><small>Beneficio/Pérdida</small><strong className={pnl !== null && pnl < 0 ? "text-negative" : "text-positive"}>{formatMoney(pnl, "Pendiente")}</strong></span>
         <span><small>ROI</small><strong className={roi !== null && roi < 0 ? "text-negative" : "text-positive"}>{formatPercentPoints(roi)}</strong></span>
-        <span><small>Coste medio Coinbase</small><strong>{formatMoneyPerCoin(averageCost)}</strong></span>
+        <span><small>Coste medio</small><strong>{formatMoneyPerCoin(averageCost)}</strong></span>
         <span><small>Variación 24 h</small><strong className={change !== null && change < 0 ? "text-negative" : "text-positive"}>{formatPercentPoints(change)}</strong></span>
         <span><small>Peso</small><strong>{weight === null ? "Pendiente" : `${weight.toLocaleString("es-ES", { maximumFractionDigits: 2 })}%`}</strong></span>
       </span>
 
-      <span className="position-card-spark">
-        <Sparkline points={position.sparkline || []} positive={(change ?? 0) >= 0} />
-      </span>
+      {(position.sparkline?.length ?? 0) > 0 && (
+        <span className="position-card-spark">
+          <Sparkline points={position.sparkline} positive={(change ?? 0) >= 0} />
+        </span>
+      )}
     </button>
   );
 }

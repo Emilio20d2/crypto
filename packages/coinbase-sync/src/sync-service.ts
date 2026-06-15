@@ -164,6 +164,17 @@ export class CoinbaseSyncService {
       
       accountsConsulted = allAccounts.length;
       console.log(`[Coinbase Sync] Cuentas V2 encontradas: ${allAccounts.length}`);
+
+      const nonZeroAccounts = allAccounts.filter((acc) => {
+        const bal = acc.balance?.amount ? parseFloat(acc.balance.amount) : 0;
+        return bal > 1e-12;
+      });
+      console.log(`[Coinbase Sync] Cuentas con saldo > 0: ${nonZeroAccounts.length}`);
+      for (const acc of nonZeroAccounts) {
+        const symbol = acc.currency?.code || "?";
+        const bal = acc.balance?.amount ?? "0";
+        console.log(`[Coinbase Sync]   ${symbol}: ${bal}`);
+      }
       
       const now = Date.now();
       for (const account of allAccounts) {
@@ -320,6 +331,9 @@ export class CoinbaseSyncService {
 
     console.log(
       `[Coinbase Sync] Completado: ${newTransactions} nuevas, ${skippedDuplicates} duplicadas de ${totalItemsProcessed} procesadas.`
+    );
+    console.log(
+      `[Coinbase Sync] DIAGNÓSTICO — cuentas=${accountsConsulted}, tx_descargadas=${transactionsDownloaded}, fills_descargados=${fillsDownloaded}, páginas=${pagesDownloaded}`
     );
 
     return {

@@ -212,6 +212,11 @@ export function Portfolio() {
     queryFn: () => window.cryptoControl.assets.list(),
   });
 
+  const { data: localPositionsRes } = useQuery({
+    queryKey: ["portfolio", "positions"],
+    queryFn: () => window.cryptoControl.portfolio.getPositions(),
+  });
+
   useEffect(() => {
     if (!connected) return;
     let cancelled = false;
@@ -238,6 +243,17 @@ export function Portfolio() {
   const chartData = useMemo((): ChartPoint[] => {
     return snapshotChartData(snapshots, period);
   }, [snapshots, period]);
+
+  const localPositionMap = useMemo((): Record<string, number> => {
+    const rawPositions = localPositionsRes?.ok ? (localPositionsRes.data as any)?.positions : null;
+    if (!rawPositions) return {};
+    const map: Record<string, number> = {};
+    for (const [assetId, pos] of Object.entries(rawPositions)) {
+      const invested = (pos as any).totalInvestedEur;
+      if (typeof invested === "number" && invested > 0) map[assetId] = invested;
+    }
+    return map;
+  }, [localPositionsRes]);
 
   if (loadingStatus || (connected && loadingPortfolios) || (selectedPortfolioId && loadingBreakdown)) {
     return (
@@ -307,13 +323,28 @@ export function Portfolio() {
       .filter((position) => position.asset !== "EURC" && !position.isCash)
       .sort((a, b) => (b.totalBalanceFiat ?? -1) - (a.totalBalanceFiat ?? -1))
     : [];
-  const costBasisValues = positions
-    .map((position) => position.costBasis?.value)
-    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+
   const pnlValues = positions
     .map(coinbasePositionPnl)
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-  const totalInvested = costBasisValues.length > 0 ? costBasisValues.reduce((sum, value) => sum + value, 0) : null;
+
+  let totalInvestedSum = 0;
+  let totalInvestedHasAny = false;
+  for (const position of positions) {
+    const coinbaseCost = position.costBasis?.value;
+    if (typeof coinbaseCost === "number" && Number.isFinite(coinbaseCost) && coinbaseCost > 0) {
+      totalInvestedSum += coinbaseCost;
+      totalInvestedHasAny = true;
+    } else {
+      const localCost = localPositionMap[position.asset];
+      if (typeof localCost === "number" && localCost > 0) {
+        totalInvestedSum += localCost;
+        totalInvestedHasAny = true;
+      }
+    }
+  }
+  const totalInvested = totalInvestedHasAny ? totalInvestedSum : null;
+
   const performance = pnlValues.length > 0 ? pnlValues.reduce((sum, value) => sum + value, 0) : null;
   const totalBalance = fallbackTotalBalance(breakdown.balances) ?? positionsTotalBalance(positions);
   const variationFromPositions = portfolio24hVariation(positions);
