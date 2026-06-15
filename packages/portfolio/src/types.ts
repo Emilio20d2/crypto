@@ -9,11 +9,18 @@ export interface TransactionLegInput {
   valuationStatus?: "valued" | "pending" | "estimated";
 }
 
+export interface TransactionFeeInput {
+  assetId: string;
+  amount: number;
+}
+
 export interface TransactionInput {
   id: string;
   type: TransactionType;
   date: number; // timestamp
   legs: TransactionLegInput[];
+  externalId?: string | null;
+  notes?: string | null;
+  fees?: TransactionFeeInput[];
 }
-
 

@@ -175,11 +175,21 @@ export class PortfolioService {
   }
 
   async getRealizedGains() {
+    const stored = await this.repository.getStoredRealizedGains?.();
+    if (stored && stored.length > 0) return stored;
+
     const txs = await this.repository.getTransactions();
-    return this.fifoCalculator.calculate(txs).realizedGains;
+    const txDateById = new Map(txs.map((tx) => [tx.id, tx.date]));
+    return this.fifoCalculator.calculate(txs).realizedGains.map((gain) => ({
+      ...gain,
+      date: txDateById.get(gain.transactionId),
+    }));
   }
 
   async getFifoLots() {
+    const stored = await this.repository.getStoredFifoLots?.();
+    if (stored && stored.length > 0) return stored;
+
     const txs = await this.repository.getTransactions();
     return this.fifoCalculator.calculate(txs).lots;
   }

@@ -139,10 +139,15 @@ export class CoinbaseSyncService {
   }
 
   async sync(): Promise<CoinbaseSyncResult> {
+    const startedAt = Date.now();
     console.log("[Coinbase Sync] Iniciando sincronización de cuentas V2 y V3...");
     let newTransactions = 0;
     let skippedDuplicates = 0;
     let totalItemsProcessed = 0;
+    let accountsConsulted = 0;
+    let pagesDownloaded = 0;
+    let transactionsDownloaded = 0;
+    let fillsDownloaded = 0;
 
     // --- PHASE 1: V2 Accounts & Transactions ---
     try {
@@ -151,11 +156,13 @@ export class CoinbaseSyncService {
       
       do {
         const accountsRes = await this.client.getV2Accounts(accountsUri);
+        pagesDownloaded++;
         allAccounts.push(...accountsRes.data);
         accountsUri = accountsRes.pagination?.next_uri || undefined;
         if (accountsUri) await sleep(INTER_REQUEST_DELAY_MS);
       } while (accountsUri);
       
+      accountsConsulted = allAccounts.length;
       console.log(`[Coinbase Sync] Cuentas V2 encontradas: ${allAccounts.length}`);
       
       const now = Date.now();
@@ -197,6 +204,8 @@ export class CoinbaseSyncService {
         
         do {
           const txRes = await this.client.getV2Transactions(account.id, txUri);
+          pagesDownloaded++;
+          transactionsDownloaded += txRes.data.length;
           
           for (const tx of txRes.data) {
             totalItemsProcessed++;
@@ -255,7 +264,9 @@ export class CoinbaseSyncService {
         }
 
         const response = await this.client.getFills(params);
+        pagesDownloaded++;
         allFills = allFills.concat(response.fills);
+        fillsDownloaded += response.fills.length;
         pageCursor = response.cursor || undefined;
         isFirstPage = false;
 
@@ -315,6 +326,14 @@ export class CoinbaseSyncService {
       itemsProcessed: totalItemsProcessed,
       newTransactions,
       skippedDuplicates,
+      durationMs: Date.now() - startedAt,
+      accountsConsulted,
+      pagesDownloaded,
+      transactionsDownloaded,
+      fillsDownloaded,
+      updatedTransactions: 0,
+      pendingValuations: 0,
+      errors: [],
     };
   }
 

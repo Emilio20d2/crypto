@@ -2,17 +2,19 @@
   "name": "@crypto-control/desktop",
   "version": "0.1.0",
   "dependencies": {
-    "@crypto-control/core": "*",
     "@crypto-control/coinbase-sync": "*",
+    "@crypto-control/core": "*",
     "@crypto-control/database": "*",
-    "@crypto-control/market-data": "*"
+    "@crypto-control/market-data": "*",
+    "7zip-bin": "^5.2.0"
   },
   "main": "dist/main.js",
   "private": true,
   "scripts": {
     "dev": "tsc && electron .",
-    "rebuild-electron": "npm rebuild better-sqlite3 --runtime=electron --target=30.5.1 --dist-url=https://electronjs.org/headers --build-from-source",
-    "typecheck": "tsc --noEmit", "build": "tsc"
+    "rebuild-electron": "npx @electron/rebuild -f -w better-sqlite3",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
   },
   "build": {
     "appId": "com.cryptocontrol.app",
@@ -21,9 +23,26 @@
       "output": "dist-packaged"
     },
     "mac": {
-      "target": ["dmg"],
+      "icon": "../../assets/brand/logo-1024.png",
+      "target": [
+        "dmg"
+      ],
       "category": "public.app-category.finance"
     },
+    "extraResources": [
+      {
+        "from": "../../assets/brand/logo.png",
+        "to": "assets/brand/logo.png"
+      },
+      {
+        "from": "../web/dist",
+        "to": "web/dist"
+      },
+      {
+        "from": "../../packages/database/drizzle",
+        "to": "migrations"
+      }
+    ],
     "dmg": {
       "title": "Crypto Control"
     }

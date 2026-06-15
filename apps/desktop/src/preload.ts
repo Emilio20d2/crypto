@@ -1,14 +1,33 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { FullCryptoControlAPI, CreateTransactionInput, CoinbaseCredentials } from "@crypto-control/core";
+import type {
+  CoinbaseCredentials,
+  CreateInvestmentAssetInput,
+  CreateInvestmentCycleInput,
+  CreateInvestmentPlanInput,
+  CreateStrategyRevisionInput,
+  CreateTreasuryMovementInput,
+  CreateTransactionInput,
+  FullCryptoControlAPI,
+  InvestmentAssetStateChangeInput,
+  SetFiscalReserveInput,
+  AllocateEurcToRebuyInput,
+  UpdateInvestmentAssetInput,
+  UpdateInvestmentCycleInput,
+  UpdateInvestmentPlanInput,
+  UpdateTreasuryMovementInput
+} from "@crypto-control/core";
 
 const cryptoControl: FullCryptoControlAPI = {
   assets: {
     list: () => ipcRenderer.invoke("assets:list")
   },
   portfolio: {
-    getSummary:   () => ipcRenderer.invoke("portfolio:get-summary"),
-    getPositions: () => ipcRenderer.invoke("portfolio:get-positions"),
-    getAllocation: () => ipcRenderer.invoke("portfolio:get-allocation"),
+    getSummary:        () => ipcRenderer.invoke("portfolio:get-summary"),
+    getPositions:      () => ipcRenderer.invoke("portfolio:get-positions"),
+    getAllocation:      () => ipcRenderer.invoke("portfolio:get-allocation"),
+    getRealizedGains:     () => ipcRenderer.invoke("portfolio:get-realized-gains"),
+    getFifoLots:          () => ipcRenderer.invoke("portfolio:get-fifo-lots"),
+    getHistoricalSeries:  () => ipcRenderer.invoke("portfolio:get-historical-series"),
   },
   transactions: {
     list:   ()                                     => ipcRenderer.invoke("transactions:list"),
@@ -19,6 +38,9 @@ const cryptoControl: FullCryptoControlAPI = {
   market: {
     getCurrentPrice:    (input: { assetId: string; quoteCurrency: string })                    => ipcRenderer.invoke("market:get-current-price", input),
     getHistoricalPrices:(input: { assetId: string; quoteCurrency: string; period: string })    => ipcRenderer.invoke("market:get-historical-prices", input),
+    getOverview:        (input: { assetId: string; quoteCurrency: string })                    => ipcRenderer.invoke("market:get-overview", input),
+    getFearGreed:       ()                                                                      => ipcRenderer.invoke("market:get-fear-greed"),
+    getGlobalMetrics:   ()                                                                      => ipcRenderer.invoke("market:get-global-metrics"),
   },
   settings: {
     get:    (key: string)               => ipcRenderer.invoke("settings:get", key),
@@ -31,10 +53,64 @@ const cryptoControl: FullCryptoControlAPI = {
     disconnect:            ()                           => ipcRenderer.invoke("coinbase:disconnect"),
     getStatus:             ()                           => ipcRenderer.invoke("coinbase:get-status"),
     sync:                  ()                           => ipcRenderer.invoke("coinbase:sync"),
+    getSyncHistory:        ()                           => ipcRenderer.invoke("coinbase:get-sync-history"),
     listPortfolios:        ()                           => ipcRenderer.invoke("coinbase:list-portfolios"),
     getPortfolioBreakdown: (portfolioUuid: string, currency: string) => ipcRenderer.invoke("coinbase:get-portfolio-breakdown", portfolioUuid, currency),
     getPortfolioSnapshots: (portfolioUuid: string)      => ipcRenderer.invoke("coinbase:get-portfolio-snapshots", portfolioUuid),
   },
+  sentiment: {
+    getGlobal: (input) => ipcRenderer.invoke("sentiment:get-global", input),
+    getAsset:  (input) => ipcRenderer.invoke("sentiment:get-asset", input),
+    getHistory:(input) => ipcRenderer.invoke("sentiment:get-history", input),
+    refresh:   (input) => ipcRenderer.invoke("sentiment:refresh", input),
+  },
+  targets: {
+    list:   ()                                                                    => ipcRenderer.invoke("targets:list"),
+    upsert: (data: { id?: string; assetId: string; targetPriceEur: number })     => ipcRenderer.invoke("targets:upsert", data),
+    delete: (id: string)                                                          => ipcRenderer.invoke("targets:delete", id),
+  },
+  alerts: {
+    list:   ()                                                                                              => ipcRenderer.invoke("alerts:list"),
+    create: (data: { assetId: string; priceThreshold: number; direction: "above" | "below" })              => ipcRenderer.invoke("alerts:create", data),
+    delete: (id: string)                                                                                   => ipcRenderer.invoke("alerts:delete", id),
+    toggle: (id: string)                                                                                   => ipcRenderer.invoke("alerts:toggle", id),
+  },
+  investmentPlan: {
+    list:      ()                                             => ipcRenderer.invoke("investmentPlan:list"),
+    getActive: ()                                             => ipcRenderer.invoke("investmentPlan:getActive"),
+    create:    (data: CreateInvestmentPlanInput)              => ipcRenderer.invoke("investmentPlan:create", data),
+    update:    (id: string, data: UpdateInvestmentPlanInput)   => ipcRenderer.invoke("investmentPlan:update", id, data),
+    delete:    (id: string)                                   => ipcRenderer.invoke("investmentPlan:delete", id),
+  },
+  investmentCycles: {
+    list:   (input?: { planId?: string })                     => ipcRenderer.invoke("investmentCycles:list", input),
+    getCurrent: (input?: { planId?: string; at?: number })     => ipcRenderer.invoke("investmentCycles:getCurrent", input),
+    create: (data: CreateInvestmentCycleInput)                => ipcRenderer.invoke("investmentCycles:create", data),
+    update: (id: string, data: UpdateInvestmentCycleInput)     => ipcRenderer.invoke("investmentCycles:update", id, data),
+    delete: (id: string)                                      => ipcRenderer.invoke("investmentCycles:delete", id),
+  },
+  investmentAssets: {
+    list:   (input?: { cycleId?: string })                    => ipcRenderer.invoke("investmentAssets:list", input),
+    create: (data: CreateInvestmentAssetInput)                => ipcRenderer.invoke("investmentAssets:create", data),
+    update: (id: string, data: UpdateInvestmentAssetInput)     => ipcRenderer.invoke("investmentAssets:update", id, data),
+    pause:  (id: string, data?: InvestmentAssetStateChangeInput) => ipcRenderer.invoke("investmentAssets:pause", id, data),
+    close:  (id: string, data?: InvestmentAssetStateChangeInput) => ipcRenderer.invoke("investmentAssets:close", id, data),
+    delete: (id: string)                                      => ipcRenderer.invoke("investmentAssets:delete", id),
+  },
+  strategyRevisions: {
+    list:   (input?: { cycleId?: string })                    => ipcRenderer.invoke("strategyRevisions:list", input),
+    create: (data: CreateStrategyRevisionInput)               => ipcRenderer.invoke("strategyRevisions:create", data),
+  },
+  treasury: {
+    getSummary:           ()                                      => ipcRenderer.invoke("treasury:getSummary"),
+    listMovements:        ()                                      => ipcRenderer.invoke("treasury:listMovements"),
+    createMovement:       (data: CreateTreasuryMovementInput)     => ipcRenderer.invoke("treasury:createMovement", data),
+    updateMovement:       (id: string, data: UpdateTreasuryMovementInput) => ipcRenderer.invoke("treasury:updateMovement", id, data),
+    deleteMovement:       (id: string)                            => ipcRenderer.invoke("treasury:deleteMovement", id),
+    setFiscalReserve:     (data: SetFiscalReserveInput)           => ipcRenderer.invoke("treasury:setFiscalReserve", data),
+    allocateEurcToRebuy:  (data: AllocateEurcToRebuyInput)        => ipcRenderer.invoke("treasury:allocateEurcToRebuy", data),
+  },
 };
 
 contextBridge.exposeInMainWorld("cryptoControl", cryptoControl);
+console.log("[preload] cryptoControl API expuesta correctamente");

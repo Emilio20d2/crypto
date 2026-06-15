@@ -1,104 +1,38 @@
-import React from "react";
+import type { ReactNode } from "react";
 
-export function Card({ children, className = "", style }: { children?: React.ReactNode; className?: string; style?: React.CSSProperties }) {
-  return (
-    <div
-      className={`ui-card ${className}`}
-      style={{
-        background: "var(--bg-surface)",
-        borderRadius: "var(--radius-lg)",
-        border: "1px solid var(--border-color)",
-        boxShadow: "var(--shadow-sm)",
-        display: "flex",
-        flexDirection: "column",
-        ...style
-      }}
-    >
-      {children}
-    </div>
-  );
+type SlotProps = {
+  children?: ReactNode;
+  className?: string;
+};
+
+function cx(base: string, className = "") {
+  return className ? `${base} ${className}` : base;
 }
 
-export function CardHeader({ children, className = "", style }: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
-  return (
-    <div
-      className={`ui-card-header ${className}`}
-      style={{
-        padding: "var(--card-padding-desktop)",
-        paddingBottom: "16px",
-        display: "flex",
-        flexDirection: "column",
-        gap: "4px",
-        ...style
-      }}
-    >
-      {children}
-    </div>
-  );
+export function Card({ children, className = "" }: SlotProps) {
+  return <section className={cx("ui-card", className)}>{children}</section>;
 }
 
-export function CardTitle({ children, className = "", style }: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
-  return (
-    <h3
-      className={`ui-card-title ${className}`}
-      style={{
-        fontSize: "16px",
-        fontWeight: 600,
-        color: "var(--text-primary)",
-        margin: 0,
-        lineHeight: 1.2,
-        ...style
-      }}
-    >
-      {children}
-    </h3>
-  );
+export function CardHeader({ children, className = "" }: SlotProps) {
+  return <header className={cx("ui-card-header", className)}>{children}</header>;
 }
 
-export function CardDescription({ children, className = "", style }: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
-  return (
-    <p
-      className={`ui-card-description ${className}`}
-      style={{
-        fontSize: "13px",
-        color: "var(--text-secondary)",
-        margin: 0,
-        ...style
-      }}
-    >
-      {children}
-    </p>
-  );
+export function CardTitle({ children, className = "" }: SlotProps) {
+  return <h3 className={cx("ui-card-title", className)}>{children}</h3>;
 }
 
-export function CardContent({ children, className = "", style }: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
-  return (
-    <div
-      className={`ui-card-content ${className}`}
-      style={{
-        padding: "0 var(--card-padding-desktop) var(--card-padding-desktop)",
-        flex: 1,
-        ...style
-      }}
-    >
-      {children}
-    </div>
-  );
+export function CardDescription({ children, className = "" }: SlotProps) {
+  return <p className={cx("ui-card-description", className)}>{children}</p>;
 }
 
-export function CardFooter({ children, className = "", style }: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
-  return (
-    <div
-      className={`ui-card-footer ${className}`}
-      style={{
-        padding: "16px var(--card-padding-desktop)",
-        borderTop: "1px solid var(--border-color)",
-        display: "flex",
-        alignItems: "center",
-        ...style
-      }}
-    >
-      {children}
-    </div>
-  );
+export function CardActions({ children, className = "" }: SlotProps) {
+  return <div className={cx("ui-card-actions", className)}>{children}</div>;
+}
+
+export function CardContent({ children, className = "" }: SlotProps) {
+  return <div className={cx("ui-card-content", className)}>{children}</div>;
+}
+
+export function CardFooter({ children, className = "" }: SlotProps) {
+  return <footer className={cx("ui-card-footer", className)}>{children}</footer>;
 }

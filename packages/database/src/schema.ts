@@ -36,7 +36,7 @@ export const transactionLegs = sqliteTable("transaction_legs", {
   accountId: text("account_id").references(() => accounts.id),
   amount: real("amount").notNull(), // Positivo = entrada, Negativo = salida
   legType: text("leg_type").notNull(), // "source" | "destination" | "fee"
-  valuationEur: real("valuation_eur"), // Deprecated, use acquisitionValueEur
+  valuationEur: real("valuation_eur"), // @deprecated: use acquisitionValueEur. Migration path (Fase 3/4): write only to acquisitionValueEur in new transactions; add NOT NULL constraint; drop column once all rows have acquisitionValueEur populated.
   acquisitionValueEur: real("acquisition_value_eur"),
   unitAcquisitionPriceEur: real("unit_acquisition_price_eur"),
   valuationSource: text("valuation_source"),
@@ -100,6 +100,9 @@ export const priceHistory = sqliteTable("price_history", {
   };
 });
 
+// @deprecated: Legacy table created in migration 0000. No active reads or writes.
+// Portfolio history is stored in coinbasePortfolioSnapshots (migration 0005).
+// Cannot be dropped without a new migration — leave in place to avoid breaking existing DBs.
 export const portfolioSnapshots = sqliteTable("portfolio_snapshots", {
   id: text("id").primaryKey(),
   timestamp: integer("timestamp").notNull(),
@@ -118,6 +121,157 @@ export const alerts = sqliteTable("alerts", {
   priceThreshold: real("price_threshold").notNull(),
   direction: text("direction").notNull(), // "above" | "below"
   isActive: integer("is_active").notNull().default(1)
+});
+
+export const investmentPlans = sqliteTable("investment_plans", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description"),
+  status: text("status").notNull().default("active"), // "active" | "inactive" | "archived"
+  baseCurrency: text("base_currency").notNull().default("EUR"),
+  notes: text("notes"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull()
+}, (table) => {
+  return {
+    idxInvestmentPlansStatus: index("idx_investment_plans_status").on(table.status)
+  };
+});
+
+export const investmentCycles = sqliteTable("investment_cycles", {
+  id: text("id").primaryKey(),
+  planId: text("plan_id").notNull().references(() => investmentPlans.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  startDate: integer("start_date").notNull(),
+  endDate: integer("end_date"),
+  monthlyAmountEur: real("monthly_amount_eur").notNull(),
+  contributionCurrency: text("contribution_currency").notNull().default("EUR"),
+  status: text("status").notNull().default("planned"), // "planned" | "active" | "closed" | "paused"
+  priority: integer("priority").notNull().default(0),
+  notes: text("notes"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull()
+}, (table) => {
+  return {
+    idxInvestmentCyclesPlan: index("idx_investment_cycles_plan").on(table.planId),
+    idxInvestmentCyclesStatus: index("idx_investment_cycles_status").on(table.status),
+    idxInvestmentCyclesDates: index("idx_investment_cycles_dates").on(table.startDate, table.endDate)
+  };
+});
+
+export const investmentAssets = sqliteTable("investment_assets", {
+  id: text("id").primaryKey(),
+  cycleId: text("cycle_id").notNull().references(() => investmentCycles.id, { onDelete: "cascade" }),
+  assetId: text("asset_id").notNull().references(() => assets.id),
+  allocationType: text("allocation_type").notNull().default("percentage"), // "percentage" | "amount"
+  allocationValue: real("allocation_value").notNull(),
+  allocationPercentage: real("allocation_percentage"),
+  fixedAmountEur: real("fixed_amount_eur"),
+  priority: integer("priority").notNull().default(0),
+  targetAmount: real("target_amount"),
+  targetValueEur: real("target_value_eur"),
+  targetPortfolioPercentage: real("target_portfolio_percentage"),
+  startDate: integer("start_date").notNull(),
+  endDate: integer("end_date"),
+  status: text("status").notNull().default("active"), // "active" | "paused" | "closed"
+  isActive: integer("is_active").notNull().default(1),
+  notes: text("notes"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull()
+}, (table) => {
+  return {
+    idxInvestmentAssetsCycle: index("idx_investment_assets_cycle").on(table.cycleId),
+    idxInvestmentAssetsAsset: index("idx_investment_assets_asset").on(table.assetId),
+    idxInvestmentAssetsStatus: index("idx_investment_assets_status").on(table.status),
+    idxInvestmentAssetsDates: index("idx_investment_assets_dates").on(table.startDate, table.endDate)
+  };
+});
+
+export const strategyRevisions = sqliteTable("strategy_revisions", {
+  id: text("id").primaryKey(),
+  cycleId: text("cycle_id").notNull().references(() => investmentCycles.id, { onDelete: "cascade" }),
+  effectiveDate: integer("effective_date").notNull(),
+  title: text("title").notNull(),
+  notes: text("notes"),
+  changesJson: text("changes_json").notNull().default("{}"),
+  createdAt: integer("created_at").notNull()
+}, (table) => {
+  return {
+    idxStrategyRevisionsCycle: index("idx_strategy_revisions_cycle").on(table.cycleId),
+    idxStrategyRevisionsDate: index("idx_strategy_revisions_date").on(table.effectiveDate)
+  };
+});
+
+export const treasuryAccounts = sqliteTable("treasury_accounts", {
+  id: text("id").primaryKey(),
+  type: text("type").notNull(), // "cash" | "eurc" | "fiscal_reserve"
+  name: text("name").notNull(),
+  currency: text("currency").notNull().default("EUR"),
+  isActive: integer("is_active").notNull().default(1),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull()
+}, (table) => {
+  return {
+    idxTreasuryAccountsType: uniqueIndex("idx_treasury_accounts_type").on(table.type)
+  };
+});
+
+export const treasuryMovements = sqliteTable("treasury_movements", {
+  id: text("id").primaryKey(),
+  date: integer("date").notNull(),
+  type: text("type").notNull(),
+  sourceAccountType: text("source_account_type"),
+  destinationAccountType: text("destination_account_type"),
+  amount: real("amount").notNull(),
+  currency: text("currency").notNull().default("EUR"),
+  reason: text("reason").notNull(),
+  referenceType: text("reference_type"),
+  referenceId: text("reference_id"),
+  notes: text("notes"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull()
+}, (table) => {
+  return {
+    idxTreasuryMovementsDate: index("idx_treasury_movements_date").on(table.date),
+    idxTreasuryMovementsType: index("idx_treasury_movements_type").on(table.type),
+    idxTreasuryMovementsReference: index("idx_treasury_movements_reference").on(table.referenceType, table.referenceId)
+  };
+});
+
+export const fiscalReserveMovements = sqliteTable("fiscal_reserve_movements", {
+  id: text("id").primaryKey(),
+  treasuryMovementId: text("treasury_movement_id").references(() => treasuryMovements.id, { onDelete: "set null" }),
+  realizedGainId: text("realized_gain_id").references(() => realizedGains.id, { onDelete: "set null" }),
+  date: integer("date").notNull(),
+  amountEur: real("amount_eur").notNull(),
+  reason: text("reason").notNull(),
+  notes: text("notes"),
+  createdAt: integer("created_at").notNull()
+}, (table) => {
+  return {
+    idxFiscalReserveDate: index("idx_fiscal_reserve_date").on(table.date),
+    idxFiscalReserveGain: index("idx_fiscal_reserve_gain").on(table.realizedGainId)
+  };
+});
+
+export const cycleLiquidityAllocations = sqliteTable("cycle_liquidity_allocations", {
+  id: text("id").primaryKey(),
+  cycleId: text("cycle_id").references(() => investmentCycles.id, { onDelete: "set null" }),
+  amountEur: real("amount_eur").notNull(),
+  status: text("status").notNull().default("reserved"), // "reserved" | "used" | "released"
+  reason: text("reason").notNull(),
+  referenceType: text("reference_type"),
+  referenceId: text("reference_id"),
+  notes: text("notes"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+  usedAt: integer("used_at")
+}, (table) => {
+  return {
+    idxCycleLiquidityCycle: index("idx_cycle_liquidity_cycle").on(table.cycleId),
+    idxCycleLiquidityStatus: index("idx_cycle_liquidity_status").on(table.status),
+    idxCycleLiquidityReference: index("idx_cycle_liquidity_reference").on(table.referenceType, table.referenceId)
+  };
 });
 
 export const settings = sqliteTable("settings", {
@@ -214,5 +368,27 @@ export const coinbaseCandleCache = sqliteTable("coinbase_candle_cache", {
 }, (table) => {
   return {
     idxProductTime: index("idx_coinbase_candle_prod_time").on(table.productId, table.granularity, table.start)
+  };
+});
+
+export const marketSentimentSnapshots = sqliteTable("market_sentiment_snapshots", {
+  id: text("id").primaryKey(),
+  scope: text("scope").notNull(), // "global" | "asset"
+  assetId: text("asset_id"),
+  timeframe: text("timeframe").notNull(), // "24h" | "7d" | "30d"
+  score: real("score").notNull(),
+  confidence: real("confidence").notNull(),
+  direction: text("direction").notNull(),
+  factorsJson: text("factors_json").notNull(),
+  sourceSummaryJson: text("source_summary_json").notNull().default("[]"),
+  state: text("state").notNull(),
+  methodology: text("methodology"),
+  calculatedAt: integer("calculated_at").notNull(),
+  validUntil: integer("valid_until"),
+  sourceVersion: text("source_version").notNull()
+}, (table) => {
+  return {
+    idxSentimentQuery: index("idx_market_sentiment_query").on(table.scope, table.assetId, table.timeframe, table.calculatedAt),
+    uniqSentimentSnapshot: uniqueIndex("uniq_market_sentiment_snapshot").on(table.id)
   };
 });

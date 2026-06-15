@@ -1,33 +1,76 @@
 import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import * as path from "path";
 import { initializeDatabase, runMigrations, getDb, schema } from "@crypto-control/database";
-import { CreateTransactionSchema, CurrentPriceResultSchema, HistoricalPriceResultSchema, TransactionInputListSchema } from "@crypto-control/core";
+import {
+  CreateInvestmentAssetSchema,
+  CreateInvestmentCycleSchema,
+  CreateInvestmentPlanSchema,
+  CreateStrategyRevisionSchema,
+  CreateTreasuryMovementSchema,
+  CreateTransactionSchema,
+  AllocateEurcToRebuySchema,
+  CurrentPriceResultSchema,
+  FearGreedResultSchema,
+  GlobalMetricsResultSchema,
+  HistoricalPriceResultSchema,
+  InvestmentAssetStateChangeSchema,
+  MarketOverviewResultSchema,
+  MarketSentimentHistoryRequestSchema,
+  MarketSentimentSchema,
+  MarketSentimentTimeframeSchema,
+  SetFiscalReserveSchema,
+  TransactionInputListSchema,
+  TreasuryMovementSchema,
+  TreasurySummarySchema,
+  UpdateInvestmentAssetSchema,
+  UpdateInvestmentCycleSchema,
+  UpdateInvestmentPlanSchema,
+  UpdateTreasuryMovementSchema,
+} from "@crypto-control/core";
 import crypto from "crypto";
-import { eq } from "drizzle-orm";
+import { eq, and, or, asc, desc } from "drizzle-orm";
 import * as fs from "fs";
 
 let mainWindow: BrowserWindow | null = null;
 
-function sanitizePoints(points: { timestamp: number; price: number }[]): { time: number; value: number }[] {
+function sanitizePoints(points: { timestamp: number; price: number; source?: string; confidence?: number }[]): { time: number; timestamp: number; value: number; source?: string; confidence?: number }[] {
   const mapped = points
     .map(p => ({
       time: Math.floor(p.timestamp / 1000),
-      value: p.price
+      timestamp: p.timestamp,
+      value: p.price,
+      source: p.source,
+      confidence: p.confidence
     }))
     .filter(p => p.time > 0 && typeof p.value === "number" && Number.isFinite(p.value) && p.value > 0);
 
   mapped.sort((a, b) => a.time - b.time);
 
-  const unique: { time: number; value: number }[] = [];
+  const unique: { time: number; timestamp: number; value: number; source?: string; confidence?: number }[] = [];
   for (const p of mapped) {
     if (unique.length === 0 || unique[unique.length - 1].time !== p.time) {
       unique.push(p);
     } else {
       unique[unique.length - 1].value = p.value;
+      unique[unique.length - 1].timestamp = p.timestamp;
+      unique[unique.length - 1].source = p.source;
+      unique[unique.length - 1].confidence = p.confidence;
     }
   }
 
   return unique;
+}
+
+function finiteOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function pointChange(points: { time: number; value: number }[]): number | null {
+  if (points.length < 2) return null;
+  const first = points[0].value;
+  const last = points[points.length - 1].value;
+  if (!Number.isFinite(first) || !Number.isFinite(last) || first <= 0) return null;
+  return ((last - first) / first) * 100;
 }
 
 function seedDatabase() {
@@ -112,12 +155,78 @@ function setupDatabase() {
 }
 
 function setupIpcHandlers() {
-  const { MarketService } = require("@crypto-control/market-data") as typeof import("@crypto-control/market-data");
-  const { DatabasePortfolioRepository, DatabaseMarketCacheRepository } = require("@crypto-control/database") as typeof import("@crypto-control/database");
+  const { MarketService, MarketSentimentService, FearGreedService } = require("@crypto-control/market-data") as typeof import("@crypto-control/market-data");
+  const { DatabasePortfolioRepository, DatabaseMarketCacheRepository, DatabaseMarketSentimentRepository, DatabaseTreasuryRepository } = require("@crypto-control/database") as typeof import("@crypto-control/database");
 
   const db = getDb();
   const marketCache = new DatabaseMarketCacheRepository(db);
   const marketService = new MarketService(marketCache);
+  const sentimentRepository = new DatabaseMarketSentimentRepository(db);
+  const sentimentService = new MarketSentimentService(marketService, sentimentRepository);
+  const fearGreedLogger = app.isPackaged
+    ? undefined
+    : {
+        debug: (...args: unknown[]) => console.log("[Fear & Greed]", ...args),
+        warn: (...args: unknown[]) => console.warn("[Fear & Greed]", ...args),
+      };
+  const fearGreedService = new FearGreedService({
+    ttlMs: 30 * 60 * 1000,
+    timeoutMs: 6000,
+    fetchImpl: fetch,
+    logger: fearGreedLogger,
+  });
+
+  // --- Permission settings helpers (no live API calls) ---
+  function savePermissions(perms: { canView: boolean; canTrade: boolean; canTransfer: boolean }): void {
+    const upsert = (key: string, val: string) =>
+      db.insert(schema.settings).values({ key, value: val })
+        .onConflictDoUpdate({ target: schema.settings.key, set: { value: val } })
+        .run();
+    upsert("coinbase:perm-can-view", String(perms.canView));
+    upsert("coinbase:perm-can-trade", String(perms.canTrade));
+    upsert("coinbase:perm-can-transfer", String(perms.canTransfer));
+    upsert("coinbase:perm-validated-at", String(Date.now()));
+  }
+
+  function readPermissions(): { permissions: { canView: boolean; canTrade: boolean; canTransfer: boolean } | null; lastValidationAt: number | null } {
+    const get = (key: string) => db.select().from(schema.settings).where(eq(schema.settings.key, key)).get()?.value ?? null;
+    const canView = get("coinbase:perm-can-view");
+    if (canView === null) return { permissions: null, lastValidationAt: null };
+    const validatedAt = get("coinbase:perm-validated-at");
+    return {
+      permissions: {
+        canView: canView === "true",
+        canTrade: get("coinbase:perm-can-trade") === "true",
+        canTransfer: get("coinbase:perm-can-transfer") === "true",
+      },
+      lastValidationAt: validatedAt ? parseInt(validatedAt, 10) : null,
+    };
+  }
+
+  function clearPermissions(): void {
+    for (const key of ["coinbase:perm-can-view", "coinbase:perm-can-trade", "coinbase:perm-can-transfer", "coinbase:perm-validated-at"]) {
+      db.delete(schema.settings).where(eq(schema.settings.key, key)).run();
+    }
+  }
+
+  function readSyncStatus(): {
+    lastSyncAt: number | null;
+    lastSyncItemsProcessed: number | null;
+    lastSyncStatus: "success" | "error" | null;
+    lastSyncError: string | null;
+  } {
+    const get = (key: string) => db.select().from(schema.settings).where(eq(schema.settings.key, key)).get()?.value ?? null;
+    const at = get("coinbase:last-sync-at");
+    const count = get("coinbase:last-sync-count");
+    const statusRaw = get("coinbase:last-sync-status");
+    const error = get("coinbase:last-sync-error");
+    return {
+      lastSyncAt: at ? parseInt(at, 10) : null,
+      lastSyncItemsProcessed: count ? parseInt(count, 10) : null,
+      lastSyncStatus: (statusRaw === "success" || statusRaw === "error") ? statusRaw : null,
+      lastSyncError: error || null,
+    };
+  }
 
   const getPortfolioService = () => {
     const { PortfolioService, PortfolioCalculator, FifoCalculator } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
@@ -149,6 +258,253 @@ function setupIpcHandlers() {
     }
   };
 
+  const mapInvestmentPlan = (row: typeof schema.investmentPlans.$inferSelect) => ({
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    status: row.status as "active" | "inactive" | "archived",
+    baseCurrency: row.baseCurrency,
+    notes: row.notes,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  });
+
+  const mapInvestmentCycle = (row: typeof schema.investmentCycles.$inferSelect) => ({
+    id: row.id,
+    planId: row.planId,
+    name: row.name,
+    startDate: row.startDate,
+    endDate: row.endDate,
+    monthlyAmountEur: row.monthlyAmountEur,
+    contributionCurrency: row.contributionCurrency,
+    status: row.status as "planned" | "active" | "closed" | "paused",
+    priority: row.priority,
+    notes: row.notes,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  });
+
+  const mapInvestmentAsset = (row: typeof schema.investmentAssets.$inferSelect) => ({
+    id: row.id,
+    cycleId: row.cycleId,
+    assetId: row.assetId,
+    allocationType: row.allocationType as "percentage" | "amount",
+    allocationValue: row.allocationValue,
+    allocationPercentage: row.allocationPercentage ?? (row.allocationType === "percentage" ? row.allocationValue : null),
+    fixedAmountEur: row.fixedAmountEur ?? (row.allocationType === "amount" ? row.allocationValue : null),
+    priority: row.priority,
+    targetAmount: row.targetAmount,
+    targetValueEur: row.targetValueEur,
+    targetPortfolioPercentage: row.targetPortfolioPercentage,
+    startDate: row.startDate,
+    endDate: row.endDate,
+    status: row.status as "active" | "paused" | "closed",
+    isActive: row.isActive === 1,
+    notes: row.notes,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  });
+
+  const mapStrategyRevision = (row: typeof schema.strategyRevisions.$inferSelect) => ({
+    id: row.id,
+    cycleId: row.cycleId,
+    effectiveDate: row.effectiveDate,
+    title: row.title,
+    notes: row.notes,
+    changesJson: row.changesJson,
+    createdAt: row.createdAt,
+  });
+
+  type InvestmentAssetRuleRow = {
+    id?: string;
+    cycleId: string;
+    assetId: string;
+    allocationType: string;
+    allocationValue: number;
+    allocationPercentage: number | null;
+    fixedAmountEur: number | null;
+    startDate: number;
+    endDate: number | null;
+    status: string;
+    isActive: number;
+  };
+
+  function assertDateRange(startDate: number, endDate: number | null | undefined, label: string) {
+    if (endDate !== null && endDate !== undefined && endDate < startDate) {
+      throw new Error(`${label}: la fecha fin no puede ser anterior a la fecha inicio.`);
+    }
+  }
+
+  function rangeOverlaps(aStart: number, aEnd: number | null | undefined, bStart: number, bEnd: number | null | undefined) {
+    const leftEnd = aEnd ?? Number.MAX_SAFE_INTEGER;
+    const rightEnd = bEnd ?? Number.MAX_SAFE_INTEGER;
+    return aStart <= rightEnd && bStart <= leftEnd;
+  }
+
+  function getInvestmentCycleOrThrow(id: string) {
+    const row = db.select().from(schema.investmentCycles).where(eq(schema.investmentCycles.id, id)).get();
+    if (!row) throw new Error(`Ciclo de inversión ${id} no encontrado.`);
+    return row;
+  }
+
+  function getInvestmentAssetOrThrow(id: string) {
+    const row = db.select().from(schema.investmentAssets).where(eq(schema.investmentAssets.id, id)).get();
+    if (!row) throw new Error(`Activo de plan ${id} no encontrado.`);
+    return row;
+  }
+
+  function getInvestmentAssetRuleRows(cycleId: string): InvestmentAssetRuleRow[] {
+    return db.select()
+      .from(schema.investmentAssets)
+      .where(eq(schema.investmentAssets.cycleId, cycleId))
+      .all()
+      .map((row) => ({
+        id: row.id,
+        cycleId: row.cycleId,
+        assetId: row.assetId,
+        allocationType: row.allocationType,
+        allocationValue: row.allocationValue,
+        allocationPercentage: row.allocationPercentage,
+        fixedAmountEur: row.fixedAmountEur,
+        startDate: row.startDate,
+        endDate: row.endDate,
+        status: row.status,
+        isActive: row.isActive,
+      }));
+  }
+
+  function assetPercentage(row: InvestmentAssetRuleRow) {
+    return row.allocationPercentage ?? (row.allocationType === "percentage" ? row.allocationValue : null);
+  }
+
+  function assetFixedAmount(row: InvestmentAssetRuleRow) {
+    return row.fixedAmountEur ?? (row.allocationType === "amount" ? row.allocationValue : null);
+  }
+
+  function assertAssetInsideCycle(cycle: typeof schema.investmentCycles.$inferSelect, row: InvestmentAssetRuleRow) {
+    assertDateRange(row.startDate, row.endDate, "Moneda del plan");
+    if (row.startDate < cycle.startDate) {
+      throw new Error("La moneda no puede empezar antes que el ciclo.");
+    }
+    if (cycle.endDate !== null && row.startDate > cycle.endDate) {
+      throw new Error("La moneda no puede empezar después de que termine el ciclo.");
+    }
+    if (cycle.endDate !== null && row.endDate !== null && row.endDate > cycle.endDate) {
+      throw new Error("La moneda no puede cerrar después de que termine el ciclo.");
+    }
+  }
+
+  function assertNoDuplicateActiveAssets(rows: InvestmentAssetRuleRow[]) {
+    const activeRows = rows.filter((row) => row.status === "active" && row.isActive === 1);
+    for (let index = 0; index < activeRows.length; index += 1) {
+      const current = activeRows[index];
+      for (const other of activeRows.slice(index + 1)) {
+        if (current.assetId === other.assetId && rangeOverlaps(current.startDate, current.endDate, other.startDate, other.endDate)) {
+          throw new Error(`La moneda ${current.assetId} ya está activa en ese ciclo para un rango de fechas solapado.`);
+        }
+      }
+    }
+  }
+
+  function assertCycleDistribution(cycle: typeof schema.investmentCycles.$inferSelect, rows: InvestmentAssetRuleRow[]) {
+    const activeRows = rows.filter((row) => row.status === "active" && row.isActive === 1);
+    const percentageRows = activeRows.filter((row) => assetPercentage(row) !== null);
+    const percentageTotal = percentageRows.reduce((sum, row) => sum + (assetPercentage(row) ?? 0), 0);
+    const fixedTotal = activeRows.reduce((sum, row) => sum + (assetFixedAmount(row) ?? 0), 0);
+
+    if (fixedTotal - cycle.monthlyAmountEur > 0.01) {
+      throw new Error("Los importes fijos activos superan el importe mensual del ciclo.");
+    }
+    if (cycle.status === "active") {
+      if (activeRows.length === 0) {
+        throw new Error("Un ciclo activo necesita al menos una moneda activa.");
+      }
+      if (percentageRows.length > 0 && Math.abs(percentageTotal - 100) > 0.01) {
+        throw new Error("En un ciclo activo la suma de porcentajes activos debe ser 100%.");
+      }
+    }
+  }
+
+  function assertInvestmentAssetRules(cycleId: string, nextRow: InvestmentAssetRuleRow, excludingId?: string) {
+    const cycle = getInvestmentCycleOrThrow(cycleId);
+    assertAssetInsideCycle(cycle, nextRow);
+    const rows = getInvestmentAssetRuleRows(cycleId).filter((row) => row.id !== excludingId);
+    const projectedRows = [...rows, nextRow];
+    assertNoDuplicateActiveAssets(projectedRows);
+    assertCycleDistribution(cycle, projectedRows);
+  }
+
+  function assertInvestmentCycleRules(cycle: typeof schema.investmentCycles.$inferSelect, rows = getInvestmentAssetRuleRows(cycle.id)) {
+    assertDateRange(cycle.startDate, cycle.endDate, "Ciclo");
+    rows.forEach((row) => assertAssetInsideCycle(cycle, row));
+    assertNoDuplicateActiveAssets(rows);
+    assertCycleDistribution(cycle, rows);
+  }
+
+  const mapTreasuryMovement = (row: typeof schema.treasuryMovements.$inferSelect) => ({
+    id: row.id,
+    date: row.date,
+    type: row.type,
+    sourceAccountType: row.sourceAccountType,
+    destinationAccountType: row.destinationAccountType,
+    amount: row.amount,
+    currency: row.currency,
+    reason: row.reason,
+    referenceType: row.referenceType,
+    referenceId: row.referenceId,
+    notes: row.notes,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  });
+
+  function calculateSpanishSavingsTax(netGain: number): number {
+    if (netGain <= 0) return 0;
+    const brackets = [
+      { upTo: 6_000, rate: 0.19 },
+      { upTo: 50_000, rate: 0.21 },
+      { upTo: 200_000, rate: 0.23 },
+      { upTo: 300_000, rate: 0.27 },
+      { upTo: null, rate: 0.28 },
+    ] as const;
+    let remaining = netGain;
+    let tax = 0;
+    let previousUpTo = 0;
+    for (const bracket of brackets) {
+      const bracketSize = bracket.upTo !== null ? bracket.upTo - previousUpTo : Infinity;
+      const taxable = Math.min(remaining, bracketSize);
+      tax += taxable * bracket.rate;
+      remaining -= taxable;
+      if (remaining <= 0) break;
+      if (bracket.upTo !== null) previousUpTo = bracket.upTo;
+    }
+    return tax;
+  }
+
+  function getRecommendedFiscalReserve(): number {
+    const gains = db.select().from(schema.realizedGains).all();
+    const byYear = new Map<number, number>();
+    for (const gain of gains) {
+      if (!Number.isFinite(gain.date) || gain.date <= 0) continue;
+      const year = new Date(gain.date).getFullYear();
+      byYear.set(year, (byYear.get(year) ?? 0) + gain.realizedGainEur);
+    }
+    return [...byYear.values()].reduce((sum, netGain) => sum + calculateSpanishSavingsTax(netGain), 0);
+  }
+
+  function getCoinbaseEurcBalance(): number {
+    const latest = db.select({
+      totalBalanceFiat: schema.coinbaseSpotPositionSnapshots.totalBalanceFiat,
+      totalBalanceCrypto: schema.coinbaseSpotPositionSnapshots.totalBalanceCrypto,
+    })
+      .from(schema.coinbaseSpotPositionSnapshots)
+      .where(eq(schema.coinbaseSpotPositionSnapshots.asset, "EURC"))
+      .orderBy(desc(schema.coinbaseSpotPositionSnapshots.capturedAt))
+      .get();
+    return finiteOrNull(latest?.totalBalanceFiat) ?? finiteOrNull(latest?.totalBalanceCrypto) ?? 0;
+  }
+
+  const getTreasuryRepository = () => new DatabaseTreasuryRepository(db);
+
   ipcMain.handle("portfolio:get-summary", withResult(async () => {
     return await getPortfolioService().getSummary();
   }));
@@ -167,6 +523,147 @@ function setupIpcHandlers() {
 
   ipcMain.handle("portfolio:get-fifo-lots", withResult(async () => {
     return await getPortfolioService().getFifoLots();
+  }));
+
+  ipcMain.handle("portfolio:get-historical-series", withResult(async () => {
+    const { getAssetMetadata } = require("@crypto-control/market-data") as typeof import("@crypto-control/market-data");
+    const repo = new DatabasePortfolioRepository(db);
+    const txs = await repo.getTransactions();
+
+    // Collect all unique assets from legs
+    const heldAssets = new Set<string>();
+    for (const tx of txs) {
+      for (const leg of tx.legs) {
+        if (leg.amount !== 0) heldAssets.add(leg.assetId);
+      }
+    }
+
+    // Reconstruct running balance per asset at each transaction date
+    const sorted = [...txs].sort((a, b) => a.date - b.date);
+    const running: Record<string, number> = {};
+    type QtyEvent = { time: number; qty: number };
+    const assetEvents: Record<string, QtyEvent[]> = {};
+    for (const tx of sorted) {
+      for (const leg of tx.legs) {
+        running[leg.assetId] = (running[leg.assetId] ?? 0) + leg.amount;
+        if (!assetEvents[leg.assetId]) assetEvents[leg.assetId] = [];
+        assetEvents[leg.assetId].push({ time: tx.date, qty: running[leg.assetId] });
+      }
+    }
+
+    function getQtyAt(events: QtyEvent[], ts: number): number {
+      if (!events.length) return 0;
+      let lo = 0, hi = events.length - 1, result = 0;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (events[mid].time <= ts) { result = events[mid].qty; lo = mid + 1; }
+        else hi = mid - 1;
+      }
+      return result;
+    }
+
+    function priceAtOrBefore(prices: { time: number; price: number }[], ts: number): number | null {
+      if (!prices.length) return null;
+      let lo = 0, hi = prices.length - 1;
+      let result: number | null = null;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (prices[mid].time <= ts) { result = prices[mid].price; lo = mid + 1; }
+        else hi = mid - 1;
+      }
+      return result;
+    }
+
+    // Fetch price history for each asset: priceHistory table first, then candle cache, then API
+    const pricesByAsset: Record<string, { time: number; price: number }[]> = {};
+    let totalPricePoints = 0;
+
+    for (const assetId of heldAssets) {
+      // 1. priceHistory table (broad intervals only)
+      const phRows = db.select({ timestamp: schema.priceHistory.timestamp, price: schema.priceHistory.price })
+        .from(schema.priceHistory)
+        .where(and(
+          eq(schema.priceHistory.assetId, assetId),
+          eq(schema.priceHistory.quoteCurrency, "EUR"),
+          or(
+            eq(schema.priceHistory.interval, "1y"),
+            eq(schema.priceHistory.interval, "all"),
+            eq(schema.priceHistory.interval, "30d"),
+          )
+        ))
+        .orderBy(asc(schema.priceHistory.timestamp))
+        .all();
+
+      if (phRows.length > 10) {
+        pricesByAsset[assetId] = phRows.map(r => ({ time: r.timestamp, price: r.price }));
+        totalPricePoints += phRows.length;
+        continue;
+      }
+
+      // 2. coinbaseCandleCache (start is Unix seconds → convert to ms)
+      const meta = getAssetMetadata(assetId);
+      if (meta) {
+        const candleRows = db.select({ start: schema.coinbaseCandleCache.start, close: schema.coinbaseCandleCache.close })
+          .from(schema.coinbaseCandleCache)
+          .where(eq(schema.coinbaseCandleCache.productId, meta.coinbaseProductId))
+          .orderBy(asc(schema.coinbaseCandleCache.start))
+          .all();
+
+        if (candleRows.length > 5) {
+          pricesByAsset[assetId] = candleRows.map(r => ({ time: r.start * 1000, price: r.close }));
+          totalPricePoints += candleRows.length;
+          continue;
+        }
+      }
+
+      // 3. Live API fallback (fetches + caches to priceHistory)
+      try {
+        const result = await marketService.getHistoricalPrices(assetId, "1y");
+        if (result.points.length > 0) {
+          pricesByAsset[assetId] = result.points
+            .map(p => ({ time: p.timestamp, price: p.price }))
+            .sort((a, b) => a.time - b.time);
+          totalPricePoints += result.points.length;
+        }
+      } catch {
+        // Asset not mapped or API unavailable — omit from series
+      }
+    }
+
+    // Build portfolio value series
+    const allTs = new Set<number>();
+    for (const prices of Object.values(pricesByAsset)) {
+      for (const p of prices) allTs.add(p.time);
+    }
+
+    const sortedTs = [...allTs].sort((a, b) => a - b);
+    const points: { time: number; value: number }[] = [];
+    const seenSeconds = new Set<number>();
+
+    for (const ts of sortedTs) {
+      let totalValue = 0;
+      let hasHolding = false;
+
+      for (const [assetId, prices] of Object.entries(pricesByAsset)) {
+        const qty = getQtyAt(assetEvents[assetId] ?? [], ts);
+        if (qty <= 0) continue;
+        const price = priceAtOrBefore(prices, ts);
+        if (price === null || price <= 0) continue;
+        totalValue += qty * price;
+        hasHolding = true;
+      }
+
+      if (!hasHolding || totalValue <= 0) continue;
+      const seconds = Math.floor(ts / 1000);
+      if (seenSeconds.has(seconds)) continue;
+      seenSeconds.add(seconds);
+      points.push({ time: seconds, value: totalValue });
+    }
+
+    return {
+      points,
+      meta: { txCount: txs.length, pricePoints: totalPricePoints, assetsTracked: [...heldAssets] },
+    };
   }));
 
   ipcMain.handle("transactions:list", withResult(async () => {
@@ -220,7 +717,47 @@ function setupIpcHandlers() {
   }));
 
   ipcMain.handle("transactions:update", withResult(async (_, id: string, payload) => {
-    return null; // TODO implement
+    const db = getDb();
+    const parsed = CreateTransactionSchema.parse(payload);
+    const existing = db.select({ id: schema.transactions.id })
+      .from(schema.transactions)
+      .where(eq(schema.transactions.id, id))
+      .get();
+    if (!existing) throw new Error(`Operación ${id} no encontrada.`);
+
+    db.transaction((tx) => {
+      tx.delete(schema.transactionLegs).where(eq(schema.transactionLegs.transactionId, id)).run();
+      tx.delete(schema.fees).where(eq(schema.fees.transactionId, id)).run();
+      tx.update(schema.transactions).set({
+        type: parsed.type,
+        date: parsed.date,
+        externalId: parsed.externalId ?? null,
+        notes: parsed.notes ?? null,
+        updatedAt: Date.now(),
+      }).where(eq(schema.transactions.id, id)).run();
+      for (const leg of parsed.legs) {
+        tx.insert(schema.transactionLegs).values({
+          id: crypto.randomUUID(),
+          transactionId: id,
+          assetId: leg.assetId,
+          accountId: leg.accountId,
+          amount: leg.amount,
+          legType: leg.legType,
+          valuationEur: leg.valuationEur,
+        }).run();
+      }
+      if (parsed.fees) {
+        for (const fee of parsed.fees) {
+          tx.insert(schema.fees).values({
+            id: crypto.randomUUID(),
+            transactionId: id,
+            assetId: fee.assetId,
+            amount: fee.amount,
+          }).run();
+        }
+      }
+    });
+    return null;
   }));
 
   ipcMain.handle("transactions:delete", withResult(async (_, id: string) => {
@@ -242,13 +779,142 @@ function setupIpcHandlers() {
   ipcMain.handle("market:get-historical-prices", withResult(async (_, input: {assetId: string, period: string, quoteCurrency?: string}) => {
     const result = await marketService.getHistoricalPrices(input.assetId, input.period);
     const sanitizedPoints = sanitizePoints(result.points);
-    if (sanitizedPoints.length < 2) {
-      throw new Error("No hay suficientes puntos de precio para generar la gráfica (mínimo 2)");
-    }
     return HistoricalPriceResultSchema.parse({
       ...result,
       points: sanitizedPoints
     });
+  }));
+
+  ipcMain.handle("market:get-overview", withResult(async (_, input: {assetId: string, quoteCurrency?: string}) => {
+    const quoteCurrency = (input.quoteCurrency || "EUR").toUpperCase();
+    const assetId = input.assetId.toUpperCase();
+    const candidateProductIds = [`${assetId}-${quoteCurrency}`, input.assetId].filter(Boolean);
+    let snapshot: typeof schema.coinbaseMarketSnapshots.$inferSelect | undefined;
+
+    for (const productId of candidateProductIds) {
+      snapshot = db.select()
+        .from(schema.coinbaseMarketSnapshots)
+        .where(eq(schema.coinbaseMarketSnapshots.productId, productId))
+        .get();
+      if (snapshot) break;
+    }
+
+    const priceSettled = await Promise.resolve(marketService.getCurrentPrice(input.assetId)).then(
+      (data) => ({ status: "fulfilled" as const, data }),
+      () => ({ status: "rejected" as const })
+    );
+    const historySettled = await Promise.resolve(marketService.getHistoricalPrices(input.assetId, "24h")).then(
+      (data) => ({ status: "fulfilled" as const, data }),
+      () => ({ status: "rejected" as const })
+    );
+
+    const historyPoints = historySettled.status === "fulfilled" ? sanitizePoints(historySettled.data.points) : [];
+    const values = historyPoints.map((point) => point.value).filter((value) => Number.isFinite(value));
+    const high24h = values.length > 0 ? Math.max(...values) : null;
+    const low24h = values.length > 0 ? Math.min(...values) : null;
+    const currentPrice = finiteOrNull(snapshot?.price)
+      ?? (priceSettled.status === "fulfilled" ? finiteOrNull(priceSettled.data.price) : null)
+      ?? (historyPoints.length > 0 ? historyPoints[historyPoints.length - 1].value : null);
+    const fetchedCandidates = [
+      finiteOrNull(snapshot?.capturedAt),
+      priceSettled.status === "fulfilled" ? finiteOrNull(priceSettled.data.fetchedAt) : null,
+      historySettled.status === "fulfilled" ? finiteOrNull(historySettled.data.fetchedAt) : null,
+    ].filter((value): value is number => value !== null);
+
+    return MarketOverviewResultSchema.parse({
+      price: currentPrice,
+      change24h: finiteOrNull(snapshot?.pricePercentageChange24h) ?? pointChange(historyPoints),
+      high24h,
+      low24h,
+      volume24h: finiteOrNull(snapshot?.volume24h),
+      volumeChange24h: finiteOrNull(snapshot?.volumePercentageChange24h),
+      marketCap: finiteOrNull(snapshot?.marketCap),
+      dominance: null,
+      fetchedAt: fetchedCandidates.length > 0 ? Math.max(...fetchedCandidates) : null,
+      provider: snapshot ? "coinbase" : priceSettled.status === "fulfilled" ? priceSettled.data.provider : historySettled.status === "fulfilled" ? historySettled.data.provider : "local",
+    });
+  }));
+
+  // In-memory caches for external market signals (reset on app restart, acceptable)
+  let globalMetricsCache: { btcDominance: number | null; totalMarketCapUsd: number | null; fetchedAt: number } | null = null;
+  const GLOBAL_METRICS_TTL_MS = 60 * 60 * 1000;
+
+  ipcMain.handle("market:get-fear-greed", withResult(async () => {
+    return FearGreedResultSchema.parse(await fearGreedService.get());
+  }));
+
+  ipcMain.handle("market:get-global-metrics", withResult(async () => {
+    if (globalMetricsCache && Date.now() - globalMetricsCache.fetchedAt < GLOBAL_METRICS_TTL_MS) {
+      return GlobalMetricsResultSchema.parse({ ...globalMetricsCache, isCached: true });
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const resp = await fetch("https://api.coingecko.com/api/v3/global", {
+        signal: controller.signal,
+        headers: { Accept: "application/json" },
+      });
+      const json = await resp.json() as { data?: { market_cap_percentage?: Record<string, number>; total_market_cap?: Record<string, number> } };
+      const data = json?.data;
+      globalMetricsCache = {
+        btcDominance: data?.market_cap_percentage?.btc ?? null,
+        totalMarketCapUsd: data?.total_market_cap?.usd ?? null,
+        fetchedAt: Date.now(),
+      };
+      return GlobalMetricsResultSchema.parse({ ...globalMetricsCache, isCached: false });
+    } catch {
+      if (globalMetricsCache) return GlobalMetricsResultSchema.parse({ ...globalMetricsCache, isCached: true });
+      return GlobalMetricsResultSchema.parse({ btcDominance: null, totalMarketCapUsd: null, fetchedAt: Date.now(), isCached: false });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }));
+
+  function getCachedFearGreed(): number | null {
+    return fearGreedService.getLastValidValue(60 * 60 * 1000);
+  }
+
+  function getCachedBtcDominance(): number | null {
+    return globalMetricsCache && Date.now() - globalMetricsCache.fetchedAt < GLOBAL_METRICS_TTL_MS * 2 ? globalMetricsCache.btcDominance : null;
+  }
+
+  ipcMain.handle("sentiment:get-asset", withResult(async (_, input: { assetId: string; timeframe: string }) => {
+    const timeframe = MarketSentimentTimeframeSchema.parse(input.timeframe);
+    return MarketSentimentSchema.parse(await sentimentService.getAssetSentiment(input.assetId, timeframe, { fearGreedValue: getCachedFearGreed() }));
+  }));
+
+  ipcMain.handle("sentiment:get-global", withResult(async (_, input: { timeframe: string }) => {
+    const timeframe = MarketSentimentTimeframeSchema.parse(input.timeframe);
+    const assets = await db.select().from(schema.assets).all();
+    const cryptoAssets = assets
+      .filter((asset) => asset.type === "crypto")
+      .map((asset) => ({ internalId: asset.id, symbol: asset.symbol }));
+    return MarketSentimentSchema.parse(await sentimentService.getGlobalSentiment(cryptoAssets, timeframe, { fearGreedValue: getCachedFearGreed(), btcDominance: getCachedBtcDominance() }));
+  }));
+
+  ipcMain.handle("sentiment:get-history", withResult(async (_, input: { scope: "global" | "asset"; assetId?: string | null; timeframe: string; limit?: number }) => {
+    const parsed = MarketSentimentHistoryRequestSchema.parse(input);
+    const history = await sentimentService.getHistory({
+      scope: parsed.scope,
+      assetId: parsed.assetId,
+      timeframe: parsed.timeframe,
+      limit: parsed.limit,
+    });
+    return history.map((item) => MarketSentimentSchema.parse(item));
+  }));
+
+  ipcMain.handle("sentiment:refresh", withResult(async (_, input: { scope: "global" | "asset"; assetId?: string | null; timeframe: string }) => {
+    const timeframe = MarketSentimentTimeframeSchema.parse(input.timeframe);
+    if (input.scope === "asset") {
+      if (!input.assetId) throw new Error("assetId requerido para sentimiento de activo.");
+      return MarketSentimentSchema.parse(await sentimentService.getAssetSentiment(input.assetId, timeframe, { fearGreedValue: getCachedFearGreed() }));
+    }
+
+    const assets = await db.select().from(schema.assets).all();
+    const cryptoAssets = assets
+      .filter((asset) => asset.type === "crypto")
+      .map((asset) => ({ internalId: asset.id, symbol: asset.symbol }));
+    return MarketSentimentSchema.parse(await sentimentService.getGlobalSentiment(cryptoAssets, timeframe, { fearGreedValue: getCachedFearGreed(), btcDominance: getCachedBtcDominance() }));
   }));
 
   ipcMain.handle("settings:get", withResult(async (_, key: string) => {
@@ -264,6 +930,389 @@ function setupIpcHandlers() {
         target: schema.settings.key,
         set: { value }
       });
+    return null;
+  }));
+
+  // --- INVESTMENT PLAN ---
+  ipcMain.handle("investmentPlan:list", withResult(async () => {
+    const db = getDb();
+    return db.select()
+      .from(schema.investmentPlans)
+      .orderBy(asc(schema.investmentPlans.createdAt))
+      .all()
+      .map(mapInvestmentPlan);
+  }));
+
+  ipcMain.handle("investmentPlan:getActive", withResult(async () => {
+    const db = getDb();
+    const row = db.select()
+      .from(schema.investmentPlans)
+      .where(eq(schema.investmentPlans.status, "active"))
+      .orderBy(asc(schema.investmentPlans.createdAt))
+      .get();
+    return row ? mapInvestmentPlan(row) : null;
+  }));
+
+  ipcMain.handle("investmentPlan:create", withResult(async (_, payload) => {
+    const data = CreateInvestmentPlanSchema.parse(payload);
+    const now = Date.now();
+    const id = crypto.randomUUID();
+    if ((data.status ?? "active") === "active") {
+      db.update(schema.investmentPlans)
+        .set({ status: "inactive", updatedAt: now })
+        .where(eq(schema.investmentPlans.status, "active"))
+        .run();
+    }
+    db.insert(schema.investmentPlans).values({
+      id,
+      name: data.name,
+      description: data.description ?? null,
+      status: data.status ?? "active",
+      baseCurrency: data.baseCurrency ?? "EUR",
+      notes: data.notes ?? null,
+      createdAt: now,
+      updatedAt: now,
+    }).run();
+    return { id };
+  }));
+
+  ipcMain.handle("investmentPlan:update", withResult(async (_, id: string, payload) => {
+    const data = UpdateInvestmentPlanSchema.parse(payload);
+    const update: Partial<typeof schema.investmentPlans.$inferInsert> = { updatedAt: Date.now() };
+    if (data.status === "active") {
+      db.update(schema.investmentPlans)
+        .set({ status: "inactive", updatedAt: update.updatedAt })
+        .where(eq(schema.investmentPlans.status, "active"))
+        .run();
+    }
+    if (data.name !== undefined) update.name = data.name;
+    if (data.description !== undefined) update.description = data.description ?? null;
+    if (data.status !== undefined) update.status = data.status;
+    if (data.baseCurrency !== undefined) update.baseCurrency = data.baseCurrency;
+    if (data.notes !== undefined) update.notes = data.notes ?? null;
+
+    db.update(schema.investmentPlans).set(update).where(eq(schema.investmentPlans.id, id)).run();
+    const row = db.select().from(schema.investmentPlans).where(eq(schema.investmentPlans.id, id)).get();
+    if (!row) throw new Error(`Plan de inversión ${id} no encontrado.`);
+    return mapInvestmentPlan(row);
+  }));
+
+  ipcMain.handle("investmentPlan:delete", withResult(async (_, id: string) => {
+    const db = getDb();
+    db.delete(schema.investmentPlans).where(eq(schema.investmentPlans.id, id)).run();
+    return null;
+  }));
+
+  // --- INVESTMENT CYCLES ---
+  ipcMain.handle("investmentCycles:list", withResult(async (_, input?: { planId?: string }) => {
+    const db = getDb();
+    const query = db.select().from(schema.investmentCycles);
+    const rows = input?.planId
+      ? query.where(eq(schema.investmentCycles.planId, input.planId)).orderBy(asc(schema.investmentCycles.startDate), asc(schema.investmentCycles.priority)).all()
+      : query.orderBy(asc(schema.investmentCycles.startDate), asc(schema.investmentCycles.priority)).all();
+    return rows.map(mapInvestmentCycle);
+  }));
+
+  ipcMain.handle("investmentCycles:getCurrent", withResult(async (_, input?: { planId?: string; at?: number }) => {
+    const at = input?.at ?? Date.now();
+    const planId = input?.planId
+      ?? db.select().from(schema.investmentPlans).where(eq(schema.investmentPlans.status, "active")).get()?.id;
+    if (!planId) return null;
+    const rows = db.select()
+      .from(schema.investmentCycles)
+      .where(eq(schema.investmentCycles.planId, planId))
+      .orderBy(desc(schema.investmentCycles.startDate), asc(schema.investmentCycles.priority))
+      .all();
+    const row = rows.find((cycle) => cycle.status === "active" && cycle.startDate <= at && (cycle.endDate === null || cycle.endDate >= at));
+    return row ? mapInvestmentCycle(row) : null;
+  }));
+
+  ipcMain.handle("investmentCycles:create", withResult(async (_, payload) => {
+    const data = CreateInvestmentCycleSchema.parse(payload);
+    const now = Date.now();
+    const id = crypto.randomUUID();
+    const row = {
+      id,
+      planId: data.planId,
+      name: data.name,
+      startDate: data.startDate,
+      endDate: data.endDate ?? null,
+      monthlyAmountEur: data.monthlyAmountEur,
+      contributionCurrency: data.contributionCurrency ?? "EUR",
+      status: data.status ?? "planned",
+      priority: data.priority ?? 0,
+      notes: data.notes ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    assertInvestmentCycleRules(row, []);
+    db.insert(schema.investmentCycles).values(row).run();
+    return { id };
+  }));
+
+  ipcMain.handle("investmentCycles:update", withResult(async (_, id: string, payload) => {
+    const data = UpdateInvestmentCycleSchema.parse(payload);
+    const existing = getInvestmentCycleOrThrow(id);
+    const update: Partial<typeof schema.investmentCycles.$inferInsert> = { updatedAt: Date.now() };
+    if (data.planId !== undefined) update.planId = data.planId;
+    if (data.name !== undefined) update.name = data.name;
+    if (data.startDate !== undefined) update.startDate = data.startDate;
+    if (data.endDate !== undefined) update.endDate = data.endDate ?? null;
+    if (data.monthlyAmountEur !== undefined) update.monthlyAmountEur = data.monthlyAmountEur;
+    if (data.contributionCurrency !== undefined) update.contributionCurrency = data.contributionCurrency;
+    if (data.status !== undefined) update.status = data.status;
+    if (data.priority !== undefined) update.priority = data.priority;
+    if (data.notes !== undefined) update.notes = data.notes ?? null;
+
+    const nextRow = { ...existing, ...update };
+    assertInvestmentCycleRules(nextRow);
+    db.update(schema.investmentCycles).set(update).where(eq(schema.investmentCycles.id, id)).run();
+    const row = db.select().from(schema.investmentCycles).where(eq(schema.investmentCycles.id, id)).get();
+    if (!row) throw new Error(`Ciclo de inversión ${id} no encontrado.`);
+    return mapInvestmentCycle(row);
+  }));
+
+  ipcMain.handle("investmentCycles:delete", withResult(async (_, id: string) => {
+    const db = getDb();
+    db.delete(schema.investmentCycles).where(eq(schema.investmentCycles.id, id)).run();
+    return null;
+  }));
+
+  // --- INVESTMENT ASSETS ---
+  ipcMain.handle("investmentAssets:list", withResult(async (_, input?: { cycleId?: string }) => {
+    const db = getDb();
+    const query = db.select().from(schema.investmentAssets);
+    const rows = input?.cycleId
+      ? query.where(eq(schema.investmentAssets.cycleId, input.cycleId)).orderBy(asc(schema.investmentAssets.priority), asc(schema.investmentAssets.startDate)).all()
+      : query.orderBy(asc(schema.investmentAssets.priority), asc(schema.investmentAssets.startDate)).all();
+    return rows.map(mapInvestmentAsset);
+  }));
+
+  ipcMain.handle("investmentAssets:create", withResult(async (_, payload) => {
+    const data = CreateInvestmentAssetSchema.parse(payload);
+    const now = Date.now();
+    const id = crypto.randomUUID();
+    const allocationType = data.allocationType ?? (data.fixedAmountEur !== null && data.fixedAmountEur !== undefined && (data.allocationPercentage === null || data.allocationPercentage === undefined) ? "amount" : "percentage");
+    const allocationPercentage = data.allocationPercentage ?? (allocationType === "percentage" ? data.allocationValue ?? 0 : null);
+    const fixedAmountEur = data.fixedAmountEur ?? (allocationType === "amount" ? data.allocationValue ?? 0 : null);
+    const allocationValue = data.allocationValue ?? (allocationType === "percentage" ? allocationPercentage ?? 0 : fixedAmountEur ?? 0);
+    const status = data.status ?? (data.isActive === false ? "paused" : "active");
+    const row = {
+      id,
+      cycleId: data.cycleId,
+      assetId: data.assetId,
+      allocationType,
+      allocationValue,
+      allocationPercentage,
+      fixedAmountEur,
+      priority: data.priority ?? 0,
+      targetAmount: data.targetAmount ?? null,
+      targetValueEur: data.targetValueEur ?? null,
+      targetPortfolioPercentage: data.targetPortfolioPercentage ?? null,
+      startDate: data.startDate,
+      endDate: data.endDate ?? null,
+      status,
+      isActive: status === "active" ? 1 : 0,
+      notes: data.notes ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    assertInvestmentAssetRules(data.cycleId, row);
+    db.insert(schema.investmentAssets).values(row).run();
+    return { id };
+  }));
+
+  ipcMain.handle("investmentAssets:update", withResult(async (_, id: string, payload) => {
+    const data = UpdateInvestmentAssetSchema.parse(payload);
+    const existing = getInvestmentAssetOrThrow(id);
+    const update: Partial<typeof schema.investmentAssets.$inferInsert> = { updatedAt: Date.now() };
+    if (data.cycleId !== undefined) update.cycleId = data.cycleId;
+    if (data.assetId !== undefined) update.assetId = data.assetId;
+    if (data.allocationType !== undefined) update.allocationType = data.allocationType;
+    if (data.allocationValue !== undefined) update.allocationValue = data.allocationValue;
+    if (data.allocationPercentage !== undefined) update.allocationPercentage = data.allocationPercentage ?? null;
+    if (data.fixedAmountEur !== undefined) update.fixedAmountEur = data.fixedAmountEur ?? null;
+    if (data.priority !== undefined) update.priority = data.priority;
+    if (data.targetAmount !== undefined) update.targetAmount = data.targetAmount ?? null;
+    if (data.targetValueEur !== undefined) update.targetValueEur = data.targetValueEur ?? null;
+    if (data.targetPortfolioPercentage !== undefined) update.targetPortfolioPercentage = data.targetPortfolioPercentage ?? null;
+    if (data.startDate !== undefined) update.startDate = data.startDate;
+    if (data.endDate !== undefined) update.endDate = data.endDate ?? null;
+    if (data.status !== undefined) {
+      update.status = data.status;
+      update.isActive = data.status === "active" ? 1 : 0;
+    } else if (data.isActive !== undefined) {
+      update.isActive = data.isActive ? 1 : 0;
+      update.status = data.isActive ? "active" : "paused";
+    }
+    if (data.notes !== undefined) update.notes = data.notes ?? null;
+
+    const nextRow = { ...existing, ...update };
+    assertInvestmentAssetRules(nextRow.cycleId, nextRow, id);
+    if (nextRow.cycleId !== existing.cycleId) {
+      assertInvestmentCycleRules(getInvestmentCycleOrThrow(existing.cycleId), getInvestmentAssetRuleRows(existing.cycleId).filter((row) => row.id !== id));
+    }
+    db.update(schema.investmentAssets).set(update).where(eq(schema.investmentAssets.id, id)).run();
+    const row = db.select().from(schema.investmentAssets).where(eq(schema.investmentAssets.id, id)).get();
+    if (!row) throw new Error(`Activo de plan ${id} no encontrado.`);
+    return mapInvestmentAsset(row);
+  }));
+
+  async function updateInvestmentAssetState(id: string, payload: unknown, status: "paused" | "closed") {
+    const data = InvestmentAssetStateChangeSchema.parse(payload ?? {});
+    const existing = getInvestmentAssetOrThrow(id);
+    const effectiveDate = data.effectiveDate ?? Date.now();
+    if (effectiveDate < existing.startDate) {
+      throw new Error("La fecha efectiva no puede ser anterior al inicio de la moneda.");
+    }
+    const update: Partial<typeof schema.investmentAssets.$inferInsert> = {
+      status,
+      isActive: 0,
+      endDate: effectiveDate,
+      updatedAt: Date.now(),
+    };
+    if (data.notes !== undefined) update.notes = data.notes ?? null;
+    db.update(schema.investmentAssets).set(update).where(eq(schema.investmentAssets.id, id)).run();
+    const row = getInvestmentAssetOrThrow(id);
+    return mapInvestmentAsset(row);
+  }
+
+  ipcMain.handle("investmentAssets:pause", withResult(async (_, id: string, payload?: unknown) => {
+    return updateInvestmentAssetState(id, payload, "paused");
+  }));
+
+  ipcMain.handle("investmentAssets:close", withResult(async (_, id: string, payload?: unknown) => {
+    return updateInvestmentAssetState(id, payload, "closed");
+  }));
+
+  ipcMain.handle("investmentAssets:delete", withResult(async (_, id: string) => {
+    const db = getDb();
+    db.delete(schema.investmentAssets).where(eq(schema.investmentAssets.id, id)).run();
+    return null;
+  }));
+
+  // --- STRATEGY REVISIONS ---
+  ipcMain.handle("strategyRevisions:list", withResult(async (_, input?: { cycleId?: string }) => {
+    const db = getDb();
+    const query = db.select().from(schema.strategyRevisions);
+    const rows = input?.cycleId
+      ? query.where(eq(schema.strategyRevisions.cycleId, input.cycleId)).orderBy(asc(schema.strategyRevisions.effectiveDate)).all()
+      : query.orderBy(asc(schema.strategyRevisions.effectiveDate)).all();
+    return rows.map(mapStrategyRevision);
+  }));
+
+  ipcMain.handle("strategyRevisions:create", withResult(async (_, payload) => {
+    const data = CreateStrategyRevisionSchema.parse(payload);
+    const changesJson = data.changesJson ?? "{}";
+    JSON.parse(changesJson);
+    const id = crypto.randomUUID();
+    db.insert(schema.strategyRevisions).values({
+      id,
+      cycleId: data.cycleId,
+      effectiveDate: data.effectiveDate,
+      title: data.title,
+      notes: data.notes ?? null,
+      changesJson,
+      createdAt: Date.now(),
+    }).run();
+    return { id };
+  }));
+
+  // --- TREASURY ---
+  ipcMain.handle("treasury:getSummary", withResult(async () => {
+    return TreasurySummarySchema.parse(getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance()));
+  }));
+
+  ipcMain.handle("treasury:listMovements", withResult(async () => {
+    return getTreasuryRepository().listMovements().map((row) => TreasuryMovementSchema.parse(mapTreasuryMovement(row)));
+  }));
+
+  ipcMain.handle("treasury:createMovement", withResult(async (_, payload) => {
+    const data = CreateTreasuryMovementSchema.parse(payload);
+    return getTreasuryRepository().createMovement(data);
+  }));
+
+  ipcMain.handle("treasury:updateMovement", withResult(async (_, id: string, payload) => {
+    const data = UpdateTreasuryMovementSchema.parse(payload);
+    const row = getTreasuryRepository().updateMovement(id, data);
+    if (!row) throw new Error(`Movimiento de tesorería ${id} no encontrado.`);
+    return TreasuryMovementSchema.parse(mapTreasuryMovement(row));
+  }));
+
+  ipcMain.handle("treasury:deleteMovement", withResult(async (_, id: string) => {
+    getTreasuryRepository().deleteMovement(id);
+    return null;
+  }));
+
+  ipcMain.handle("treasury:setFiscalReserve", withResult(async (_, payload) => {
+    const data = SetFiscalReserveSchema.parse(payload);
+    getTreasuryRepository().setFiscalReserve(data.amountEur, data.notes);
+    return TreasurySummarySchema.parse(getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance()));
+  }));
+
+  ipcMain.handle("treasury:allocateEurcToRebuy", withResult(async (_, payload) => {
+    const data = AllocateEurcToRebuySchema.parse(payload);
+    return getTreasuryRepository().allocateEurcToRebuy(data, getCoinbaseEurcBalance());
+  }));
+
+  // --- TARGETS ---
+  ipcMain.handle("targets:list", withResult(async () => {
+    const db = getDb();
+    return db.select().from(schema.targets).all();
+  }));
+
+  ipcMain.handle("targets:upsert", withResult(async (_, data: { id?: string; assetId: string; targetPriceEur: number }) => {
+    const db = getDb();
+    const id = data.id ?? crypto.randomUUID();
+    db.insert(schema.targets)
+      .values({ id, assetId: data.assetId, targetPriceEur: data.targetPriceEur })
+      .onConflictDoUpdate({ target: schema.targets.id, set: { targetPriceEur: data.targetPriceEur } })
+      .run();
+    return { id };
+  }));
+
+  ipcMain.handle("targets:delete", withResult(async (_, id: string) => {
+    const db = getDb();
+    db.delete(schema.targets).where(eq(schema.targets.id, id)).run();
+    return null;
+  }));
+
+  // --- ALERTS ---
+  ipcMain.handle("alerts:list", withResult(async () => {
+    const db = getDb();
+    const rows = db.select().from(schema.alerts).all();
+    return rows.map((row) => ({
+      id: row.id,
+      assetId: row.assetId,
+      priceThreshold: row.priceThreshold,
+      direction: row.direction as "above" | "below",
+      isActive: row.isActive === 1,
+    }));
+  }));
+
+  ipcMain.handle("alerts:create", withResult(async (_, data: { assetId: string; priceThreshold: number; direction: "above" | "below" }) => {
+    const db = getDb();
+    const id = crypto.randomUUID();
+    db.insert(schema.alerts)
+      .values({ id, assetId: data.assetId, priceThreshold: data.priceThreshold, direction: data.direction, isActive: 1 })
+      .run();
+    return { id };
+  }));
+
+  ipcMain.handle("alerts:delete", withResult(async (_, id: string) => {
+    const db = getDb();
+    db.delete(schema.alerts).where(eq(schema.alerts.id, id)).run();
+    return null;
+  }));
+
+  ipcMain.handle("alerts:toggle", withResult(async (_, id: string) => {
+    const db = getDb();
+    const current = db.select().from(schema.alerts).where(eq(schema.alerts.id, id)).get();
+    if (!current) throw new Error(`Alerta ${id} no encontrada.`);
+    db.update(schema.alerts)
+      .set({ isActive: current.isActive === 1 ? 0 : 1 })
+      .where(eq(schema.alerts.id, id))
+      .run();
     return null;
   }));
 
@@ -327,6 +1376,7 @@ function setupIpcHandlers() {
       algorithm:      parsed.algorithm,
       keyDisplayName: parsed.keyDisplayName,
     });
+    savePermissions(permissions);
 
     return {
       connected:      true,
@@ -372,38 +1422,38 @@ function setupIpcHandlers() {
     const client = new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem);
     await client.testConnection();
     credsMgr.saveCredentials(creds);
+    let connectPerms = { canView: true, canTrade: false, canTransfer: false };
+    try {
+      const p = await client.getKeyPermissions();
+      connectPerms = { canView: p.can_view, canTrade: p.can_trade, canTransfer: p.can_transfer };
+    } catch { /* best-effort: permissions stored on next successful import */ }
+    savePermissions(connectPerms);
     return { connected: true };
   }));
 
   ipcMain.handle("coinbase:disconnect", withResult(async () => {
     credsMgr.deleteCredentials();
+    clearPermissions();
     return null;
   }));
 
   ipcMain.handle("coinbase:get-status", withResult(async () => {
     const connected = credsMgr.hasCredentials();
-    const syncDb = getDb();
-    const syncService = connected
-      ? (() => {
-          const c = credsMgr.getCredentials()!;
-          return new CoinbaseSyncService(syncDb, schema, new CoinbaseClient(c.apiKeyName, c.privateKeyPem));
-        })()
-      : null;
-
-    const syncStatus = syncService ? syncService.getStatus() : {
-      lastSyncAt: null,
-      lastSyncItemsProcessed: null,
-      lastSyncStatus: null,
-      lastSyncError: null,
-    };
-
     const keyInfo = connected ? credsMgr.getKeyInfo() : null;
+    const syncStatus = readSyncStatus();
+    const { permissions, lastValidationAt } = connected
+      ? readPermissions()
+      : { permissions: null, lastValidationAt: null };
 
     return {
       connected,
       ...syncStatus,
       keyDisplayName: keyInfo?.keyDisplayName ?? null,
       algorithm:      keyInfo?.algorithm      ?? null,
+      credentialType: connected ? "Clave CDP" : null,
+      keychainStatus: connected ? "stored" : "missing",
+      lastValidationAt,
+      permissions,
     };
   }));
 
@@ -415,6 +1465,27 @@ function setupIpcHandlers() {
     const client = new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem);
     const syncService = new CoinbaseSyncService(syncDb, schema, client);
     return await syncService.syncWithErrorHandling();
+  }));
+
+  ipcMain.handle("coinbase:get-sync-history", withResult(async () => {
+    const rows = await db.select()
+      .from(schema.syncRuns)
+      .where(eq(schema.syncRuns.source, "coinbase"))
+      .orderBy(schema.syncRuns.timestamp)
+      .limit(20);
+    const lastErrorRow = await db.select().from(schema.settings).where(eq(schema.settings.key, "coinbase:last-sync-error")).limit(1);
+    const lastError = lastErrorRow.length ? lastErrorRow[0].value : null;
+
+    return rows.reverse().map((row) => ({
+      id: row.id,
+      timestamp: row.timestamp,
+      status: row.status,
+      itemsProcessed: row.itemsProcessed,
+      newTransactions: row.status === "success" ? row.itemsProcessed : 0,
+      skippedDuplicates: null,
+      durationMs: null,
+      error: row.status === "error" ? lastError : null,
+    }));
   }));
 
   // --- V3 PORTFOLIO HANDLERS ---
@@ -432,7 +1503,20 @@ function setupIpcHandlers() {
   }));
 
   ipcMain.handle("coinbase:get-portfolio-breakdown", withResult(async (_, portfolioUuid: string, currency: string) => {
-    return await getPortfolioServiceInst().getPortfolioBreakdown(portfolioUuid, currency);
+    const service = getPortfolioServiceInst();
+    const liveBreakdown = service.getPortfolioBreakdown(portfolioUuid, currency);
+    liveBreakdown.catch((error) => {
+      console.warn("[Coinbase] Portfolio live breakdown did not complete before fallback:", error instanceof Error ? error.message : String(error));
+    });
+
+    const cachedBreakdown = new Promise((resolve) => {
+      setTimeout(() => {
+        const cached = service.getCachedPortfolioBreakdown(portfolioUuid, currency, "Coinbase tardó demasiado; mostrando cache local.");
+        void Promise.resolve(cached).then(resolve);
+      }, 8000);
+    });
+
+    return await Promise.race([liveBreakdown, cachedBreakdown]);
   }));
 
   ipcMain.handle("coinbase:get-portfolio-snapshots", withResult(async (_, portfolioUuid: string) => {
@@ -442,10 +1526,15 @@ function setupIpcHandlers() {
 }
 
 function createWindow() {
+  const appIconPath = app.isPackaged
+    ? path.join(process.resourcesPath, "assets/brand/logo.png")
+    : path.join(__dirname, "../../../assets/brand/logo.png");
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     title: "Crypto Control",
+    icon: appIconPath,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -453,13 +1542,25 @@ function createWindow() {
     },
   });
 
+  mainWindow.webContents.on("console-message", (_e, level, message, line, sourceId) => {
+    const prefix = ["[renderer:verbose]", "[renderer:info]", "[renderer:warn]", "[renderer:error]"][level] ?? "[renderer]";
+    console.log(prefix, message, sourceId ? `(${sourceId}:${line})` : "");
+  });
+  mainWindow.webContents.on("did-fail-load", (_e, code, desc, url) => {
+    console.error("[renderer] did-fail-load", code, desc, url);
+  });
+  mainWindow.webContents.on("render-process-gone", (_e, details) => {
+    console.error("[renderer] process gone", details.reason, details.exitCode);
+  });
+
   if (process.env.VITE_DEV_SERVER_URL) {
     console.log("[Electron] Cargando desarrollo:", process.env.VITE_DEV_SERVER_URL);
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
-    const prodPath = path.join(__dirname, "../../web/dist/index.html");
+    const prodPath = app.isPackaged
+      ? path.join(process.resourcesPath, "web/dist/index.html")
+      : path.join(__dirname, "../../web/dist/index.html");
     console.log("[Electron] Cargando producción:", prodPath);
-    // Ensure we use file:// protocol for production loading correctly
     mainWindow.loadFile(prodPath);
   }
 }

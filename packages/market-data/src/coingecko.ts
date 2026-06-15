@@ -70,7 +70,9 @@ export class CoinGeckoProvider implements MarketDataProvider {
     if (data && Array.isArray(data.prices)) {
       return data.prices.map((p: [number, number]) => ({
         timestamp: p[0],
-        price: p[1]
+        price: p[1],
+        source: this.name,
+        confidence: 0.9
       }));
     }
     

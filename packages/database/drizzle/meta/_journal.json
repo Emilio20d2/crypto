@@ -43,6 +43,34 @@
       "when": 1781394591572,
       "tag": "0005_lowly_agent_zero",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1781440000000,
+      "tag": "0006_market_sentiment_snapshots",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1781443600000,
+      "tag": "0007_investment_plan_cycles",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1781447200000,
+      "tag": "0008_cycle_treasury",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1781450800000,
+      "tag": "0009_investment_plan_complete",
+      "breakpoints": true
     }
   ]
 }

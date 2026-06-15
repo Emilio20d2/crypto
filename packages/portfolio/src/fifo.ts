@@ -100,11 +100,13 @@ export class FifoCalculator {
             }
           }
 
-          if (impact.valuation !== undefined) {
+          const consumedAmount = Math.abs(impact.amount) - amountToConsume;
+
+          if (impact.valuation !== undefined && consumedAmount > 0) {
              realizedGains.push({
                transactionId: tx.id,
                assetId,
-               amountSold: Math.abs(impact.amount) - amountToConsume, // What was actually consumed
+               amountSold: consumedAmount,
                sellValueEur: totalSellValueForGains,
                costBasisEur: totalCostBasis,
                realizedGainEur: totalSellValueForGains - totalCostBasis

@@ -3,6 +3,7 @@ import { eq, and, desc } from "drizzle-orm";
 import type { Database } from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "@crypto-control/database/dist/schema";
+import { MarketService } from "@crypto-control/market-data";
 import { CoinbaseClient } from "./client";
 
 // Zod schemas for the final UI contracts
@@ -90,6 +91,8 @@ export const CoinbasePortfolioViewSchema = z.object({
 
 export type CoinbasePortfolioView = z.infer<typeof CoinbasePortfolioViewSchema>;
 export type CoinbaseSpotPositionView = z.infer<typeof CoinbaseSpotPositionViewSchema>;
+type CoinbaseProductView = z.infer<typeof CoinbaseProductViewSchema>;
+type CoinbaseCandlePoint = z.infer<typeof CoinbaseCandlePointSchema>;
 
 // Helper to convert Coinbase string objects to MoneyValue
 const parseMoney = (obj: any): { value: number; currency: string } | null => {
@@ -105,11 +108,139 @@ const parseNum = (str: any): number | null => {
   return isNaN(val) ? null : val;
 };
 
+function computedFiatValue(amount: number | null, price: number | null): number | null {
+  return amount !== null && price !== null && Number.isFinite(amount) && Number.isFinite(price)
+    ? amount * price
+    : null;
+}
+
+const BALANCE_EPSILON = 1e-12;
+
+function safeSelectAll(db: any, table: any): any[] {
+  try {
+    const query = db.select().from(table);
+    return typeof query.all === "function" ? query.all() : [];
+  } catch {
+    return [];
+  }
+}
+
 export class CoinbasePortfolioService {
+  private publicMarketService = new MarketService();
+
   constructor(
     private db: any, // En este contexto, aceptamos el db de Drizzle inyectado
     private getClient: () => Promise<CoinbaseClient | null>
   ) {
+  }
+
+  private async mergeAccountBalancePositions(
+    view: CoinbasePortfolioView,
+    currency: string,
+    usePublicFallback: boolean
+  ): Promise<CoinbasePortfolioView> {
+    const accounts = safeSelectAll(this.db, schema.accounts);
+    const assets = safeSelectAll(this.db, schema.assets) as Array<{ id: string; name: string; type: string; logoUrl?: string | null }>;
+    const assetById = new Map(assets.map((asset: any) => [asset.id, asset]));
+    const existingAccountIds = new Set(view.positions.map((position) => position.accountUuid));
+    const positions = [...view.positions];
+
+    for (const account of accounts) {
+      const assetId = account.assetId;
+      const balance = parseNum(account.balance);
+      if (!assetId || balance === null || balance <= BALANCE_EPSILON) continue;
+      if (existingAccountIds.has(account.id)) continue;
+
+      const asset = assetById.get(assetId);
+      const isCash = assetId === currency || asset?.type === "fiat";
+      const productId = `${assetId}-${currency}`;
+      let market = isCash ? null : this.getCachedProduct(productId);
+      let sparkline = isCash ? [] : this.getCachedCandles(productId, "ONE_HOUR");
+
+      if (!isCash && usePublicFallback && (!market || market.price === null || sparkline.length < 2)) {
+        try {
+          const fallback = await this.getPublicMarketFallback(assetId, currency);
+          market = market ? {
+            ...market,
+            price: market.price ?? fallback.market?.price ?? null,
+            pricePercentageChange24h: market.pricePercentageChange24h ?? fallback.market?.pricePercentageChange24h ?? null,
+            volume24h: market.volume24h ?? fallback.market?.volume24h ?? null,
+            volumePercentageChange24h: market.volumePercentageChange24h ?? fallback.market?.volumePercentageChange24h ?? null,
+            marketCap: market.marketCap ?? fallback.market?.marketCap ?? null,
+            baseName: market.baseName ?? fallback.market?.baseName ?? asset?.name ?? assetId,
+            baseDisplaySymbol: market.baseDisplaySymbol ?? fallback.market?.baseDisplaySymbol ?? assetId,
+            quoteDisplaySymbol: market.quoteDisplaySymbol ?? fallback.market?.quoteDisplaySymbol ?? currency,
+            iconUrl: market.iconUrl ?? fallback.market?.iconUrl ?? asset?.logoUrl ?? null,
+            status: market.status ?? fallback.market?.status ?? "account-fallback",
+            tradingDisabled: market.tradingDisabled,
+            viewOnly: market.viewOnly
+          } : fallback.market;
+          if (sparkline.length < 2 && fallback.sparkline.length >= 2) sparkline = fallback.sparkline;
+        } catch (error) {
+          console.warn(`Failed to enrich account fallback for ${assetId}:`, error);
+        }
+      }
+
+      const price = isCash ? 1 : market?.price ?? null;
+      const totalFiat = price !== null ? balance * price : null;
+
+      positions.push({
+        asset: assetId,
+        assetUuid: null,
+        accountUuid: account.id,
+        totalBalanceFiat: totalFiat,
+        totalBalanceCrypto: balance,
+        allocation: null,
+        costBasis: null,
+        averageEntryPrice: null,
+        unrealizedPnl: null,
+        fundingPnl: null,
+        availableToTradeFiat: totalFiat,
+        availableToTradeCrypto: balance,
+        availableToTransferFiat: totalFiat,
+        availableToTransferCrypto: balance,
+        availableToSendFiat: totalFiat,
+        availableToSendCrypto: balance,
+        assetImageUrl: asset?.logoUrl ?? market?.iconUrl ?? null,
+        assetColor: null,
+        isCash,
+        accountType: account.type ?? null,
+        market,
+        sparkline
+      });
+    }
+
+    const totalValue = positions.reduce((sum, position) => {
+      return sum + (typeof position.totalBalanceFiat === "number" && Number.isFinite(position.totalBalanceFiat) ? position.totalBalanceFiat : 0);
+    }, 0);
+
+    if (totalValue > 0) {
+      for (const position of positions) {
+        position.allocation = position.allocation ?? (typeof position.totalBalanceFiat === "number" && Number.isFinite(position.totalBalanceFiat)
+          ? position.totalBalanceFiat / totalValue
+          : null);
+      }
+    }
+
+    const cryptoValue = positions.reduce((sum, position) => {
+      if (position.isCash) return sum;
+      return sum + (typeof position.totalBalanceFiat === "number" && Number.isFinite(position.totalBalanceFiat) ? position.totalBalanceFiat : 0);
+    }, 0);
+    const cashValue = positions.reduce((sum, position) => {
+      if (!position.isCash) return sum;
+      return sum + (typeof position.totalBalanceFiat === "number" && Number.isFinite(position.totalBalanceFiat) ? position.totalBalanceFiat : 0);
+    }, 0);
+
+    return CoinbasePortfolioViewSchema.parse({
+      ...view,
+      balances: {
+        ...view.balances,
+        totalBalance: view.balances.totalBalance ?? (totalValue > 0 ? { value: totalValue, currency } : null),
+        totalCryptoBalance: view.balances.totalCryptoBalance ?? (cryptoValue > 0 ? { value: cryptoValue, currency } : null),
+        totalCashEquivalentBalance: view.balances.totalCashEquivalentBalance ?? (cashValue > 0 ? { value: cashValue, currency } : null),
+      },
+      positions,
+    });
   }
 
   async listPortfolios() {
@@ -145,7 +276,7 @@ export class CoinbasePortfolioService {
   async getPortfolioBreakdown(portfolioUuid: string, currency: string = "EUR"): Promise<CoinbasePortfolioView> {
     const client = await this.getClient();
     if (!client) {
-      return this.getCachedPortfolioBreakdown(portfolioUuid, currency, "Coinbase client unavailable");
+      return await this.getCachedPortfolioBreakdown(portfolioUuid, currency, "Coinbase client unavailable");
     }
 
     try {
@@ -186,25 +317,9 @@ export class CoinbasePortfolioService {
         const costBasis = parseMoney(pos.cost_basis);
         const avgEntry = parseMoney(pos.average_entry_price);
 
-        const totalFiat = parseNum(pos.total_balance_fiat);
+        let totalFiat = parseNum(pos.total_balance_fiat);
         const unrealizedPnl = parseNum(pos.unrealized_pnl);
         const totalCrypto = parseNum(pos.total_balance_crypto);
-
-        let costBasisValue = costBasis?.value ?? null;
-        let avgEntryValue = avgEntry?.value ?? null;
-
-        // Deducción matemática de coste base si no existe
-        if (costBasisValue === null && totalFiat !== null && unrealizedPnl !== null) {
-          costBasisValue = totalFiat - unrealizedPnl;
-        }
-
-        // Deducción matemática de precio medio si no existe
-        if (avgEntryValue === null && costBasisValue !== null && totalCrypto !== null && totalCrypto > 0) {
-          avgEntryValue = costBasisValue / totalCrypto;
-        }
-
-        const computedCostBasis = costBasisValue !== null ? { value: costBasisValue, currency: costBasis?.currency || currency } : null;
-        const computedAvgEntry = avgEntryValue !== null ? { value: avgEntryValue, currency: avgEntry?.currency || currency } : null;
 
         // Save position snapshot
         this.db.insert(schema.coinbaseSpotPositionSnapshots).values({
@@ -216,10 +331,10 @@ export class CoinbasePortfolioService {
           totalBalanceFiat: totalFiat,
           totalBalanceCrypto: totalCrypto,
           allocation: parseNum(pos.allocation),
-          costBasisValue: computedCostBasis?.value ?? null,
-          costBasisCurrency: computedCostBasis?.currency ?? null,
-          averageEntryPriceValue: computedAvgEntry?.value ?? null,
-          averageEntryPriceCurrency: computedAvgEntry?.currency ?? null,
+          costBasisValue: costBasis?.value ?? null,
+          costBasisCurrency: costBasis?.currency ?? null,
+          averageEntryPriceValue: avgEntry?.value ?? null,
+          averageEntryPriceCurrency: avgEntry?.currency ?? null,
           unrealizedPnl: unrealizedPnl,
           fundingPnl: parseNum(pos.funding_pnl),
           availableToTradeFiat: parseNum(pos.available_to_trade_fiat),
@@ -243,7 +358,7 @@ export class CoinbasePortfolioService {
           try {
             marketData = await this.getProduct(productId);
             // 24h sparkline (1 hour candles * 24)
-            const candlesRes = await this.getCandles(productId, "1d");
+            const candlesRes = await this.getCandles(productId, "24h");
             sparkline = candlesRes;
           } catch(e) {
             console.warn(`Failed to fetch market data for ${productId}:`, e);
@@ -251,6 +366,40 @@ export class CoinbasePortfolioService {
             marketData = this.getCachedProduct(productId);
             sparkline = this.getCachedCandles(productId, "ONE_HOUR"); // Approximate sparkline fallback
           }
+
+          if (!marketData || marketData.price === null || sparkline.length < 2) {
+            try {
+              const fallback = await this.getPublicMarketFallback(pos.asset, currency);
+              if (fallback.market) {
+                marketData = marketData ? {
+                  ...marketData,
+                  price: marketData.price ?? fallback.market.price,
+                  pricePercentageChange24h: marketData.pricePercentageChange24h ?? fallback.market.pricePercentageChange24h,
+                  volume24h: marketData.volume24h ?? fallback.market.volume24h,
+                  volumePercentageChange24h: marketData.volumePercentageChange24h ?? fallback.market.volumePercentageChange24h,
+                  marketCap: marketData.marketCap ?? fallback.market.marketCap,
+                  baseName: marketData.baseName ?? fallback.market.baseName,
+                  baseDisplaySymbol: marketData.baseDisplaySymbol ?? fallback.market.baseDisplaySymbol,
+                  quoteDisplaySymbol: marketData.quoteDisplaySymbol ?? fallback.market.quoteDisplaySymbol,
+                  iconUrl: marketData.iconUrl ?? fallback.market.iconUrl,
+                  status: marketData.status ?? fallback.market.status,
+                  tradingDisabled: marketData.tradingDisabled ?? fallback.market.tradingDisabled,
+                  viewOnly: marketData.viewOnly ?? fallback.market.viewOnly
+                } : fallback.market;
+              }
+
+              if (sparkline.length < 2 && fallback.sparkline.length >= 2) {
+                sparkline = fallback.sparkline;
+              }
+            } catch (fallbackError) {
+              console.warn(`Failed to fetch public market fallback for ${productId}:`, fallbackError);
+            }
+          }
+        }
+
+        if (totalFiat === null) {
+          const price = pos.is_cash || pos.asset === currency ? 1 : marketData?.price ?? null;
+          totalFiat = computedFiatValue(totalCrypto, price);
         }
 
         positions.push({
@@ -260,8 +409,8 @@ export class CoinbasePortfolioService {
           totalBalanceFiat: totalFiat,
           totalBalanceCrypto: totalCrypto,
           allocation: parseNum(pos.allocation),
-          costBasis: computedCostBasis,
-          averageEntryPrice: computedAvgEntry,
+          costBasis,
+          averageEntryPrice: avgEntry,
           unrealizedPnl: unrealizedPnl,
           fundingPnl: parseNum(pos.funding_pnl),
           availableToTradeFiat: parseNum(pos.available_to_trade_fiat),
@@ -294,11 +443,11 @@ export class CoinbasePortfolioService {
         state: "live"
       };
 
-      return CoinbasePortfolioViewSchema.parse(result);
+      return this.mergeAccountBalancePositions(CoinbasePortfolioViewSchema.parse(result), currency, true);
 
     } catch (error: any) {
       console.error("CoinbasePortfolioService: Error fetching portfolio", error);
-      return this.getCachedPortfolioBreakdown(portfolioUuid, currency, error.message);
+      return await this.getCachedPortfolioBreakdown(portfolioUuid, currency, error.message);
     }
   }
 
@@ -364,22 +513,22 @@ export class CoinbasePortfolioService {
     }
   }
 
-  async getCandles(productId: string, period: "1h" | "1d" | "1s" | "1m" | "1a" | "all") {
+  async getCandles(productId: string, period: "1h" | "24h" | "7d" | "30d" | "1y" | "all") {
     const client = await this.getClient();
-    if (!client) return this.getCachedCandles(productId, "ONE_HOUR"); // fallback granularity
+    if (!client) return this.getCachedCandles(productId, "ONE_HOUR");
 
     const now = Math.floor(Date.now() / 1000);
     let start: number;
     let granularity: string;
 
     switch (period) {
-      case "1h": start = now - 3600; granularity = "ONE_MINUTE"; break;
-      case "1d": start = now - 86400; granularity = "FIFTEEN_MINUTE"; break;
-      case "1s": start = now - 604800; granularity = "ONE_HOUR"; break;
-      case "1m": start = now - 2592000; granularity = "SIX_HOUR"; break;
-      case "1a": start = now - 31536000; granularity = "ONE_DAY"; break;
-      case "all": start = 0; granularity = "ONE_DAY"; break;
-      default: start = now - 86400; granularity = "FIFTEEN_MINUTE";
+      case "1h":  start = now - 3600;     granularity = "ONE_MINUTE";     break;
+      case "24h": start = now - 86400;    granularity = "FIFTEEN_MINUTE"; break;
+      case "7d":  start = now - 604800;   granularity = "ONE_HOUR";       break;
+      case "30d": start = now - 2592000;  granularity = "SIX_HOUR";       break;
+      case "1y":  start = now - 31536000; granularity = "ONE_DAY";        break;
+      case "all": start = 0;              granularity = "ONE_DAY";        break;
+      default:    start = now - 86400;    granularity = "FIFTEEN_MINUTE";
     }
 
     try {
@@ -428,6 +577,60 @@ export class CoinbasePortfolioService {
     }
   }
 
+  async getPublicMarketFallback(asset: string, currency: string): Promise<{ market: CoinbaseProductView | null; sparkline: CoinbaseCandlePoint[] }> {
+    const [priceResult, historyResult] = await Promise.allSettled([
+      this.publicMarketService.getCurrentPrice(asset),
+      this.publicMarketService.getHistoricalPrices(asset, "24h")
+    ]);
+
+    const history = historyResult.status === "fulfilled" ? historyResult.value : null;
+    const points = history?.points ?? [];
+    const sparkline = points
+      .filter((point) => Number.isFinite(point.timestamp) && Number.isFinite(point.price))
+      .map((point) => CoinbaseCandlePointSchema.parse({
+        time: Math.floor(point.timestamp / 1000),
+        open: point.price,
+        high: point.price,
+        low: point.price,
+        close: point.price,
+        volume: 0
+      }))
+      .sort((a, b) => a.time - b.time);
+
+    const first = sparkline[0]?.close;
+    const last = sparkline[sparkline.length - 1]?.close;
+    const historyChange = first && last ? ((last - first) / first) * 100 : null;
+    const priceData = priceResult.status === "fulfilled" ? priceResult.value : null;
+    const price = priceData?.price ?? last ?? null;
+
+    if (price === null) {
+      return { market: null, sparkline };
+    }
+
+    const provider = priceData?.provider && priceData.provider !== "none"
+      ? priceData.provider
+      : history?.provider || "market-data";
+
+    return {
+      market: CoinbaseProductViewSchema.parse({
+        productId: `${asset}-${currency}`,
+        price,
+        pricePercentageChange24h: historyChange,
+        volume24h: null,
+        volumePercentageChange24h: null,
+        marketCap: null,
+        baseName: asset,
+        baseDisplaySymbol: asset,
+        quoteDisplaySymbol: currency,
+        iconUrl: null,
+        status: `fallback:${provider}`,
+        tradingDisabled: false,
+        viewOnly: true
+      }),
+      sparkline
+    };
+  }
+
   getPortfolioSnapshots(portfolioUuid: string) {
     const records = this.db.select()
       .from(schema.coinbasePortfolioSnapshots)
@@ -441,9 +644,9 @@ export class CoinbasePortfolioService {
     }));
   }
 
-  // --- PRIVATE CACHE FALLBACKS ---
+  // --- CACHE FALLBACKS ---
 
-  private getCachedPortfolioBreakdown(portfolioUuid: string, currency: string, errorReason: string): CoinbasePortfolioView {
+  async getCachedPortfolioBreakdown(portfolioUuid: string, currency: string, errorReason: string): Promise<CoinbasePortfolioView> {
     const p = this.db.select().from(schema.coinbasePortfolios).where(eq(schema.coinbasePortfolios.uuid, portfolioUuid)).get();
     if (!p) {
       return {
@@ -479,11 +682,17 @@ export class CoinbasePortfolioService {
         sparkline = this.getCachedCandles(productId, "ONE_HOUR");
       }
 
+      const totalCrypto = pos.totalBalanceCrypto;
+      const totalBalanceFiat = pos.totalBalanceFiat ?? computedFiatValue(
+        typeof totalCrypto === "number" && Number.isFinite(totalCrypto) ? totalCrypto : null,
+        pos.isCash === 1 || pos.asset === currency ? 1 : market?.price ?? null
+      );
+
       return {
         asset: pos.asset,
         assetUuid: pos.assetUuid,
         accountUuid: pos.accountUuid,
-        totalBalanceFiat: pos.totalBalanceFiat,
+        totalBalanceFiat,
         totalBalanceCrypto: pos.totalBalanceCrypto,
         allocation: pos.allocation,
         costBasis: pos.costBasisValue !== null ? { value: pos.costBasisValue, currency: pos.costBasisCurrency || currency } : null,
@@ -505,7 +714,7 @@ export class CoinbasePortfolioService {
       };
     });
 
-    return CoinbasePortfolioViewSchema.parse({
+    return this.mergeAccountBalancePositions(CoinbasePortfolioViewSchema.parse({
       portfolio: {
         uuid: p.uuid,
         name: p.name,
@@ -526,7 +735,7 @@ export class CoinbasePortfolioService {
       source: "coinbase",
       state: "cached",
       reason: errorReason
-    });
+    }), currency, false);
   }
 
   private getCachedProduct(productId: string) {

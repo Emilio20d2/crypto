@@ -24,6 +24,38 @@ export const ASSET_MAP: Record<string, AssetMetadata> = {
     quoteCurrency: "EUR",
     supportedProviders: ["coingecko", "coinbase"]
   },
+  "SOL": {
+    internalId: "SOL",
+    symbol: "SOL",
+    coinGeckoId: "solana",
+    coinbaseProductId: "SOL-EUR",
+    quoteCurrency: "EUR",
+    supportedProviders: ["coingecko", "coinbase"]
+  },
+  "TON": {
+    internalId: "TON",
+    symbol: "TON",
+    coinGeckoId: "the-open-network",
+    coinbaseProductId: "TON-EUR",
+    quoteCurrency: "EUR",
+    supportedProviders: ["coingecko", "coinbase"]
+  },
+  "XLM": {
+    internalId: "XLM",
+    symbol: "XLM",
+    coinGeckoId: "stellar",
+    coinbaseProductId: "XLM-EUR",
+    quoteCurrency: "EUR",
+    supportedProviders: ["coingecko", "coinbase"]
+  },
+  "USDC": {
+    internalId: "USDC",
+    symbol: "USDC",
+    coinGeckoId: "usd-coin",
+    coinbaseProductId: "USDC-EUR",
+    quoteCurrency: "EUR",
+    supportedProviders: ["coingecko", "coinbase"]
+  },
   "ADA": {
     internalId: "ADA",
     symbol: "ADA",
@@ -53,6 +85,14 @@ export const ASSET_MAP: Record<string, AssetMetadata> = {
     symbol: "EURC",
     coinGeckoId: "euro-coin",
     coinbaseProductId: "EURC-EUR",
+    quoteCurrency: "EUR",
+    supportedProviders: ["coingecko", "coinbase"]
+  },
+  "LMTS": {
+    internalId: "LMTS",
+    symbol: "LMTS",
+    coinGeckoId: "limitless-3",
+    coinbaseProductId: "LMTS-EUR",
     quoteCurrency: "EUR",
     supportedProviders: ["coingecko", "coinbase"]
   }

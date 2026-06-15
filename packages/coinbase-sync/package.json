@@ -11,7 +11,8 @@
   },
   "dependencies": {
     "@crypto-control/core": "*",
-    "@crypto-control/database": "*"
+    "@crypto-control/database": "*",
+    "@crypto-control/market-data": "*"
   },
   "devDependencies": {
     "typescript": "^5.4.5",

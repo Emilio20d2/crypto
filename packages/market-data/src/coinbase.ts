@@ -112,7 +112,9 @@ export class CoinbaseProvider implements MarketDataProvider {
 
       const chunk = parsed.data.map((candle: [number, number, number, number, number, number]) => ({
         timestamp: candle[0] * 1000,
-        price: candle[4] // close price
+        price: candle[4], // close price
+        source: this.name,
+        confidence: 1
       }));
 
       allCandles.push(...chunk);

@@ -41,12 +41,35 @@ describe("Database Migration & Integrity", () => {
     
     expect(tableNames).toContain("realized_gains");
     expect(tableNames).toContain("transaction_legs");
+    expect(tableNames).toContain("investment_plans");
+    expect(tableNames).toContain("investment_cycles");
+    expect(tableNames).toContain("investment_assets");
+    expect(tableNames).toContain("strategy_revisions");
+    expect(tableNames).toContain("treasury_accounts");
+    expect(tableNames).toContain("treasury_movements");
+    expect(tableNames).toContain("fiscal_reserve_movements");
+    expect(tableNames).toContain("cycle_liquidity_allocations");
 
     // Verificamos las nuevas columnas en transaction_legs
     const columnsInfo = sqlite.pragma("table_info('transaction_legs')") as { name: string }[];
     const columnNames = columnsInfo.map(c => c.name);
     expect(columnNames).toContain("valuation_status");
     expect(columnNames).toContain("valuation_source");
+
+    const planColumns = (sqlite.pragma("table_info('investment_plans')") as { name: string }[]).map(c => c.name);
+    expect(planColumns).toContain("description");
+
+    const cycleColumns = (sqlite.pragma("table_info('investment_cycles')") as { name: string }[]).map(c => c.name);
+    expect(cycleColumns).toContain("contribution_currency");
+    expect(cycleColumns).toContain("status");
+
+    const investmentAssetColumns = (sqlite.pragma("table_info('investment_assets')") as { name: string }[]).map(c => c.name);
+    expect(investmentAssetColumns).toContain("allocation_percentage");
+    expect(investmentAssetColumns).toContain("fixed_amount_eur");
+    expect(investmentAssetColumns).toContain("target_amount");
+    expect(investmentAssetColumns).toContain("target_value_eur");
+    expect(investmentAssetColumns).toContain("target_portfolio_percentage");
+    expect(investmentAssetColumns).toContain("status");
     
     closeDatabase();
   });

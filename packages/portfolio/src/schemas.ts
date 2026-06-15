@@ -31,7 +31,8 @@ export const RealizedGainSchema = z.object({
   amountSold: z.number(),
   sellValueEur: z.number(),
   costBasisEur: z.number(),
-  realizedGainEur: z.number()
+  realizedGainEur: z.number(),
+  date: z.number().optional()
 });
 
 export const PortfolioResultSchema = z.object({

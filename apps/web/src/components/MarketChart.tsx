@@ -1,9 +1,19 @@
-import { useEffect, useRef } from "react";
-import { createChart, AreaSeries, CrosshairMode, createSeriesMarkers } from "lightweight-charts";
-import type { IChartApi, ISeriesApi, Time, ISeriesMarkersPluginApi } from "lightweight-charts";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AreaSeries, CrosshairMode, createChart, createSeriesMarkers } from "lightweight-charts";
+import type { CSSProperties } from "react";
+import type { IChartApi, ISeriesApi, ISeriesMarkersPluginApi, Time } from "lightweight-charts";
+
+export type ChartPoint = {
+  time: Time;
+  value: number;
+  high?: number;
+  low?: number;
+  source?: string;
+  confidence?: number;
+};
 
 export interface MarketChartProps {
-  data: { time: Time; value: number }[];
+  data: ChartPoint[];
   operations?: { time: Time; type: string; label: string; color: string }[];
   provider?: string;
   isCached?: boolean;
@@ -11,202 +21,256 @@ export interface MarketChartProps {
   height?: number;
 }
 
-export function MarketChart({ data, operations = [], provider, isCached, emptyStateMessage = "No hay datos disponibles", height = 400 }: MarketChartProps) {
+type ChartStyle = CSSProperties & {
+  "--chart-height"?: string;
+  "--tooltip-x"?: string;
+  "--tooltip-y"?: string;
+};
+
+type TooltipState = {
+  visible: boolean;
+  x: number;
+  y: number;
+  price: number;
+  high?: number;
+  low?: number;
+  timestamp: number;
+};
+
+function toSeconds(time: Time | null | undefined) {
+  if (typeof time === "number") {
+    const seconds = time > 1e11 ? Math.floor(time / 1000) : Math.floor(time);
+    return Number.isFinite(seconds) ? seconds : null;
+  }
+
+  if (typeof time === "string") {
+    const seconds = Math.floor(new Date(time).getTime() / 1000);
+    return Number.isFinite(seconds) ? seconds : null;
+  }
+
+  if (time && typeof time === "object" && "year" in time && "month" in time && "day" in time) {
+    const seconds = Math.floor(Date.UTC(time.year, time.month - 1, time.day) / 1000);
+    return Number.isFinite(seconds) ? seconds : null;
+  }
+
+  return null;
+}
+
+function sanitizeData(data: ChartPoint[]) {
+  const map = new Map<number, ChartPoint>();
+
+  for (const point of data) {
+    const seconds = toSeconds(point.time);
+    if (seconds === null || seconds <= 0 || !Number.isFinite(point.value) || point.value <= 0) continue;
+    map.set(seconds, { ...point, time: seconds as Time });
+  }
+
+  return Array.from(map.values()).sort((a, b) => (toSeconds(a.time) ?? 0) - (toSeconds(b.time) ?? 0));
+}
+
+function formatTooltipDate(timestamp: number) {
+  const date = new Date(timestamp * 1000);
+  return {
+    date: date.toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "numeric" }),
+    time: date.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }),
+  };
+}
+
+const eur = new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 2 });
+
+export function MarketChart({
+  data,
+  operations = [],
+  emptyStateMessage = "No hay datos disponibles",
+  height = 320,
+}: MarketChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Area"> | null>(null);
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
-  const tooltipRef = useRef<HTMLDivElement>(null);
+  const pointLookupRef = useRef<Map<number, ChartPoint>>(new Map());
+  const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+
+  const sanitized = useMemo(() => sanitizeData(data), [data]);
+  const pointLookup = useMemo(() => {
+    const lookup = new Map<number, ChartPoint>();
+    sanitized.forEach((point) => {
+      const seconds = toSeconds(point.time);
+      if (seconds !== null) lookup.set(seconds, point);
+    });
+    return lookup;
+  }, [sanitized]);
 
   useEffect(() => {
-    if (!chartContainerRef.current) return;
+    pointLookupRef.current = pointLookup;
+  }, [pointLookup]);
 
-    const chart = createChart(chartContainerRef.current, {
+  useEffect(() => {
+    const container = chartContainerRef.current;
+    if (!container) return;
+
+    const chart = createChart(container, {
+      autoSize: true,
       layout: {
-        background: { color: "#ffffff" },
-        textColor: "#333",
+        background: { color: "transparent" },
+        textColor: "#667085",
+        fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, sans-serif',
+        attributionLogo: false,
       },
       grid: {
-        vertLines: { color: "#eaf6ff" },
-        horzLines: { color: "#eaf6ff" },
+        vertLines: { color: "rgba(17, 24, 39, 0.06)" },
+        horzLines: { color: "rgba(17, 24, 39, 0.06)" },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
       },
       rightPriceScale: {
         borderVisible: false,
+        scaleMargins: { top: 0.12, bottom: 0.18 },
       },
       timeScale: {
         borderVisible: false,
         timeVisible: true,
         secondsVisible: false,
       },
-      width: chartContainerRef.current.clientWidth,
-      height,
     });
-    
-    chartRef.current = chart;
 
     const series = chart.addSeries(AreaSeries, {
       lineColor: "#327cff",
-      topColor: "rgba(37, 191, 232, 0.4)",
+      topColor: "rgba(50, 124, 255, 0.18)",
       bottomColor: "rgba(37, 191, 232, 0)",
       lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: true,
     });
+
+    chartRef.current = chart;
     seriesRef.current = series;
     markersRef.current = createSeriesMarkers(series);
 
-    // Use ResizeObserver for more robust resizing
-    const resizeObserver = new ResizeObserver((entries) => {
-      if (entries.length === 0 || entries[0].target !== chartContainerRef.current) {
+    const hideTooltip = () => {
+      setTooltip((current) => current === null ? current : null);
+    };
+
+    chart.subscribeCrosshairMove((param) => {
+      if (!param.point || !param.time || !container) {
+        hideTooltip();
         return;
       }
-      const newRect = entries[0].contentRect;
-      chart.applyOptions({ width: newRect.width });
-    });
-    
-    resizeObserver.observe(chartContainerRef.current);
-    
-    // Tooltip logic
-    chart.subscribeCrosshairMove((param) => {
-      if (!tooltipRef.current) return;
+
       if (
-        param.point === undefined ||
-        !param.time ||
         param.point.x < 0 ||
-        param.point.x > chartContainerRef.current!.clientWidth ||
+        param.point.x > container.clientWidth ||
         param.point.y < 0 ||
-        param.point.y > chartContainerRef.current!.clientHeight
+        param.point.y > container.clientHeight
       ) {
-        tooltipRef.current.style.display = 'none';
-      } else {
-        const data = param.seriesData.get(series) as unknown as Record<string, unknown>;
-        if (data) {
-          const value = (data.value !== undefined ? data.value : data.close) as number;
-          tooltipRef.current.style.display = 'block';
-          tooltipRef.current.style.left = param.point.x + 15 + 'px';
-          tooltipRef.current.style.top = param.point.y + 15 + 'px';
-          tooltipRef.current.innerHTML = `<div><strong>Precio:</strong> €${value.toFixed(2)}</div>`;
-        }
+        hideTooltip();
+        return;
       }
+
+      const seriesData = param.seriesData.get(series) as { value?: number; close?: number } | undefined;
+      const price = seriesData?.value ?? seriesData?.close;
+      if (!price || !Number.isFinite(price)) {
+        hideTooltip();
+        return;
+      }
+
+      const timestamp = toSeconds(param.time);
+      if (timestamp === null) {
+        hideTooltip();
+        return;
+      }
+
+      const point = pointLookupRef.current.get(timestamp);
+      const nextTooltip = {
+        visible: true,
+        x: Math.min(param.point.x + 14, Math.max(16, container.clientWidth - 190)),
+        y: Math.min(param.point.y + 14, Math.max(16, container.clientHeight - 112)),
+        price,
+        high: point?.high,
+        low: point?.low,
+        timestamp,
+      };
+
+      setTooltip((current) => {
+        if (
+          current &&
+          current.visible === nextTooltip.visible &&
+          current.x === nextTooltip.x &&
+          current.y === nextTooltip.y &&
+          current.price === nextTooltip.price &&
+          current.high === nextTooltip.high &&
+          current.low === nextTooltip.low &&
+          current.timestamp === nextTooltip.timestamp
+        ) {
+          return current;
+        }
+
+        return nextTooltip;
+      });
     });
 
     return () => {
-      resizeObserver.disconnect();
-      if (markersRef.current) {
-        markersRef.current = null;
-      }
-      if (chartRef.current) {
-        chartRef.current.remove();
-        chartRef.current = null;
-      }
+      markersRef.current = null;
+      chart.remove();
+      chartRef.current = null;
+      seriesRef.current = null;
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- chart created once; height handled separately
+  }, []);
 
   useEffect(() => {
-    if (chartRef.current) {
-      chartRef.current.applyOptions({ height });
+    const series = seriesRef.current;
+    if (!series) return;
+
+    if (sanitized.length < 2) {
+      series.setData([]);
+      markersRef.current?.setMarkers([]);
+      return;
     }
-  }, [height]);
 
-  useEffect(() => {
-    if (seriesRef.current && data.length > 0) {
-      // sanitizePoints: Garantizar tiempo Unix en segundos, sin duplicados, estrictamente ascendente, finito y mayor que cero.
-      const map = new Map<number, number>();
-      for (const pt of data) {
-        let ts = typeof pt.time === 'string' ? new Date(pt.time).getTime() / 1000 : (pt.time as number);
-        // Si el timestamp es muy grande (> 100 mil millones), probablemente está en ms, lo pasamos a s.
-        if (ts > 1e11) ts = Math.floor(ts / 1000);
-        else ts = Math.floor(ts);
-        
-        if (ts <= 0 || !Number.isFinite(pt.value) || pt.value <= 0) continue;
-        
-        // Almacenar el último valor conocido para cada segundo (deduplicación natural)
-        map.set(ts, pt.value);
-      }
-      
-      const sanitizedData = Array.from(map.entries())
-        .map(([time, value]) => ({ time: time as Time, value }))
-        .sort((a, b) => (a.time as number) - (b.time as number));
-        
-      if (sanitizedData.length < 2) {
-        // Lightweight Charts requiere al menos 2 puntos para AreaSeries, si no, lo vaciamos de forma segura
-        seriesRef.current.setData([]);
-        return;
-      }
-      
-      seriesRef.current.setData(sanitizedData);
-      chartRef.current?.timeScale().fitContent();
+    series.setData(sanitized.map((point) => ({ time: point.time, value: point.value })));
+    chartRef.current?.timeScale().fitContent();
 
-      const latest = sanitizedData[sanitizedData.length - 1];
-      if (markersRef.current) {
-        const markers: import('lightweight-charts').SeriesMarker<Time>[] = operations.map(op => ({
-          time: op.time,
-          position: op.type === "buy" ? 'belowBar' : 'aboveBar',
-          color: op.color,
-          shape: op.type === "buy" ? 'arrowUp' : 'arrowDown',
-          text: op.label,
-        }));
-        
-        markers.push({
-          time: latest.time,
-          position: 'aboveBar',
-          color: '#327cff',
-          shape: 'circle',
-          text: 'Actual',
-        });
-        
-        // Order markers by strict time
-        markers.sort((a, b) => {
-          let ta = typeof a.time === 'string' ? new Date(a.time).getTime() / 1000 : (a.time as number);
-          let tb = typeof b.time === 'string' ? new Date(b.time).getTime() / 1000 : (b.time as number);
-          if (ta > 1e11) ta = Math.floor(ta / 1000);
-          if (tb > 1e11) tb = Math.floor(tb / 1000);
-          return ta - tb;
-        });
+    const markers = operations
+      .flatMap((operation) => {
+        const time = toSeconds(operation.time);
+        if (time === null) return [];
+        return [{
+          time: time as Time,
+          position: operation.type === "buy" ? "belowBar" as const : "aboveBar" as const,
+          color: operation.color,
+          shape: operation.type === "buy" ? "arrowUp" as const : "arrowDown" as const,
+          text: operation.label,
+        }];
+      })
+      .sort((a, b) => (toSeconds(a.time) ?? 0) - (toSeconds(b.time) ?? 0));
 
-        // Eliminar marcadores duplicados en el mismo segundo exacto
-        const uniqueMarkers = markers.filter((m, i, arr) => {
-          if (i === 0) return true;
-          const prevTime = typeof arr[i-1].time === 'string' ? new Date(arr[i-1].time as string).getTime() / 1000 : (arr[i-1].time as number);
-          const currTime = typeof m.time === 'string' ? new Date(m.time as string).getTime() / 1000 : (m.time as number);
-          return Math.floor(currTime) !== Math.floor(prevTime);
-        });
+    markersRef.current?.setMarkers(markers);
+  }, [operations, sanitized]);
 
-        markersRef.current.setMarkers(uniqueMarkers);
-      }
-    } else if (seriesRef.current && data.length === 0) {
-      seriesRef.current.setData([]);
-    }
-  }, [data, operations]);
+  const chartStyle: ChartStyle = { "--chart-height": `${height}px` };
+  const tooltipStyle: ChartStyle | undefined = tooltip?.visible
+    ? { "--tooltip-x": `${tooltip.x}px`, "--tooltip-y": `${tooltip.y}px` }
+    : undefined;
+  const tooltipDate = tooltip ? formatTooltipDate(tooltip.timestamp) : null;
 
   return (
-    <div style={{ position: "relative" }}>
-      {provider && (
-        <div style={{ position: "absolute", top: 10, left: 10, zIndex: 2, background: "rgba(255,255,255,0.8)", padding: "4px 8px", borderRadius: 4, fontSize: "12px", border: "1px solid #ddd" }}>
-          Proveedor: {provider} {isCached && <span style={{ color: "green", marginLeft: "4px" }}>(En caché)</span>}
+    <div className="market-chart" style={chartStyle}>
+      {sanitized.length < 2 && (
+        <div className="chart-empty-state">
+          <p>{emptyStateMessage}</p>
         </div>
       )}
-      {data.length === 0 && (
-        <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", zIndex: 2, color: "#666" }}>
-          {emptyStateMessage}
+      <div ref={chartContainerRef} className="market-chart-canvas" />
+      {tooltip && tooltipDate && (
+        <div className="chart-tooltip" style={tooltipStyle}>
+          <strong>{eur.format(tooltip.price)}</strong>
+          <span>{tooltipDate.date}</span>
+          <span>{tooltipDate.time}</span>
+          <span>Máx. {tooltip.high ? eur.format(tooltip.high) : "No disponible"}</span>
+          <span>Mín. {tooltip.low ? eur.format(tooltip.low) : "No disponible"}</span>
         </div>
       )}
-      <div ref={chartContainerRef} style={{ width: "100%", height: `${height}px` }} />
-      <div 
-        ref={tooltipRef} 
-        style={{
-          display: 'none',
-          position: 'absolute',
-          background: 'rgba(255, 255, 255, 0.9)',
-          border: '1px solid #ccc',
-          padding: '8px',
-          borderRadius: '4px',
-          pointerEvents: 'none',
-          zIndex: 10,
-          boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-        }}
-      />
     </div>
   );
 }

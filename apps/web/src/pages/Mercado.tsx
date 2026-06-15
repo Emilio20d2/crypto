@@ -1,18 +1,25 @@
-import { useState, useMemo, useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Search, SearchX } from "lucide-react";
-import { MarketChart } from "../components/MarketChart";
-import { CryptoLogo } from "../components/CryptoLogo";
+import { useMemo, useState } from "react";
+import { useQueries, useQuery } from "@tanstack/react-query";
+import { ExternalLink } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
-import { Card, CardHeader, CardContent } from "../components/Card";
-import { Input } from "../components/Input";
-import { PeriodSelector } from "../components/PeriodSelector";
+import { PageToolbar } from "../components/PageToolbar";
+import {
+  MarketChartPanel,
+  MarketHeader,
+  MarketSidebar,
+  FearGreedCard,
+  GlobalMetricsCard,
+  TopAssetsPanel,
+} from "../components/MarketPanels";
+import { MarketSentimentSection } from "../components/SentimentPanels";
+import type { ChartPoint } from "../components/MarketChart";
 import type { Period } from "../components/PeriodSelector";
-import { PriceDisplay } from "../components/PriceDisplay";
-import { ErrorState } from "../components/ErrorState";
-import { LoadingState } from "../components/LoadingState";
-import { ErrorBoundary } from "../components/ErrorBoundary";
-import "../mercado.css";
+import type { MarketSentimentTimeframe } from "@crypto-control/core";
+import { rankByPriceChange } from "../lib/marketAnalysis";
+
+type MarketFilter = "all" | "gainers" | "losers";
 
 const PERIOD_MAP: Record<Period, "1h" | "24h" | "7d" | "30d" | "1y" | "all"> = {
   "1h": "1h",
@@ -23,189 +30,269 @@ const PERIOD_MAP: Record<Period, "1h" | "24h" | "7d" | "30d" | "1y" | "all"> = {
   "all": "all",
 };
 
+const PERIOD_LABEL: Record<MarketFilter, string> = {
+  all: "Todos",
+  gainers: "Ganadoras 24h",
+  losers: "Perdedoras 24h",
+};
+
+function historyToChart(points: { time: number; value: number; source?: string; confidence?: number }[]): ChartPoint[] {
+  return points.map((point) => ({
+    time: point.time as import("lightweight-charts").Time,
+    value: point.value,
+    source: point.source,
+    confidence: point.confidence,
+  }));
+}
+
+function sourceLabelFor(provider?: string | null, isCached?: boolean, cacheStatus?: string) {
+  if (!provider || provider === "coinbase" || provider === "local") return undefined;
+  const prefix = isCached || cacheStatus === "stale" ? "Último dato válido" : "Datos";
+  if (provider === "coingecko") return `${prefix} vía CoinGecko`;
+  if (provider === "cache") return "Último dato válido";
+  return isCached || cacheStatus === "stale" ? "Último dato válido de fuente alternativa" : "Fuente alternativa";
+}
+
 export function Mercado() {
-  const [selectedAsset, setSelectedAsset] = useState<string>("BTC");
-  const [uiPeriod, setUiPeriod] = useState<Period>("24h");
+  const navigate = useNavigate();
   const [search, setSearch] = useState("");
-  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
+  const [period, setPeriod] = useState<Period>("24h");
+  const [sentimentPeriod, setSentimentPeriod] = useState<MarketSentimentTimeframe>("24h");
+  const [marketFilter, setMarketFilter] = useState<MarketFilter>("all");
 
-  const backendPeriod = PERIOD_MAP[uiPeriod];
-
-  useEffect(() => {
-    const handler = () => setIsMobile(window.innerWidth <= 768);
-    window.addEventListener("resize", handler);
-    return () => window.removeEventListener("resize", handler);
-  }, []);
-
-  const { data: assetsRes } = useQuery({
+  const { data: assetsRes, isLoading: loadingAssets } = useQuery({
     queryKey: ["assets"],
     queryFn: () => window.cryptoControl.assets.list(),
   });
 
-  const { data: priceRes } = useQuery({
-    queryKey: ["market", "price", selectedAsset],
-    queryFn: () => window.cryptoControl.market.getCurrentPrice({ assetId: selectedAsset, quoteCurrency: "EUR" }),
-    enabled: !!selectedAsset,
+  const { data: fearGreedRes, isLoading: loadingFearGreed } = useQuery({
+    queryKey: ["market", "fear-greed"],
+    queryFn: () => window.cryptoControl.market.getFearGreed(),
+    staleTime: 30 * 60 * 1000,
+    retry: 1,
   });
 
-  const { data: historyRes, isLoading: loadingHistory } = useQuery({
-    queryKey: ["market", "history", selectedAsset, backendPeriod],
-    queryFn: () => window.cryptoControl.market.getHistoricalPrices({ assetId: selectedAsset, period: backendPeriod, quoteCurrency: "EUR" }),
-    enabled: !!selectedAsset,
-  });
-
-  const { data: txsRes } = useQuery({
-    queryKey: ["transactions"],
-    queryFn: () => window.cryptoControl.transactions.list(),
+  const { data: globalMetricsRes, isLoading: loadingGlobalMetrics } = useQuery({
+    queryKey: ["market", "global-metrics"],
+    queryFn: () => window.cryptoControl.market.getGlobalMetrics(),
+    staleTime: 60 * 60 * 1000,
+    retry: 1,
   });
 
   const assets = useMemo(() => assetsRes?.ok ? assetsRes.data : [], [assetsRes]);
-  const currentPrice = priceRes?.ok ? priceRes.data.price : null;
 
-  const filteredAssets = useMemo(() => assets.filter(
-    (a: { id: string; name: string; symbol: string }) =>
-      a.name.toLowerCase().includes(search.toLowerCase()) ||
-      a.symbol.toLowerCase().includes(search.toLowerCase())
-  ), [assets, search]);
+  const searchedAssets = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return assets;
+    return assets.filter((asset: any) =>
+      asset.name.toLowerCase().includes(term) ||
+      asset.symbol.toLowerCase().includes(term)
+    );
+  }, [assets, search]);
 
-  const selectedAssetData = assets.find((a: { id: string; name: string }) => a.id === selectedAsset);
+  // Fetch 24h overview for all assets to get real price changes (mostly from local snapshot)
+  const overviewQueries = useQueries({
+    queries: assets.map((asset: any) => ({
+      queryKey: ["market", "overview", asset.id],
+      queryFn: () => window.cryptoControl.market.getOverview({ assetId: asset.id, quoteCurrency: "EUR" }),
+      enabled: !!asset.id,
+      staleTime: 5 * 60 * 1000,
+    })),
+  });
 
-  let variationPeriod: number | null = null;
-  let chartStartTime = 0;
-  if (historyRes?.ok && historyRes.data?.points.length > 0) {
-    const pts = historyRes.data.points;
-    variationPeriod = ((pts[pts.length - 1].value - pts[0].value) / pts[0].value) * 100;
-    chartStartTime = pts[0].time as number;
+  const priceChangeMap = useMemo<Record<string, number | null>>(() => {
+    const map: Record<string, number | null> = {};
+    assets.forEach((asset: any, idx: number) => {
+      const res = overviewQueries[idx]?.data;
+      map[asset.id] = res?.ok ? (res.data.change24h ?? null) : null;
+    });
+    return map;
+  }, [assets, overviewQueries]);
+
+  const filteredAssets = useMemo(() => {
+    if (marketFilter === "gainers") {
+      const gainers = rankByPriceChange(priceChangeMap, "gainers", 8);
+      const ids = new Set(gainers.map((g) => g.assetId));
+      return searchedAssets.filter((a: any) => ids.has(a.id))
+        .sort((a: any, b: any) => (priceChangeMap[b.id] ?? -Infinity) - (priceChangeMap[a.id] ?? -Infinity));
+    }
+    if (marketFilter === "losers") {
+      const losers = rankByPriceChange(priceChangeMap, "losers", 8);
+      const ids = new Set(losers.map((l) => l.assetId));
+      return searchedAssets.filter((a: any) => ids.has(a.id))
+        .sort((a: any, b: any) => (priceChangeMap[a.id] ?? Infinity) - (priceChangeMap[b.id] ?? Infinity));
+    }
+    return searchedAssets;
+  }, [marketFilter, searchedAssets, priceChangeMap]);
+
+  const selectedAsset = filteredAssets.find((asset: any) => asset.id === selectedAssetId) || filteredAssets[0] || searchedAssets[0];
+
+  const assetSentimentQuery = useQuery({
+    queryKey: ["sentiment", "asset", selectedAsset?.id, sentimentPeriod],
+    queryFn: () => window.cryptoControl.sentiment.getAsset({ assetId: selectedAsset.id, timeframe: sentimentPeriod }),
+    enabled: !!selectedAsset,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const globalSentimentQuery = useQuery({
+    queryKey: ["sentiment", "global", sentimentPeriod],
+    queryFn: () => window.cryptoControl.sentiment.getGlobal({ timeframe: sentimentPeriod }),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const { data: priceRes } = useQuery({
+    queryKey: ["market", "price", selectedAsset?.id],
+    queryFn: () => window.cryptoControl.market.getCurrentPrice({ assetId: selectedAsset.id, quoteCurrency: "EUR" }),
+    enabled: !!selectedAsset,
+    staleTime: 60 * 1000,
+  });
+
+  const { data: overviewRes } = useQuery({
+    queryKey: ["market", "overview", selectedAsset?.id],
+    queryFn: () => window.cryptoControl.market.getOverview({ assetId: selectedAsset.id, quoteCurrency: "EUR" }),
+    enabled: !!selectedAsset,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const { data: historyRes, isLoading: loadingHistory } = useQuery({
+    queryKey: ["market", "history", selectedAsset?.id, period],
+    queryFn: () => window.cryptoControl.market.getHistoricalPrices({
+      assetId: selectedAsset.id,
+      quoteCurrency: "EUR",
+      period: PERIOD_MAP[period],
+    }),
+    enabled: !!selectedAsset,
+  });
+
+  const chartData = historyRes?.ok ? historyToChart(historyRes.data.points) : [];
+  const overview = overviewRes?.ok ? overviewRes.data : null;
+  const price = overview?.price ?? (priceRes?.ok ? priceRes.data.price : null);
+  const change24h = overview?.change24h ?? null;
+  const assetSentiment = assetSentimentQuery.data?.ok ? assetSentimentQuery.data.data : null;
+  const globalSentiment = globalSentimentQuery.data?.ok ? globalSentimentQuery.data.data : null;
+  const fearGreed = fearGreedRes?.ok ? fearGreedRes.data : null;
+  const globalMetrics = globalMetricsRes?.ok ? globalMetricsRes.data : null;
+
+  // Use BTC dominance from global metrics if available (BTC asset shows "No aplica" otherwise)
+  const dominance = selectedAsset?.id === "BTC" && globalMetrics?.btcDominance != null
+    ? globalMetrics.btcDominance
+    : overview?.dominance ?? null;
+  const headerSourceLabel = sourceLabelFor(
+    overview?.provider ?? (priceRes?.ok ? priceRes.data.provider : null),
+    priceRes?.ok ? priceRes.data.state === "cached" : false
+  );
+  const chartSourceLabel = sourceLabelFor(
+    historyRes?.ok ? historyRes.data.provider : null,
+    historyRes?.ok ? historyRes.data.isCached : false,
+    historyRes?.ok ? historyRes.data.cacheStatus : undefined
+  );
+
+  if (loadingAssets) {
+    return (
+      <section className="page-stack">
+        <PageToolbar title="Mercado" meta="Cargando activos" />
+      </section>
+    );
   }
 
-  const operations = useMemo(() => {
-    if (!txsRes?.ok || !txsRes.data || !chartStartTime) return [];
-    const ops: { time: import("lightweight-charts").Time; type: string; label: string; color: string }[] = [];
-
-    for (const tx of txsRes.data) {
-      const txTimeSec = Math.floor(tx.date / 1000);
-      if (txTimeSec < chartStartTime - 86_400) continue;
-
-      for (const leg of tx.legs) {
-        if (leg.assetId !== selectedAsset) continue;
-        let type = "";
-        let label = "";
-        let color = "";
-
-        if (tx.type === "buy" && leg.legType === "destination") {
-          type = "buy"; label = `Compra ${leg.amount}`; color = "#16a34a";
-        } else if (tx.type === "sell" && leg.legType === "source") {
-          type = "sell"; label = `Venta ${Math.abs(leg.amount)}`; color = "#ef4444";
-        } else if (tx.type === "convert" && leg.legType === "destination") {
-          type = "buy"; label = `Conv. (in) ${leg.amount}`; color = "#327cff";
-        } else if (tx.type === "convert" && leg.legType === "source") {
-          type = "sell"; label = `Conv. (out) ${Math.abs(leg.amount)}`; color = "#f59e0b";
-        }
-
-        if (type) ops.push({ time: txTimeSec as import("lightweight-charts").Time, type, label, color });
-      }
-    }
-    return ops;
-  }, [txsRes, selectedAsset, chartStartTime]);
+  if (!selectedAsset) {
+    return (
+      <section className="page-stack">
+        <PageToolbar title="Mercado" />
+        <EmptyState icon={<ExternalLink size={44} />} title="Sin activos" description="No hay mercados configurados en la base de datos local." />
+      </section>
+    );
+  }
 
   return (
-    <div>
-      <h1 className="page-title">Mercado</h1>
+    <section className="page-stack market-page">
+      <PageToolbar
+        title="Mercado"
+        meta={`${PERIOD_LABEL[marketFilter]} · datos reales`}
+        actions={
+          <Button type="button" variant="secondary" onClick={() => navigate(`/activo/${selectedAsset.id}`)}>
+            Abrir detalle
+          </Button>
+        }
+      />
 
-      <div className="mercado-layout">
-        {/* Sidebar con lista de activos */}
-        <div className="mercado-sidebar">
-          <div style={{ position: "relative" }}>
-            <Search size={16} color="var(--text-muted)" style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)" }} />
-            <Input
-              type="text"
-              placeholder="Buscar activo..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              style={{ paddingLeft: "36px" }}
-            />
-          </div>
-          <div className="asset-list" style={{ marginTop: 8 }}>
-            {filteredAssets.map((a: { id: string; name: string; symbol: string; logoUrl?: string | null }) => (
-              <div
-                key={a.id}
-                className={`asset-item ${selectedAsset === a.id ? "selected" : ""}`}
-                onClick={() => setSelectedAsset(a.id)}
-              >
-                <CryptoLogo logoUrl={a.logoUrl} symbol={a.symbol} size={32} />
-                <div className="asset-info">
-                  <span className="asset-name">{a.name}</span>
-                  <span className="asset-symbol">{a.symbol}</span>
-                </div>
-              </div>
-            ))}
-            {filteredAssets.length === 0 && (
-              <EmptyState 
-                icon={<SearchX size={32} strokeWidth={1.5} />} 
-                title="Sin resultados" 
-                description="No hay activos que coincidan con la búsqueda." 
-              />
-            )}
-          </div>
+      <div className="market-mobile-selector">
+        <select className="ui-select" value={selectedAsset.id} onChange={(event) => setSelectedAssetId(event.target.value)}>
+          {filteredAssets.map((asset: any) => (
+            <option key={asset.id} value={asset.id}>{asset.name} ({asset.symbol})</option>
+          ))}
+        </select>
+        <div className="market-filter-tabs" role="group" aria-label="Filtro de mercado móvil">
+          <button type="button" className={marketFilter === "all" ? "active" : ""} onClick={() => setMarketFilter("all")}>Todos</button>
+          <button type="button" className={marketFilter === "gainers" ? "active" : ""} onClick={() => setMarketFilter("gainers")}>Ganadoras</button>
+          <button type="button" className={marketFilter === "losers" ? "active" : ""} onClick={() => setMarketFilter("losers")}>Perdedoras</button>
         </div>
-
-        {/* Panel principal */}
-        <Card className="mercado-main" style={{ padding: 0, overflow: "hidden" }}>
-          <CardHeader>
-            <div className="market-header" style={{ marginBottom: 0 }}>
-              <h2 style={{ fontSize: "20px", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
-                {selectedAssetData?.name ?? selectedAsset}
-              </h2>
-              {typeof currentPrice === "number" && Number.isFinite(currentPrice) && (
-                <div className="current-price">
-                  <PriceDisplay value={currentPrice} className="price-value" style={{ fontSize: "24px", fontWeight: 700, letterSpacing: "-0.02em" }} />
-                  {variationPeriod !== null && (
-                    <span className={`asset-change ${variationPeriod >= 0 ? "text-positive" : "text-negative"}`}>
-                      {variationPeriod >= 0 ? "+" : ""}{variationPeriod.toFixed(2)}%
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
-          </CardHeader>
-
-          <CardContent style={{ flex: 1, display: "flex", flexDirection: "column" }}>
-            <div style={{ flex: 1, minHeight: 0 }}>
-              {loadingHistory ? (
-                <div style={{ height: isMobile ? 260 : 400, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <LoadingState message="Cargando datos de mercado..." />
-                </div>
-              ) : historyRes?.ok && historyRes.data ? (
-                <ErrorBoundary>
-                  <MarketChart
-                    data={historyRes.data.points.map((p: { time: number; value: number }) => ({
-                      time: p.time as import("lightweight-charts").Time,
-                      value: p.value,
-                    }))}
-                    operations={operations}
-                    provider={historyRes.data.provider}
-                    isCached={historyRes.data.isCached}
-                    height={isMobile ? 260 : 400}
-                  />
-                </ErrorBoundary>
-              ) : (
-                <div style={{ height: isMobile ? 260 : 400, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <ErrorState
-                    message="No se pudo cargar la gráfica del mercado."
-                  />
-                </div>
-              )}
-            </div>
-
-            <div style={{ marginTop: "16px" }}>
-              <PeriodSelector
-                value={uiPeriod}
-                onChange={setUiPeriod}
-              />
-            </div>
-          </CardContent>
-        </Card>
       </div>
-    </div>
+
+      <div className="market-workbench">
+        <MarketSidebar
+          assets={filteredAssets}
+          search={search}
+          filter={marketFilter}
+          selectedId={selectedAsset.id}
+          onSearch={setSearch}
+          onFilter={setMarketFilter}
+          onSelect={(asset) => setSelectedAssetId(asset.id)}
+          priceChanges={priceChangeMap}
+        />
+        <div className="market-main-panel">
+          <MarketHeader
+            asset={selectedAsset}
+            price={price}
+            change24h={change24h}
+            high24h={overview?.high24h}
+            low24h={overview?.low24h}
+            volume24h={overview?.volume24h}
+            marketCap={overview?.marketCap}
+            dominance={dominance}
+            sourceLabel={headerSourceLabel}
+          />
+          <MarketChartPanel
+            data={chartData}
+            period={period}
+            onPeriodChange={setPeriod}
+            loading={loadingHistory}
+            error={historyRes && !historyRes.ok ? historyRes.error.message : undefined}
+            sourceLabel={chartSourceLabel}
+          />
+        </div>
+      </div>
+
+      <div className="market-macro-grid">
+        <FearGreedCard
+          fearGreed={fearGreed}
+          loading={loadingFearGreed}
+          error={fearGreedRes && !fearGreedRes.ok ? fearGreedRes.error.message : undefined}
+        />
+        <GlobalMetricsCard
+          metrics={globalMetrics}
+          loading={loadingGlobalMetrics}
+        />
+        <TopAssetsPanel
+          assets={assets}
+          priceChanges={priceChangeMap}
+          period="24h"
+        />
+      </div>
+
+      <div className="market-insight-grid">
+        <MarketSentimentSection
+          assetName={selectedAsset.name}
+          assetSymbol={selectedAsset.symbol}
+          timeframe={sentimentPeriod}
+          onTimeframeChange={setSentimentPeriod}
+          assetSentiment={assetSentiment}
+          globalSentiment={globalSentiment}
+          assetLoading={assetSentimentQuery.isLoading}
+          globalLoading={globalSentimentQuery.isLoading}
+        />
+      </div>
+    </section>
   );
 }

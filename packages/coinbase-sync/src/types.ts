@@ -56,6 +56,14 @@ export interface CoinbaseSyncResult {
   itemsProcessed: number;
   newTransactions: number;
   skippedDuplicates: number;
+  durationMs?: number;
+  accountsConsulted?: number;
+  pagesDownloaded?: number;
+  transactionsDownloaded?: number;
+  fillsDownloaded?: number;
+  updatedTransactions?: number;
+  pendingValuations?: number;
+  errors?: string[];
 }
 
 export interface KeyPermissionsResponse {

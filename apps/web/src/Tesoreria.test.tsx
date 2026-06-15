@@ -1,0 +1,139 @@
+import { describe, expect, test, beforeEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
+import { Tesoreria } from "./pages/Tesoreria";
+
+function renderWithQuery(ui: React.ReactElement) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>{ui}</MemoryRouter>
+    </QueryClientProvider>
+  );
+}
+
+function ok<T>(data: T) {
+  return Promise.resolve({ ok: true as const, data });
+}
+
+beforeEach(() => {
+  const now = Date.now();
+  window.cryptoControl = {
+    assets: { list: () => ok([]) },
+    market: {
+      getCurrentPrice: () => ok({ price: null, state: "unavailable" as const, provider: "mock", fetchedAt: now }),
+      getHistoricalPrices: () => ok({ points: [], provider: "mock", requestedPeriod: "24h", actualInterval: "1h", fetchedAt: now, isCached: false }),
+      getOverview: () => ok({ price: null, change24h: null, high24h: null, low24h: null, volume24h: null, volumeChange24h: null, marketCap: null, dominance: null, fetchedAt: null, provider: "mock" }),
+      getFearGreed: () => ok({ value: 50, label: "Neutral", timestamp: now, fetchedAt: now, isCached: false }),
+      getGlobalMetrics: () => ok({ btcDominance: null, totalMarketCapUsd: null, fetchedAt: now, isCached: false }),
+    },
+    portfolio: {
+      getSummary: () => ok({ totalValueEur: 0, totalInvestedEur: 0, unrealizedGainEur: 0, unrealizedGainPercentage: 0, valuationStatus: "empty" as const, valuedAssets: 0, unavailableAssets: 0, lastSuccessfulPriceAt: null }),
+      getPositions: () => ok({}),
+      getAllocation: () => ok([]),
+      getRealizedGains: () => ok([]),
+      getFifoLots: () => ok([]),
+      getHistoricalSeries: () => ok({ points: [], meta: { txCount: 0, pricePoints: 0, assetsTracked: [] } }),
+    },
+    transactions: {
+      list: () => ok([]),
+      create: () => ok({}),
+      update: () => ok(null),
+      delete: () => ok(null),
+    },
+    settings: {
+      get: () => ok(null),
+      update: () => ok(null),
+    },
+    coinbase: {
+      importCredentialsFile: () => ok({ connected: false, canceled: true, keyDisplayName: "", algorithm: "ES256" as const, permissions: { canView: false, canTrade: false, canTransfer: false } }),
+      connectFromJson: () => ok({ connected: true, keyDisplayName: "", algorithm: "ES256" as const, permissions: { canView: true, canTrade: false, canTransfer: false } }),
+      connect: () => ok({ connected: true }),
+      disconnect: () => ok(null),
+      getStatus: () => ok({ connected: false, lastSyncAt: null, lastSyncItemsProcessed: null, lastSyncStatus: null, lastSyncError: null }),
+      sync: () => ok({ itemsProcessed: 0, newTransactions: 0, skippedDuplicates: 0 }),
+      getSyncHistory: () => ok([]),
+      listPortfolios: () => ok([]),
+      getPortfolioBreakdown: () => ok({}),
+      getPortfolioSnapshots: () => ok([]),
+    },
+    sentiment: {
+      getGlobal: () => ok({ scope: "global" as const, direction: "neutral" as const, score: 0, confidence: 0, timeframe: "24h" as const, factors: [], sourceSummary: [], calculatedAt: now, validUntil: null, state: "unavailable" as const }),
+      getAsset: () => ok({ scope: "asset" as const, assetId: "BTC", direction: "neutral" as const, score: 0, confidence: 0, timeframe: "24h" as const, factors: [], sourceSummary: [], calculatedAt: now, validUntil: null, state: "unavailable" as const }),
+      getHistory: () => ok([]),
+      refresh: () => ok({ scope: "global" as const, direction: "neutral" as const, score: 0, confidence: 0, timeframe: "24h" as const, factors: [], sourceSummary: [], calculatedAt: now, validUntil: null, state: "unavailable" as const }),
+    },
+    targets: {
+      list: () => ok([]),
+      upsert: () => ok({ id: "mock-target" }),
+      delete: () => ok(null),
+    },
+    alerts: {
+      list: () => ok([]),
+      create: () => ok({ id: "mock-alert" }),
+      delete: () => ok(null),
+      toggle: () => ok(null),
+    },
+    investmentPlan: {
+      list: () => ok([]),
+      getActive: () => ok(null),
+      create: () => ok({ id: "mock-plan" }),
+      update: () => ok({ id: "mock-plan", name: "Plan", status: "active" as const, baseCurrency: "EUR", notes: null, createdAt: 0, updatedAt: 0 }),
+      delete: () => ok(null),
+    },
+    investmentCycles: {
+      list: () => ok([]),
+      getCurrent: async () => ({ ok: true as const, data: null }),
+      create: () => ok({ id: "mock-cycle" }),
+      update: () => ok({ id: "mock-cycle", planId: "mock-plan", name: "Ciclo", startDate: 0, endDate: null, monthlyAmountEur: 100, contributionCurrency: "EUR", status: "planned" as const, priority: 0, notes: null, createdAt: 0, updatedAt: 0 }),
+      delete: () => ok(null),
+    },
+    investmentAssets: {
+      list: () => ok([]),
+      create: () => ok({ id: "mock-investment-asset" }),
+      update: () => ok({ id: "mock-investment-asset", cycleId: "mock-cycle", assetId: "BTC", allocationType: "percentage" as const, allocationValue: 50, allocationPercentage: 50, fixedAmountEur: null, priority: 0, targetAmount: null, targetValueEur: null, targetPortfolioPercentage: null, startDate: 0, endDate: null, status: "active" as const, isActive: true, notes: null, createdAt: 0, updatedAt: 0 }),
+      pause: async () => ({ ok: true as const, data: { id: "mock-investment-asset", cycleId: "mock-cycle", assetId: "BTC", allocationType: "percentage" as const, allocationValue: 50, allocationPercentage: 50, fixedAmountEur: null, priority: 0, targetAmount: null, targetValueEur: null, targetPortfolioPercentage: null, startDate: 0, endDate: null, status: "paused" as const, isActive: false, notes: null, createdAt: 0, updatedAt: 0 } }),
+      close: async () => ({ ok: true as const, data: { id: "mock-investment-asset", cycleId: "mock-cycle", assetId: "BTC", allocationType: "percentage" as const, allocationValue: 50, allocationPercentage: 50, fixedAmountEur: null, priority: 0, targetAmount: null, targetValueEur: null, targetPortfolioPercentage: null, startDate: 0, endDate: null, status: "closed" as const, isActive: false, notes: null, createdAt: 0, updatedAt: 0 } }),
+      delete: () => ok(null),
+    },
+    strategyRevisions: {
+      list: () => ok([]),
+      create: () => ok({ id: "mock-revision" }),
+    },
+    treasury: {
+      getSummary: () => ok({
+        cashBalance: 100,
+        eurcBalance: 80,
+        fiscalReserveBalance: 20,
+        totalLiquidity: 200,
+        freeRebuyLiquidity: 80,
+        allocatedToRebuy: 0,
+        recommendedFiscalReserve: 30,
+        pendingEstimatedTaxes: 10,
+        updatedAt: now,
+      }),
+      listMovements: () => ok([]),
+      createMovement: () => ok({ id: "mock-treasury-movement" }),
+      updateMovement: () => ok({ id: "mock-treasury-movement", date: now, type: "efectivo_entrada" as const, sourceAccountType: null, destinationAccountType: "cash" as const, amount: 1, currency: "EUR", reason: "Mock", referenceType: null, referenceId: null, notes: null, createdAt: now, updatedAt: now }),
+      deleteMovement: () => ok(null),
+      setFiscalReserve: () => ok({ cashBalance: 100, eurcBalance: 80, fiscalReserveBalance: 20, totalLiquidity: 200, freeRebuyLiquidity: 80, allocatedToRebuy: 0, recommendedFiscalReserve: 30, pendingEstimatedTaxes: 10, updatedAt: now }),
+      allocateEurcToRebuy: () => ok({ id: "mock-allocation" }),
+    },
+  };
+});
+
+describe("Tesorería", () => {
+  test("renderiza resumen y estado sin movimientos", async () => {
+    renderWithQuery(<Tesoreria />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Tesorería")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Efectivo disponible/i)).toBeInTheDocument();
+    expect(screen.getByText(/EURC disponible/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Reserva fiscal/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Libre para recompras/i)).toBeInTheDocument();
+    expect(screen.getByText(/Sin movimientos de tesorería registrados/i)).toBeInTheDocument();
+  });
+});

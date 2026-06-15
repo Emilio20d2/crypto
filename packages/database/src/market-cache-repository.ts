@@ -3,10 +3,16 @@ import { getDb } from "./db";
 import { priceHistory } from "./schema";
 import { and, eq, gte, desc, asc, sql } from "drizzle-orm";
 
+function confidenceForProvider(provider: string): number {
+  if (provider === "coinbase") return 1;
+  if (provider === "coingecko") return 0.9;
+  return 0.6;
+}
+
 export class DatabaseMarketCacheRepository implements MarketCacheRepository {
   constructor(private db: ReturnType<typeof getDb>) {}
 
-  async getHistoricalPrices(assetId: string, quoteCurrency: string, period: string): Promise<HistoricalPriceData[] | null> {
+  async getHistoricalPrices(assetId: string, quoteCurrency: string, period: string, options?: { allowStale?: boolean }): Promise<HistoricalPriceData[] | null> {
     // Check if we have recent enough data for this period
     // Since "period" is just a label (like "1h", "24h"), we query by interval = period.
     // If the latest fetched data is old, we might want to return null to force a refetch.
@@ -33,13 +39,15 @@ export class DatabaseMarketCacheRepository implements MarketCacheRepository {
     if (period === "7d" || period === "30d") maxAge = 3600000; // 1 hour
     else if (period === "1y" || period === "all") maxAge = 86400000; // 1 day
 
-    if (now - latestRow.fetchedAt > maxAge) {
+    if (!options?.allowStale && now - latestRow.fetchedAt > maxAge) {
       return null; // Stale cache
     }
 
     return rows.map(r => ({
       timestamp: r.timestamp,
-      price: r.price
+      price: r.price,
+      source: r.provider,
+      confidence: confidenceForProvider(r.provider)
     }));
   }
 
@@ -72,7 +80,7 @@ export class DatabaseMarketCacheRepository implements MarketCacheRepository {
     }
   }
 
-  async getCurrentPrice(assetId: string, quoteCurrency: string): Promise<{ price: number; fetchedAt: number; provider: string } | null> {
+  async getCurrentPrice(assetId: string, quoteCurrency: string, _options?: { allowStale?: boolean }): Promise<{ price: number; fetchedAt: number; provider: string } | null> {
     const rows = await this.db.select()
       .from(priceHistory)
       .where(

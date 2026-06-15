@@ -31,13 +31,10 @@ export class ErrorBoundary extends Component<Props, State> {
         <div className="error-container">
           <h1 className="error-title">Ha ocurrido un error inesperado</h1>
           <p>La aplicación no pudo cargar correctamente esta vista.</p>
-          <pre style={{ background: "#F3F4F6", padding: 16, borderRadius: 8, marginTop: 16, textAlign: "left" }}>
+          <pre className="error-debug">
             {this.state.errorMsg}
           </pre>
-          <button 
-            onClick={() => window.location.reload()}
-            style={{ marginTop: 24, padding: "10px 20px", background: "var(--brand-primary)", color: "white", border: "none", borderRadius: "var(--radius-md)", cursor: "pointer" }}
-          >
+          <button className="ui-button ui-button-primary" onClick={() => window.location.reload()}>
             Recargar aplicación
           </button>
         </div>
