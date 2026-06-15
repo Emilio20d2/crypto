@@ -217,8 +217,8 @@ describe("Cartera Coinbase", () => {
       expect(screen.getAllByText("Toncoin").length).toBeGreaterThan(0);
     });
 
-    expect(screen.getAllByText(/Invertido Coinbase/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Coste medio Coinbase/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/^Invertido$/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/^Coste medio$/i).length).toBeGreaterThan(0);
     expect(screen.queryByText(/FIFO/i)).not.toBeInTheDocument();
   });
 });
