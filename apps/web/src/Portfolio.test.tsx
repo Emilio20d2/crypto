@@ -46,7 +46,8 @@ beforeEach(() => {
       getHistoricalPrices: () => ok({ points: [], provider: "mock", requestedPeriod: "24h", actualInterval: "1h", fetchedAt: now, isCached: false }),
       getOverview: () => ok({ price: null, change24h: null, high24h: null, low24h: null, volume24h: null, volumeChange24h: null, marketCap: null, dominance: null, fetchedAt: null, provider: "mock" }),
       getFearGreed: () => ok({ value: 50, label: "Neutral", timestamp: now, fetchedAt: now, isCached: false }),
-      getGlobalMetrics: () => ok({ btcDominance: null, totalMarketCapUsd: null, fetchedAt: now, isCached: false }),
+      getGlobalMetrics: () => ok({ btcDominance: null, ethDominance: null, totalMarketCapUsd: null, totalVolumeUsd: null, marketCapChangePercentage24h: null, fetchedAt: now, isCached: false }),
+      getCryptoControlIndex: async () => ({ ok: true as const, data: { phase: null, confidence: "baja" as const, indicatorsUsed: [], indicatorsUnavailable: [], reasoning: "mock", calculatedAt: Date.now() } }),
     },
     settings: {
       get: () => ok(null),
@@ -177,6 +178,10 @@ beforeEach(() => {
       delete: () => ok(null),
     },
     investmentCycles: {
+      getMetrics: async () => ({ ok: true as const, data: { cycleId: "mock-cycle", monthsElapsed: 0, monthsRemaining: null, percentComplete: null, expectedContributionMonthly: 0, expectedContributionAnnual: 0, expectedContributionToDate: 0, expectedContributionTotal: null, actualContribution: 0, contributionDifference: 0, extraContribution: 0, monthlyContributions: [], currentValueEur: 0, heldCostBasisEur: 0, profitEur: 0, roiPercentage: null, hasPendingValuation: false } }),
+      listPartialSales: async () => ({ ok: true as const, data: [] }),
+      createPartialSale: async () => ({ ok: true as const, data: { id: "mock-sale", cycleId: "mock-cycle", transactionId: "mock-tx", assetId: "BTC", percentageOfHolding: 10, proceedsEur: 100, date: 0, notes: null, createdAt: 0 } }),
+      deletePartialSale: async () => ({ ok: true as const, data: null }),
       list: () => ok([]),
       getCurrent: async () => ({ ok: true as const, data: null }),
       create: () => ok({ id: "mock-cycle" }),
@@ -184,6 +189,7 @@ beforeEach(() => {
       delete: () => ok(null),
     },
     investmentAssets: {
+      getHealth: async () => ({ ok: true as const, data: { status: "activo" as const, relativeStrengthVsBtc: null, strongEntrySignal: false, reasoning: "mock", signalsUsed: [], signalsUnavailable: [] } }),
       list: () => ok([]),
       create: () => ok({ id: "mock-investment-asset" }),
       update: () => ok({ id: "mock-investment-asset", cycleId: "mock-cycle", assetId: "BTC", allocationType: "percentage" as const, allocationValue: 50, allocationPercentage: 50, fixedAmountEur: null, priority: 0, targetAmount: null, targetValueEur: null, targetPortfolioPercentage: null, startDate: 0, endDate: null, status: "active" as const, isActive: true, notes: null, createdAt: 0, updatedAt: 0 }),
@@ -196,12 +202,15 @@ beforeEach(() => {
       create: () => ok({ id: "mock-revision" }),
     },
     treasury: {
-      getSummary: () => ok({ cashBalance: 0, eurcBalance: 0, fiscalReserveBalance: 0, totalLiquidity: 0, freeRebuyLiquidity: 0, allocatedToRebuy: 0, recommendedFiscalReserve: 0, pendingEstimatedTaxes: 0, updatedAt: 0 }),
+      allocateCashToRebuy: async () => ({ ok: true as const, data: { id: "mock-allocation" } }),
+      listCycleLiquidity: async () => ({ ok: true as const, data: [] }),
+      listFiscalReserveMovements: async () => ({ ok: true as const, data: [] }),
+      getSummary: () => ok({ cashBalance: 0, eurcBalance: 0, fiscalReserveBalance: 0, totalLiquidity: 0, freeRebuyLiquidity: 0, allocatedToRebuy: 0, freeCashForRebuy: 0, allocatedCashToRebuy: 0, recommendedFiscalReserve: 0, pendingEstimatedTaxes: 0, updatedAt: 0 }),
       listMovements: () => ok([]),
       createMovement: () => ok({ id: "mock-treasury-movement" }),
       updateMovement: () => ok({ id: "mock-treasury-movement", date: 0, type: "efectivo_entrada" as const, sourceAccountType: null, destinationAccountType: "cash" as const, amount: 0.01, currency: "EUR", reason: "Mock", referenceType: null, referenceId: null, notes: null, createdAt: 0, updatedAt: 0 }),
       deleteMovement: () => ok(null),
-      setFiscalReserve: () => ok({ cashBalance: 0, eurcBalance: 0, fiscalReserveBalance: 0, totalLiquidity: 0, freeRebuyLiquidity: 0, allocatedToRebuy: 0, recommendedFiscalReserve: 0, pendingEstimatedTaxes: 0, updatedAt: 0 }),
+      setFiscalReserve: () => ok({ cashBalance: 0, eurcBalance: 0, fiscalReserveBalance: 0, totalLiquidity: 0, freeRebuyLiquidity: 0, allocatedToRebuy: 0, freeCashForRebuy: 0, allocatedCashToRebuy: 0, recommendedFiscalReserve: 0, pendingEstimatedTaxes: 0, updatedAt: 0 }),
       allocateEurcToRebuy: () => ok({ id: "mock-allocation" }),
     },
   };
@@ -220,5 +229,98 @@ describe("Cartera Coinbase", () => {
     expect(screen.getAllByText(/^Invertido$/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/^Coste medio$/i).length).toBeGreaterThan(0);
     expect(screen.queryByText(/FIFO/i)).not.toBeInTheDocument();
+  });
+
+  test("un activo con balance > 0 no desaparece aunque no tenga precio ni coste de Coinbase", async () => {
+    const now = Date.now();
+    window.cryptoControl.coinbase.getPortfolioBreakdown = () =>
+      ok({
+        portfolio: { uuid: "portfolio-1", name: "Default", type: "default", deleted: false },
+        balances: { totalBalance: null, totalCryptoBalance: null, totalCashEquivalentBalance: null, totalFuturesBalance: null, futuresUnrealizedPnl: null, perpUnrealizedPnl: null },
+        positions: [
+          {
+            asset: "SEI",
+            assetUuid: null,
+            accountUuid: "sei-account",
+            totalBalanceFiat: null,
+            totalBalanceCrypto: 779.45,
+            allocation: null,
+            costBasis: null,
+            averageEntryPrice: null,
+            unrealizedPnl: null,
+            fundingPnl: null,
+            availableToTradeFiat: null,
+            availableToTradeCrypto: null,
+            availableToTransferFiat: null,
+            availableToTransferCrypto: null,
+            availableToSendFiat: null,
+            availableToSendCrypto: null,
+            assetImageUrl: null,
+            assetColor: null,
+            isCash: false,
+            accountType: "exchange",
+            market: null,
+            sparkline: [],
+          },
+        ],
+        capturedAt: now,
+        currency: "EUR" as const,
+        source: "coinbase" as const,
+        state: "live" as const,
+      });
+
+    renderWithQuery(<Portfolio />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("SEI").length).toBeGreaterThan(0);
+    });
+    // Sin coste ni precio: debe mostrarse como "Pendiente", nunca ocultarse ni mostrar un 0 falso.
+    expect(screen.getAllByText(/^Pendiente$/i).length).toBeGreaterThan(0);
+  });
+
+  test("EURC no aparece como posición cripto en la Cartera", async () => {
+    const now = Date.now();
+    window.cryptoControl.coinbase.getPortfolioBreakdown = () =>
+      ok({
+        portfolio: { uuid: "portfolio-1", name: "Default", type: "default", deleted: false },
+        balances: { totalBalance: null, totalCryptoBalance: null, totalCashEquivalentBalance: null, totalFuturesBalance: null, futuresUnrealizedPnl: null, perpUnrealizedPnl: null },
+        positions: [
+          {
+            asset: "EURC",
+            assetUuid: null,
+            accountUuid: "eurc-account",
+            totalBalanceFiat: 0.04,
+            totalBalanceCrypto: 0.0395,
+            allocation: null,
+            costBasis: { value: 0.04, currency: "EUR" },
+            averageEntryPrice: null,
+            unrealizedPnl: 0,
+            fundingPnl: null,
+            availableToTradeFiat: null,
+            availableToTradeCrypto: null,
+            availableToTransferFiat: null,
+            availableToTransferCrypto: null,
+            availableToSendFiat: null,
+            availableToSendCrypto: null,
+            assetImageUrl: null,
+            assetColor: null,
+            isCash: true,
+            accountType: "exchange",
+            market: null,
+            sparkline: [],
+          },
+        ],
+        capturedAt: now,
+        currency: "EUR" as const,
+        source: "coinbase" as const,
+        state: "live" as const,
+      });
+
+    renderWithQuery(<Portfolio />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Posiciones")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("EURC")).not.toBeInTheDocument();
   });
 });

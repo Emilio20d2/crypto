@@ -6,10 +6,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "./Card";
 import { SegmentedControl } from "./SegmentedControl";
 import { formatDateTime } from "../lib/format";
 
+// Misma nomenclatura que el resto de selectores de intervalo de la app.
 const TIMEFRAME_OPTIONS: { value: MarketSentimentTimeframe; label: string }[] = [
-  { value: "24h", label: "24 h" },
-  { value: "7d", label: "7 d" },
-  { value: "30d", label: "30 d" },
+  { value: "24h", label: "1d" },
+  { value: "7d", label: "1s" },
+  { value: "30d", label: "1m" },
 ];
 
 const DIRECTION_LABEL: Record<MarketSentimentDirection, string> = {

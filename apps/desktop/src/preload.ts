@@ -7,10 +7,12 @@ import type {
   CreateStrategyRevisionInput,
   CreateTreasuryMovementInput,
   CreateTransactionInput,
+  CreatePartialSaleInput,
   FullCryptoControlAPI,
   InvestmentAssetStateChangeInput,
   SetFiscalReserveInput,
   AllocateEurcToRebuyInput,
+  AllocateCashToRebuyInput,
   UpdateInvestmentAssetInput,
   UpdateInvestmentCycleInput,
   UpdateInvestmentPlanInput,
@@ -27,7 +29,7 @@ const cryptoControl: FullCryptoControlAPI = {
     getAllocation:      () => ipcRenderer.invoke("portfolio:get-allocation"),
     getRealizedGains:     () => ipcRenderer.invoke("portfolio:get-realized-gains"),
     getFifoLots:          () => ipcRenderer.invoke("portfolio:get-fifo-lots"),
-    getHistoricalSeries:  () => ipcRenderer.invoke("portfolio:get-historical-series"),
+    getHistoricalSeries:  (input?: { period?: string }) => ipcRenderer.invoke("portfolio:get-historical-series", input),
   },
   transactions: {
     list:   ()                                     => ipcRenderer.invoke("transactions:list"),
@@ -41,6 +43,7 @@ const cryptoControl: FullCryptoControlAPI = {
     getOverview:        (input: { assetId: string; quoteCurrency: string })                    => ipcRenderer.invoke("market:get-overview", input),
     getFearGreed:       ()                                                                      => ipcRenderer.invoke("market:get-fear-greed"),
     getGlobalMetrics:   ()                                                                      => ipcRenderer.invoke("market:get-global-metrics"),
+    getCryptoControlIndex: ()                                                                   => ipcRenderer.invoke("market:getCryptoControlIndex"),
   },
   settings: {
     get:    (key: string)               => ipcRenderer.invoke("settings:get", key),
@@ -88,6 +91,10 @@ const cryptoControl: FullCryptoControlAPI = {
     create: (data: CreateInvestmentCycleInput)                => ipcRenderer.invoke("investmentCycles:create", data),
     update: (id: string, data: UpdateInvestmentCycleInput)     => ipcRenderer.invoke("investmentCycles:update", id, data),
     delete: (id: string)                                      => ipcRenderer.invoke("investmentCycles:delete", id),
+    getMetrics: (input: { cycleId: string })                  => ipcRenderer.invoke("investmentCycles:getMetrics", input),
+    listPartialSales:   (input?: { cycleId?: string })        => ipcRenderer.invoke("investmentCycles:listPartialSales", input),
+    createPartialSale:  (data: CreatePartialSaleInput)        => ipcRenderer.invoke("investmentCycles:createPartialSale", data),
+    deletePartialSale:  (id: string)                          => ipcRenderer.invoke("investmentCycles:deletePartialSale", id),
   },
   investmentAssets: {
     list:   (input?: { cycleId?: string })                    => ipcRenderer.invoke("investmentAssets:list", input),
@@ -96,6 +103,7 @@ const cryptoControl: FullCryptoControlAPI = {
     pause:  (id: string, data?: InvestmentAssetStateChangeInput) => ipcRenderer.invoke("investmentAssets:pause", id, data),
     close:  (id: string, data?: InvestmentAssetStateChangeInput) => ipcRenderer.invoke("investmentAssets:close", id, data),
     delete: (id: string)                                      => ipcRenderer.invoke("investmentAssets:delete", id),
+    getHealth: (input: { assetId: string })                  => ipcRenderer.invoke("investmentAssets:getHealth", input),
   },
   strategyRevisions: {
     list:   (input?: { cycleId?: string })                    => ipcRenderer.invoke("strategyRevisions:list", input),
@@ -109,6 +117,9 @@ const cryptoControl: FullCryptoControlAPI = {
     deleteMovement:       (id: string)                            => ipcRenderer.invoke("treasury:deleteMovement", id),
     setFiscalReserve:     (data: SetFiscalReserveInput)           => ipcRenderer.invoke("treasury:setFiscalReserve", data),
     allocateEurcToRebuy:  (data: AllocateEurcToRebuyInput)        => ipcRenderer.invoke("treasury:allocateEurcToRebuy", data),
+    allocateCashToRebuy:  (data: AllocateCashToRebuyInput)        => ipcRenderer.invoke("treasury:allocateCashToRebuy", data),
+    listCycleLiquidity:   (input?: { cycleId?: string; status?: "reserved" | "used" | "released" }) => ipcRenderer.invoke("treasury:listCycleLiquidity", input),
+    listFiscalReserveMovements: (input?: { realizedGainIds?: string[] }) => ipcRenderer.invoke("treasury:listFiscalReserveMovements", input),
   },
 };
 

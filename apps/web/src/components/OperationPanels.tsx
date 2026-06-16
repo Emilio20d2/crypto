@@ -1,4 +1,4 @@
-import { KeyRound, Trash2 } from "lucide-react";
+import { KeyRound, Pencil, Trash2 } from "lucide-react";
 import { TxBadge } from "./Badge";
 import { Button } from "./Button";
 import { LocalAssetLogo } from "./LocalAssetLogo";
@@ -40,12 +40,14 @@ export function OperationRow({
   assets,
   selected,
   onSelect,
+  onEdit,
   onDelete,
 }: {
   tx: any;
   assets: any[];
   selected?: boolean;
   onSelect: () => void;
+  onEdit: () => void;
   onDelete: () => void;
 }) {
   const source = tx.legs.find((leg: any) => leg.legType === "source");
@@ -95,9 +97,14 @@ export function OperationRow({
           <div><dt>Exchange</dt><dd>{sourceLabel}</dd></div>
         </dl>
       </button>
-      <button type="button" className="icon-button operation-delete" onClick={onDelete} title="Eliminar operación">
-        <Trash2 size={16} />
-      </button>
+      <span className="operation-card-actions">
+        <button type="button" className="icon-button" onClick={onEdit} title="Editar operación">
+          <Pencil size={16} />
+        </button>
+        <button type="button" className="icon-button operation-delete" onClick={onDelete} title="Eliminar operación">
+          <Trash2 size={16} />
+        </button>
+      </span>
     </article>
   );
 }
@@ -167,12 +174,14 @@ export function OperationList({
   assets,
   selectedId,
   onSelect,
+  onEdit,
   onDelete,
 }: {
   transactions: any[];
   assets: any[];
   selectedId?: string | null;
   onSelect: (id: string) => void;
+  onEdit: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
   return (
@@ -184,6 +193,7 @@ export function OperationList({
           assets={assets}
           selected={tx.id === selectedId}
           onSelect={() => onSelect(tx.id)}
+          onEdit={() => onEdit(tx.id)}
           onDelete={() => onDelete(tx.id)}
         />
       ))}

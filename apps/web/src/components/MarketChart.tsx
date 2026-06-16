@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AreaSeries, CrosshairMode, createChart, createSeriesMarkers } from "lightweight-charts";
+import { AreaSeries, CrosshairMode, TickMarkType, createChart, createSeriesMarkers } from "lightweight-charts";
 import type { CSSProperties } from "react";
 import type { IChartApi, ISeriesApi, ISeriesMarkersPluginApi, Time } from "lightweight-charts";
 
@@ -56,13 +56,27 @@ function toSeconds(time: Time | null | undefined) {
   return null;
 }
 
+// lightweight-charts always renders its time axis in UTC — it has no
+// timezone option. Real timestamps are correct UTC seconds everywhere else
+// in the app (transactions, Fiscalidad, etc.); only the values fed to this
+// chart need shifting by the local offset so the UTC-rendered axis labels
+// happen to show local (Europe/Madrid) wall-clock numbers. Anything read
+// back out of the chart (crosshair/tooltip) must be un-shifted before it's
+// used for lookups against real data or displayed via toLocaleString.
+const LOCAL_OFFSET_SECONDS = -new Date().getTimezoneOffset() * 60;
+const toDisplaySeconds = (real: number) => real + LOCAL_OFFSET_SECONDS;
+const toRealSeconds = (display: number) => display - LOCAL_OFFSET_SECONDS;
+
 function sanitizeData(data: ChartPoint[]) {
   const map = new Map<number, ChartPoint>();
 
   for (const point of data) {
     const seconds = toSeconds(point.time);
-    if (seconds === null || seconds <= 0 || !Number.isFinite(point.value) || point.value <= 0) continue;
-    map.set(seconds, { ...point, time: seconds as Time });
+    // value === 0 is legitimate (the cartera before its first operation) —
+    // only negative/non-finite values are actually invalid.
+    if (seconds === null || seconds <= 0 || !Number.isFinite(point.value) || point.value < 0) continue;
+    const displaySeconds = toDisplaySeconds(seconds);
+    map.set(displaySeconds, { ...point, time: displaySeconds as Time });
   }
 
   return Array.from(map.values()).sort((a, b) => (toSeconds(a.time) ?? 0) - (toSeconds(b.time) ?? 0));
@@ -89,6 +103,7 @@ export function MarketChart({
   const seriesRef = useRef<ISeriesApi<"Area"> | null>(null);
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const pointLookupRef = useRef<Map<number, ChartPoint>>(new Map());
+  const spanSecondsRef = useRef(0);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
 
   const sanitized = useMemo(() => sanitizeData(data), [data]);
@@ -104,6 +119,16 @@ export function MarketChart({
   useEffect(() => {
     pointLookupRef.current = pointLookup;
   }, [pointLookup]);
+
+  useEffect(() => {
+    if (sanitized.length < 2) {
+      spanSecondsRef.current = 0;
+      return;
+    }
+    const first = toSeconds(sanitized[0].time) ?? 0;
+    const last = toSeconds(sanitized[sanitized.length - 1].time) ?? 0;
+    spanSecondsRef.current = last - first;
+  }, [sanitized]);
 
   useEffect(() => {
     const container = chartContainerRef.current;
@@ -132,7 +157,36 @@ export function MarketChart({
         borderVisible: false,
         timeVisible: true,
         secondsVisible: false,
+        // lightweight-charts infers tick type (Year/Month/DayOfMonth/Time)
+        // from whether a point happens to land on a calendar boundary —
+        // our points are evenly spaced by step, not snapped to midnight, so
+        // for long ranges (weeks/months/a year) most ticks got assigned
+        // "Time" and showed bare hours mixed with the occasional date. Once
+        // the visible range spans more than ~2 days, always render a date
+        // (never a bare hour) regardless of the type lightweight-charts picked.
+        tickMarkFormatter: (time: Time, tickMarkType: TickMarkType) => {
+          const seconds = toSeconds(time);
+          if (seconds === null) return "";
+          const date = new Date(seconds * 1000);
+          const longRange = spanSecondsRef.current > 2 * 24 * 60 * 60;
+          if (!longRange && (tickMarkType === TickMarkType.Time || tickMarkType === TickMarkType.TimeWithSeconds)) {
+            return date.toLocaleTimeString("es-ES", { timeZone: "UTC", hour: "2-digit", minute: "2-digit" });
+          }
+          if (tickMarkType === TickMarkType.Year) {
+            return date.toLocaleDateString("es-ES", { timeZone: "UTC", year: "numeric" });
+          }
+          if (tickMarkType === TickMarkType.Month) {
+            return date.toLocaleDateString("es-ES", { timeZone: "UTC", month: "short", year: "numeric" });
+          }
+          return date.toLocaleDateString("es-ES", { timeZone: "UTC", day: "2-digit", month: "short" });
+        },
       },
+      // The chart always auto-fits to the selected timeframe (fitContent()
+      // below) — manual zoom/pan only let users scroll it out of sync with
+      // that, and trackpad/Magic Mouse users were triggering it by accident
+      // just scrolling the page. Crosshair/tooltip/hover are untouched.
+      handleScroll: false,
+      handleScale: false,
     });
 
     const series = chart.addSeries(AreaSeries, {
@@ -175,13 +229,14 @@ export function MarketChart({
         return;
       }
 
-      const timestamp = toSeconds(param.time);
-      if (timestamp === null) {
+      const displaySeconds = toSeconds(param.time);
+      if (displaySeconds === null) {
         hideTooltip();
         return;
       }
 
-      const point = pointLookupRef.current.get(timestamp);
+      const point = pointLookupRef.current.get(displaySeconds);
+      const timestamp = toRealSeconds(displaySeconds);
       const nextTooltip = {
         visible: true,
         x: Math.min(param.point.x + 14, Math.max(16, container.clientWidth - 190)),
@@ -236,7 +291,7 @@ export function MarketChart({
         const time = toSeconds(operation.time);
         if (time === null) return [];
         return [{
-          time: time as Time,
+          time: toDisplaySeconds(time) as Time,
           position: operation.type === "buy" ? "belowBar" as const : "aboveBar" as const,
           color: operation.color,
           shape: operation.type === "buy" ? "arrowUp" as const : "arrowDown" as const,

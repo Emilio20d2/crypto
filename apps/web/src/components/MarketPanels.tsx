@@ -21,6 +21,14 @@ function formatCompactMoney(value: number | null | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? compactEurFormatter.format(value) : "Pendiente";
 }
 
+// "No aplica" only for assets where dominance is structurally meaningless
+// (anything but BTC/ETH). When it does apply but the value is missing
+// (global metrics source down), that must read as "No disponible".
+function formatDominance(value: number | null | undefined, applicable?: boolean) {
+  if (!applicable) return "No aplica";
+  return formatPercent(value, "No disponible");
+}
+
 export function PriceChangeChip({ change }: { change?: number | null }) {
   if (typeof change !== "number" || !Number.isFinite(change)) return null;
   const positive = change >= 0;
@@ -95,6 +103,7 @@ export function MarketHeader({
   volume24h,
   marketCap,
   dominance,
+  dominanceApplicable,
   sourceLabel,
 }: {
   asset: any;
@@ -105,6 +114,7 @@ export function MarketHeader({
   volume24h?: number | null;
   marketCap?: number | null;
   dominance?: number | null;
+  dominanceApplicable?: boolean;
   sourceLabel?: string;
 }) {
   return (
@@ -126,7 +136,7 @@ export function MarketHeader({
         <div><dt>Mín. 24 h</dt><dd>{formatMoney(low24h, "Pendiente")}</dd></div>
         <div><dt>Volumen</dt><dd>{formatCompactNumber(volume24h, asset?.symbol)}</dd></div>
         <div><dt>Market Cap</dt><dd>{formatCompactMoney(marketCap)}</dd></div>
-        <div><dt>Dominancia</dt><dd>{dominance === null || dominance === undefined ? "No aplica" : formatPercent(dominance, "No aplica")}</dd></div>
+        <div><dt>Dominancia</dt><dd>{formatDominance(dominance, dominanceApplicable)}</dd></div>
       </dl>
     </section>
   );
@@ -176,6 +186,7 @@ export function MarketStats({
   volume24h,
   marketCap,
   dominance,
+  dominanceApplicable,
   points,
 }: {
   price?: number | null;
@@ -186,6 +197,7 @@ export function MarketStats({
   volume24h?: number | null;
   marketCap?: number | null;
   dominance?: number | null;
+  dominanceApplicable?: boolean;
   points: ChartPoint[];
 }) {
   const values = points.map((point) => point.value).filter((value) => Number.isFinite(value));
@@ -208,7 +220,7 @@ export function MarketStats({
           <div><dt>Mín. 24 h</dt><dd>{formatMoney(low24h, "Pendiente")}</dd></div>
           <div><dt>Volumen 24 h</dt><dd>{formatCompactNumber(volume24h)}</dd></div>
           <div><dt>Capitalización</dt><dd>{formatCompactMoney(marketCap)}</dd></div>
-          <div><dt>Dominancia</dt><dd>{dominance === null || dominance === undefined ? "No aplica" : formatPercent(dominance, "No aplica")}</dd></div>
+          <div><dt>Dominancia</dt><dd>{formatDominance(dominance, dominanceApplicable)}</dd></div>
         </dl>
       </CardContent>
     </Card>
@@ -302,10 +314,32 @@ export function GlobalMetricsCard({
             </dd>
           </div>
           <div>
+            <dt>Dominancia ETH</dt>
+            <dd>
+              {loading ? "Cargando..." : metrics?.ethDominance != null ? `${metrics.ethDominance.toFixed(1)}%` : "No disponible"}
+            </dd>
+          </div>
+          <div>
             <dt>Cap. total</dt>
             <dd>
               {loading ? "Cargando..." : metrics?.totalMarketCapUsd != null
                 ? `$${(metrics.totalMarketCapUsd / 1e12).toFixed(2)}T`
+                : "No disponible"}
+            </dd>
+          </div>
+          <div>
+            <dt>Volumen 24h</dt>
+            <dd>
+              {loading ? "Cargando..." : metrics?.totalVolumeUsd != null
+                ? `$${(metrics.totalVolumeUsd / 1e9).toFixed(1)}B`
+                : "No disponible"}
+            </dd>
+          </div>
+          <div>
+            <dt>Tendencia 24h</dt>
+            <dd className={metrics?.marketCapChangePercentage24h != null && metrics.marketCapChangePercentage24h < 0 ? "text-negative" : "text-positive"}>
+              {loading ? "Cargando..." : metrics?.marketCapChangePercentage24h != null
+                ? `${metrics.marketCapChangePercentage24h >= 0 ? "+" : ""}${metrics.marketCapChangePercentage24h.toFixed(2)}%`
                 : "No disponible"}
             </dd>
           </div>

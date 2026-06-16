@@ -1,6 +1,23 @@
 import { describe, test, expect } from "vitest";
-import { normalizeFill } from "./normalizer";
-import type { CoinbaseFill } from "./types";
+import { normalizeFill, normalizeV2Transactions } from "./normalizer";
+import type { CoinbaseFill, V2Transaction } from "./types";
+
+function makeV2Tx(overrides: Partial<V2Transaction> = {}): V2Transaction {
+  return {
+    id: "v2-001",
+    type: "send",
+    status: "completed",
+    created_at: "2024-01-15T10:30:00Z",
+    updated_at: "2024-01-15T10:30:00Z",
+    resource: "transaction",
+    resource_path: "/v2/accounts/acc/transactions/v2-001",
+    amount: { amount: "1", currency: "BTC" },
+    native_amount: { amount: "50000", currency: "EUR" },
+    description: null,
+    details: { title: "", subtitle: "" },
+    ...overrides,
+  };
+}
 
 function makeFill(overrides: Partial<CoinbaseFill> = {}): CoinbaseFill {
   return {
@@ -140,5 +157,53 @@ describe("normalizeFill — normalizer de fills de Coinbase", () => {
     const leg = result.legs.find(l => l.legType === "destination");
     expect(leg!.valuationStatus).toBe("pending");
     expect(leg!.acquisitionValueEur).toBeNull();
+  });
+});
+
+describe("normalizeV2Transactions — grupo 'trade' (Convert del flujo V2 simple)", () => {
+  test("Convert con native_amount en EUR queda valorado, no pendiente", () => {
+    const txs: V2Transaction[] = [
+      makeV2Tx({
+        id: "v2-out",
+        type: "trade",
+        trade: { id: "trade-1", resource: "trade", resource_path: "/trade/1" },
+        amount: { amount: "-300", currency: "SEI" },
+        native_amount: { amount: "-16.62", currency: "EUR" },
+      }),
+      makeV2Tx({
+        id: "v2-in",
+        type: "trade",
+        trade: { id: "trade-1", resource: "trade", resource_path: "/trade/1" },
+        amount: { amount: "0.0003", currency: "BTC" },
+        native_amount: { amount: "16.62", currency: "EUR" },
+      }),
+    ];
+
+    const [result] = normalizeV2Transactions(txs);
+
+    expect(result.type).toBe("convert");
+    const seiLeg = result.legs.find(l => l.assetId === "SEI");
+    const btcLeg = result.legs.find(l => l.assetId === "BTC");
+
+    expect(seiLeg!.valuationStatus).toBe("valued");
+    expect(seiLeg!.acquisitionValueEur).toBeCloseTo(16.62);
+    expect(btcLeg!.valuationStatus).toBe("valued");
+    expect(btcLeg!.acquisitionValueEur).toBeCloseTo(16.62);
+  });
+
+  test("Convert sin native_amount en divisa fiat reconocida queda pending", () => {
+    const txs: V2Transaction[] = [
+      makeV2Tx({
+        id: "v2-out-2",
+        type: "trade",
+        trade: { id: "trade-2", resource: "trade", resource_path: "/trade/2" },
+        amount: { amount: "-1", currency: "ETH" },
+        native_amount: { amount: "10", currency: "BTC" },
+      }),
+    ];
+
+    const [result] = normalizeV2Transactions(txs);
+    expect(result.legs[0].valuationStatus).toBe("pending");
+    expect(result.legs[0].acquisitionValueEur).toBeNull();
   });
 });

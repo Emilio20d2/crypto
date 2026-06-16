@@ -105,9 +105,25 @@ export function AssetDetail() {
     queryFn: () => window.cryptoControl.transactions.list(),
   });
 
+  const { data: globalMetricsRes } = useQuery({
+    queryKey: ["market", "global-metrics"],
+    queryFn: () => window.cryptoControl.market.getGlobalMetrics(),
+    staleTime: 60 * 60 * 1000,
+    retry: 1,
+  });
+
   if (!assetId) {
     return <ErrorState message="No se ha especificado el activo." />;
   }
+
+  const globalMetrics = globalMetricsRes?.ok ? globalMetricsRes.data : null;
+  // Dominance only has meaning for BTC/ETH (see Mercado.tsx for the same logic).
+  const dominanceApplicable = requestAssetId === "BTC" || requestAssetId === "ETH";
+  const dominance = requestAssetId === "BTC"
+    ? globalMetrics?.btcDominance ?? null
+    : requestAssetId === "ETH"
+      ? globalMetrics?.ethDominance ?? null
+      : null;
 
   const breakdown = breakdownRes?.ok ? breakdownRes.data : null;
   const position = breakdown?.positions?.find((item: any) => item.asset === asset.symbol || item.asset === asset.id || item.asset === assetId);
@@ -196,7 +212,8 @@ export function AssetDetail() {
           low24h={overview?.low24h}
           volume24h={overview?.volume24h}
           marketCap={overview?.marketCap}
-          dominance={overview?.dominance}
+          dominance={dominance}
+          dominanceApplicable={dominanceApplicable}
           points={data}
         />
 

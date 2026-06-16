@@ -5,6 +5,8 @@ import type {
   CreateStrategyRevisionInput,
   CreateTreasuryMovementInput,
   CreateTransactionInput,
+  CreatePartialSaleInput,
+  PartialSale,
   InvestmentAsset,
   InvestmentAssetStateChangeInput,
   InvestmentCycle,
@@ -14,6 +16,12 @@ import type {
   TreasuryMovement,
   TreasurySummary,
   AllocateEurcToRebuyInput,
+  AllocateCashToRebuyInput,
+  CycleLiquidityAllocation,
+  CycleLiquidityStatus,
+  FiscalReserveMovement,
+  CycleMetrics,
+  AssetHealthResult,
   UpdateInvestmentAssetInput,
   UpdateInvestmentCycleInput,
   UpdateInvestmentPlanInput,
@@ -134,6 +142,10 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
     create: (data: CreateInvestmentCycleInput) => Promise<Result<{ id: string }>>;
     update: (id: string, data: UpdateInvestmentCycleInput) => Promise<Result<InvestmentCycle>>;
     delete: (id: string) => Promise<Result<null>>;
+    getMetrics: (input: { cycleId: string }) => Promise<Result<CycleMetrics>>;
+    listPartialSales: (input?: { cycleId?: string }) => Promise<Result<PartialSale[]>>;
+    createPartialSale: (data: CreatePartialSaleInput) => Promise<Result<{ id: string }>>;
+    deletePartialSale: (id: string) => Promise<Result<null>>;
   };
   investmentAssets: {
     list: (input?: { cycleId?: string }) => Promise<Result<InvestmentAsset[]>>;
@@ -142,6 +154,7 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
     pause: (id: string, data?: InvestmentAssetStateChangeInput) => Promise<Result<InvestmentAsset>>;
     close: (id: string, data?: InvestmentAssetStateChangeInput) => Promise<Result<InvestmentAsset>>;
     delete: (id: string) => Promise<Result<null>>;
+    getHealth: (input: { assetId: string }) => Promise<Result<AssetHealthResult>>;
   };
   strategyRevisions: {
     list: (input?: { cycleId?: string }) => Promise<Result<StrategyRevision[]>>;
@@ -155,6 +168,9 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
     deleteMovement: (id: string) => Promise<Result<null>>;
     setFiscalReserve: (data: SetFiscalReserveInput) => Promise<Result<TreasurySummary>>;
     allocateEurcToRebuy: (data: AllocateEurcToRebuyInput) => Promise<Result<{ id: string }>>;
+    allocateCashToRebuy: (data: AllocateCashToRebuyInput) => Promise<Result<{ id: string }>>;
+    listCycleLiquidity: (input?: { cycleId?: string; status?: CycleLiquidityStatus }) => Promise<Result<CycleLiquidityAllocation[]>>;
+    listFiscalReserveMovements: (input?: { realizedGainIds?: string[] }) => Promise<Result<FiscalReserveMovement[]>>;
   };
 }
 

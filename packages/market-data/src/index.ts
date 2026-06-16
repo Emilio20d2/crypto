@@ -13,6 +13,8 @@ export * from "./errors";
 export * from "./utils";
 export * from "./sentiment";
 export * from "./fear-greed";
+export * from "./market-phase";
+export * from "./asset-health";
 
 type CurrentPriceResult = {
   price: number | null;

@@ -88,6 +88,46 @@ describe("PortfolioCalculator", () => {
     const result = calculator.calculate(txs);
     expect(result.positions["BTC"].balance).toBe(0.5);
     expect(result.positions["BTC"].totalInvestedEur).toBe(15000); // 30000 - 15000
-    expect(result.positions["BTC"].averagePriceEur).toBe(30000); 
+    expect(result.positions["BTC"].averagePriceEur).toBe(30000);
+  });
+
+  test("Comprar cripto con EUR no genera una ganancia realizada fantasma de EUR", () => {
+    const txs: TransactionInput[] = [
+      {
+        id: "tx1",
+        date: 1000,
+        type: "buy",
+        legs: [
+          { assetId: "EUR", amount: -30, legType: "source", valuationEur: 30 },
+          { assetId: "BTC", amount: 0.001, legType: "destination", valuationEur: 30 }
+        ]
+      }
+    ];
+
+    const result = calculator.calculate(txs);
+    expect(result.realizedGains).toHaveLength(0);
+    expect(result.positions["BTC"].totalInvestedEur).toBe(30);
+  });
+
+  test("Convert sin valoración EUR no diluye el coste medio (queda marcado pendiente)", () => {
+    const txs: TransactionInput[] = [
+      {
+        id: "tx1",
+        date: 1000,
+        type: "buy",
+        legs: [{ assetId: "SEI", amount: 500, legType: "destination", valuationEur: 27.69 }]
+      },
+      {
+        id: "tx2",
+        date: 2000,
+        type: "convert",
+        legs: [{ assetId: "SEI", amount: 300, legType: "destination", valuationStatus: "pending" }]
+      }
+    ];
+
+    const result = calculator.calculate(txs);
+    expect(result.positions["SEI"].balance).toBe(800);
+    expect(result.positions["SEI"].totalInvestedEur).toBe(27.69); // no se infla con la entrada sin coste
+    expect(result.positions["SEI"].hasPendingValuation).toBe(true);
   });
 });

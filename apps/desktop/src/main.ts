@@ -9,6 +9,14 @@ import {
   CreateTreasuryMovementSchema,
   CreateTransactionSchema,
   AllocateEurcToRebuySchema,
+  AllocateCashToRebuySchema,
+  CycleLiquidityAllocationSchema,
+  FiscalReserveMovementSchema,
+  CycleMetricsSchema,
+  CreatePartialSaleSchema,
+  PartialSaleSchema,
+  CryptoControlIndexSchema,
+  AssetHealthResultSchema,
   CurrentPriceResultSchema,
   FearGreedResultSchema,
   GlobalMetricsResultSchema,
@@ -542,8 +550,10 @@ function setupIpcHandlers() {
     return await getPortfolioService().getFifoLots();
   }));
 
-  ipcMain.handle("portfolio:get-historical-series", withResult(async () => {
+  ipcMain.handle("portfolio:get-historical-series", withResult(async (_, input?: { period?: string }) => {
     const { getAssetMetadata } = require("@crypto-control/market-data") as typeof import("@crypto-control/market-data");
+    const { buildPortfolioValueGrid, GRID_STEP_SECONDS } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    type ValueGridPeriod = import("@crypto-control/portfolio").ValueGridPeriod;
     const repo = new DatabasePortfolioRepository(db);
     const txs = await repo.getTransactions();
 
@@ -591,11 +601,46 @@ function setupIpcHandlers() {
       return result;
     }
 
-    // Fetch price history for each asset: priceHistory table first, then candle cache, then API
+    // Same period strings Mercado's own per-asset chart uses, so the
+    // portfolio reconstruction gets the SAME granularity (minute-level for
+    // 1h, 15-minute for 24h, etc.) instead of only ever the coarse 1y/30d/
+    // daily rows — which was why short timeframes looked almost flat:
+    // every grid point inside an hour was reusing the same stale daily price.
+    const MARKET_PERIOD_BY_PERIOD: Record<string, string> = {
+      "1h": "1h", "24h": "24h", "1w": "7d", "1m": "30d", "1y": "1y", "all": "all",
+    };
+    const requestedPeriod = input?.period;
+    const marketPeriod = requestedPeriod ? MARKET_PERIOD_BY_PERIOD[requestedPeriod] : undefined;
+
+    // Fetch price history for each asset: period-matched live fetch first
+    // (mirrors Mercado, same Coinbase→cache→CoinGecko→stale fallback chain),
+    // then priceHistory table, then candle cache, then a broad API fallback.
+    // Assets are fetched in parallel — sequentially awaiting each one made
+    // the request take as long as the SUM of every asset's fetch (multiplied
+    // by retries when a provider 404s), instead of just the slowest one.
     const pricesByAsset: Record<string, { time: number; price: number }[]> = {};
+    const priceSourceByAsset: Record<string, string> = {};
+    const marketPointCountByAsset: Record<string, number> = {};
     let totalPricePoints = 0;
 
-    for (const assetId of heldAssets) {
+    async function loadPricesForAsset(assetId: string): Promise<void> {
+      if (marketPeriod) {
+        try {
+          const result = await marketService.getHistoricalPrices(assetId, marketPeriod);
+          if (result.points.length > 1) {
+            pricesByAsset[assetId] = result.points
+              .map(p => ({ time: p.timestamp, price: p.price }))
+              .sort((a, b) => a.time - b.time);
+            priceSourceByAsset[assetId] = result.provider;
+            marketPointCountByAsset[assetId] = result.points.length;
+            totalPricePoints += result.points.length;
+            return;
+          }
+        } catch {
+          // fall through to the slower/coarser sources below
+        }
+      }
+
       // 1. priceHistory table (broad intervals only)
       const phRows = db.select({ timestamp: schema.priceHistory.timestamp, price: schema.priceHistory.price })
         .from(schema.priceHistory)
@@ -613,8 +658,9 @@ function setupIpcHandlers() {
 
       if (phRows.length > 10) {
         pricesByAsset[assetId] = phRows.map(r => ({ time: r.timestamp, price: r.price }));
+        priceSourceByAsset[assetId] = "priceHistory";
         totalPricePoints += phRows.length;
-        continue;
+        return;
       }
 
       // 2. coinbaseCandleCache (start is Unix seconds → convert to ms)
@@ -628,8 +674,9 @@ function setupIpcHandlers() {
 
         if (candleRows.length > 5) {
           pricesByAsset[assetId] = candleRows.map(r => ({ time: r.start * 1000, price: r.close }));
+          priceSourceByAsset[assetId] = "coinbaseCandleCache";
           totalPricePoints += candleRows.length;
-          continue;
+          return;
         }
       }
 
@@ -640,6 +687,7 @@ function setupIpcHandlers() {
           pricesByAsset[assetId] = result.points
             .map(p => ({ time: p.timestamp, price: p.price }))
             .sort((a, b) => a.time - b.time);
+          priceSourceByAsset[assetId] = result.provider;
           totalPricePoints += result.points.length;
         }
       } catch {
@@ -647,20 +695,11 @@ function setupIpcHandlers() {
       }
     }
 
-    // Build portfolio value series
-    const allTs = new Set<number>();
-    for (const prices of Object.values(pricesByAsset)) {
-      for (const p of prices) allTs.add(p.time);
-    }
+    await Promise.all([...heldAssets].map(loadPricesForAsset));
 
-    const sortedTs = [...allTs].sort((a, b) => a - b);
-    const points: { time: number; value: number }[] = [];
-    const seenSeconds = new Set<number>();
-
-    for (const ts of sortedTs) {
+    const valueAtMs = (ts: number): { value: number; hasHolding: boolean } => {
       let totalValue = 0;
       let hasHolding = false;
-
       for (const [assetId, prices] of Object.entries(pricesByAsset)) {
         const qty = getQtyAt(assetEvents[assetId] ?? [], ts);
         if (qty <= 0) continue;
@@ -669,12 +708,54 @@ function setupIpcHandlers() {
         totalValue += qty * price;
         hasHolding = true;
       }
+      return { value: totalValue, hasHolding };
+    };
 
-      if (!hasHolding || totalValue <= 0) continue;
-      const seconds = Math.floor(ts / 1000);
-      if (seenSeconds.has(seconds)) continue;
-      seenSeconds.add(seconds);
-      points.push({ time: seconds, value: totalValue });
+    const period = input?.period as ValueGridPeriod | undefined;
+    const step = period ? GRID_STEP_SECONDS[period] : undefined;
+
+    let points: { time: number; value: number }[];
+
+    if (period && step) {
+      // Fixed, regular grid — same point count/timestamps Mercado would
+      // generate for this period — instead of "whenever some asset's price
+      // data happens to have a point".
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const firstTxSeconds = sorted.length > 0 ? Math.floor(sorted[0].date / 1000) : nowSeconds;
+      points = buildPortfolioValueGrid({ period, nowSeconds, firstTxSeconds, valueAtMs });
+    } else {
+      // No period requested: full irregular series at every timestamp any
+      // asset's price history actually has a point (legacy/unfiltered view).
+      const allTs = new Set<number>();
+      for (const prices of Object.values(pricesByAsset)) {
+        for (const p of prices) allTs.add(p.time);
+      }
+      const sortedTs = [...allTs].sort((a, b) => a - b);
+      const seenSeconds = new Set<number>();
+      points = [];
+      for (const ts of sortedTs) {
+        const { value, hasHolding } = valueAtMs(ts);
+        if (!hasHolding || value <= 0) continue;
+        const seconds = Math.floor(ts / 1000);
+        if (seenSeconds.has(seconds)) continue;
+        seenSeconds.add(seconds);
+        points.push({ time: seconds, value });
+      }
+    }
+
+    if (period) {
+      const marketPoints = Math.max(0, ...Object.values(marketPointCountByAsset));
+      console.log(`[Cartera] Periodo: ${period}`);
+      console.log(`[Cartera] Market points (por activo): ${JSON.stringify(marketPointCountByAsset)}`);
+      console.log(`[Cartera] Portfolio points: ${points.length}`);
+      console.log(`[Cartera] Primer timestamp: ${points.length ? new Date(points[0].time * 1000).toISOString() : "-"}`);
+      console.log(`[Cartera] Último timestamp: ${points.length ? new Date(points[points.length - 1].time * 1000).toISOString() : "-"}`);
+      console.log(`[Cartera] Granularidad: ${step ?? "irregular"}s`);
+      console.log(`[Cartera] Assets usados: ${[...heldAssets].join(", ")}`);
+      console.log(`[Cartera] Fuentes de precio usadas: ${JSON.stringify(priceSourceByAsset)}`);
+      if (marketPoints > 0 && points.length !== marketPoints) {
+        console.log(`[Cartera] Portfolio points (${points.length}) !== Market points (${marketPoints}): la rejilla de cartera usa el mismo paso temporal, pero omite minutos sin holding (>0) o sin precio resoluble — no se interpola ni se rellena con datos inventados.`);
+      }
     }
 
     return {
@@ -702,6 +783,7 @@ function setupIpcHandlers() {
         date: parsed.date,
         externalId: parsed.externalId,
         notes: parsed.notes,
+        cycleId: parsed.cycleId ?? null,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       }).run();
@@ -750,6 +832,7 @@ function setupIpcHandlers() {
         date: parsed.date,
         externalId: parsed.externalId ?? null,
         notes: parsed.notes ?? null,
+        cycleId: parsed.cycleId ?? null,
         updatedAt: Date.now(),
       }).where(eq(schema.transactions.id, id)).run();
       for (const leg of parsed.legs) {
@@ -853,16 +936,23 @@ function setupIpcHandlers() {
   }));
 
   // In-memory caches for external market signals (reset on app restart, acceptable)
-  let globalMetricsCache: { btcDominance: number | null; totalMarketCapUsd: number | null; fetchedAt: number } | null = null;
+  let globalMetricsCache: {
+    btcDominance: number | null;
+    ethDominance: number | null;
+    totalMarketCapUsd: number | null;
+    totalVolumeUsd: number | null;
+    marketCapChangePercentage24h: number | null;
+    fetchedAt: number;
+  } | null = null;
   const GLOBAL_METRICS_TTL_MS = 60 * 60 * 1000;
 
   ipcMain.handle("market:get-fear-greed", withResult(async () => {
     return FearGreedResultSchema.parse(await fearGreedService.get());
   }));
 
-  ipcMain.handle("market:get-global-metrics", withResult(async () => {
+  async function fetchGlobalMetrics(): Promise<{ btcDominance: number | null; ethDominance: number | null; totalMarketCapUsd: number | null; totalVolumeUsd: number | null; marketCapChangePercentage24h: number | null; fetchedAt: number; isCached: boolean }> {
     if (globalMetricsCache && Date.now() - globalMetricsCache.fetchedAt < GLOBAL_METRICS_TTL_MS) {
-      return GlobalMetricsResultSchema.parse({ ...globalMetricsCache, isCached: true });
+      return { ...globalMetricsCache, isCached: true };
     }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
@@ -871,20 +961,54 @@ function setupIpcHandlers() {
         signal: controller.signal,
         headers: { Accept: "application/json" },
       });
-      const json = await resp.json() as { data?: { market_cap_percentage?: Record<string, number>; total_market_cap?: Record<string, number> } };
+      const json = await resp.json() as {
+        data?: {
+          market_cap_percentage?: Record<string, number>;
+          total_market_cap?: Record<string, number>;
+          total_volume?: Record<string, number>;
+          market_cap_change_percentage_24h_usd?: number;
+        };
+      };
       const data = json?.data;
       globalMetricsCache = {
         btcDominance: data?.market_cap_percentage?.btc ?? null,
+        ethDominance: data?.market_cap_percentage?.eth ?? null,
         totalMarketCapUsd: data?.total_market_cap?.usd ?? null,
+        totalVolumeUsd: data?.total_volume?.usd ?? null,
+        marketCapChangePercentage24h: data?.market_cap_change_percentage_24h_usd ?? null,
         fetchedAt: Date.now(),
       };
-      return GlobalMetricsResultSchema.parse({ ...globalMetricsCache, isCached: false });
+      return { ...globalMetricsCache, isCached: false };
     } catch {
-      if (globalMetricsCache) return GlobalMetricsResultSchema.parse({ ...globalMetricsCache, isCached: true });
-      return GlobalMetricsResultSchema.parse({ btcDominance: null, totalMarketCapUsd: null, fetchedAt: Date.now(), isCached: false });
+      if (globalMetricsCache) return { ...globalMetricsCache, isCached: true };
+      return {
+        btcDominance: null,
+        ethDominance: null,
+        totalMarketCapUsd: null,
+        totalVolumeUsd: null,
+        marketCapChangePercentage24h: null,
+        fetchedAt: Date.now(),
+        isCached: false,
+      };
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  ipcMain.handle("market:get-global-metrics", withResult(async () => {
+    return GlobalMetricsResultSchema.parse(await fetchGlobalMetrics());
+  }));
+
+  ipcMain.handle("market:getCryptoControlIndex", withResult(async () => {
+    const { classifyMarketPhase } = require("@crypto-control/market-data") as typeof import("@crypto-control/market-data");
+    const [fearGreed, globalMetrics] = await Promise.all([fearGreedService.get(), fetchGlobalMetrics()]);
+    const result = classifyMarketPhase({
+      fearGreed: fearGreed.value,
+      marketCapChangePercentage24h: globalMetrics.marketCapChangePercentage24h,
+      btcDominance: globalMetrics.btcDominance,
+      ethDominance: globalMetrics.ethDominance,
+    });
+    return CryptoControlIndexSchema.parse({ ...result, calculatedAt: Date.now() });
   }));
 
   function getCachedFearGreed(): number | null {
@@ -1095,6 +1219,74 @@ function setupIpcHandlers() {
     return null;
   }));
 
+  ipcMain.handle("investmentCycles:getMetrics", withResult(async (_, input: { cycleId: string }) => {
+    const db = getDb();
+    const { computeCycleMetrics, filterTransactionsForCycle } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    const cycleRow = db.select().from(schema.investmentCycles).where(eq(schema.investmentCycles.id, input.cycleId)).get();
+    if (!cycleRow) throw new Error(`Ciclo de inversión ${input.cycleId} no encontrado.`);
+    const cycle = mapInvestmentCycle(cycleRow);
+
+    const repo = new DatabasePortfolioRepository(db);
+    const allTransactions = await repo.getTransactions();
+    const now = Date.now();
+    const cycleTransactions = filterTransactionsForCycle(allTransactions, cycle, now);
+
+    const assetIds = Array.from(new Set(cycleTransactions.flatMap((tx) => tx.legs.map((leg) => leg.assetId))));
+    const prices: Record<string, number | null> = {};
+    for (const assetId of assetIds) {
+      const result = await marketService.getCurrentPriceEur(assetId);
+      prices[assetId] = result.price;
+    }
+
+    const metrics = computeCycleMetrics(cycle, cycleTransactions, prices, now);
+    return CycleMetricsSchema.parse(metrics);
+  }));
+
+  ipcMain.handle("investmentCycles:listPartialSales", withResult(async (_, input?: { cycleId?: string }) => {
+    const db = getDb();
+    const query = db.select().from(schema.cyclePartialSales);
+    const rows = input?.cycleId
+      ? query.where(eq(schema.cyclePartialSales.cycleId, input.cycleId)).orderBy(desc(schema.cyclePartialSales.date)).all()
+      : query.orderBy(desc(schema.cyclePartialSales.date)).all();
+    return rows.map((row) => PartialSaleSchema.parse(row));
+  }));
+
+  // Una venta parcial nunca crea dinero nuevo: siempre referencia una
+  // operación "sell" ya registrada en Operaciones. assetId y date se derivan
+  // de esa operación, no se aceptan del cliente, para que no puedan divergir.
+  ipcMain.handle("investmentCycles:createPartialSale", withResult(async (_, payload) => {
+    const db = getDb();
+    const data = CreatePartialSaleSchema.parse(payload);
+    const tx = db.select().from(schema.transactions).where(eq(schema.transactions.id, data.transactionId)).get();
+    if (!tx) throw new Error(`Operación ${data.transactionId} no encontrada.`);
+    if (tx.type !== "sell") throw new Error("Una venta parcial debe referenciar una operación de tipo venta.");
+    const sourceLeg = db.select().from(schema.transactionLegs)
+      .where(and(eq(schema.transactionLegs.transactionId, data.transactionId), eq(schema.transactionLegs.legType, "source")))
+      .get();
+    if (!sourceLeg) throw new Error("La operación de venta no tiene un leg de origen.");
+
+    const now = Date.now();
+    const id = crypto.randomUUID();
+    db.insert(schema.cyclePartialSales).values({
+      id,
+      cycleId: data.cycleId,
+      transactionId: data.transactionId,
+      assetId: sourceLeg.assetId,
+      percentageOfHolding: data.percentageOfHolding,
+      proceedsEur: data.proceedsEur,
+      date: tx.date,
+      notes: data.notes ?? null,
+      createdAt: now,
+    }).run();
+    return { id };
+  }));
+
+  ipcMain.handle("investmentCycles:deletePartialSale", withResult(async (_, id: string) => {
+    const db = getDb();
+    db.delete(schema.cyclePartialSales).where(eq(schema.cyclePartialSales.id, id)).run();
+    return null;
+  }));
+
   // --- INVESTMENT ASSETS ---
   ipcMain.handle("investmentAssets:list", withResult(async (_, input?: { cycleId?: string }) => {
     const db = getDb();
@@ -1208,6 +1400,27 @@ function setupIpcHandlers() {
     return null;
   }));
 
+  ipcMain.handle("investmentAssets:getHealth", withResult(async (_, input: { assetId: string }) => {
+    const db = getDb();
+    const { assessAssetHealth } = require("@crypto-control/market-data") as typeof import("@crypto-control/market-data");
+
+    const latestAssignment = db.select().from(schema.investmentAssets)
+      .where(eq(schema.investmentAssets.assetId, input.assetId))
+      .orderBy(desc(schema.investmentAssets.startDate))
+      .limit(1)
+      .get();
+    const isRetiredFromStrategy = latestAssignment?.status === "closed";
+
+    const fearGreedValue = getCachedFearGreed();
+    const [assetSentiment, btcSentiment] = await Promise.all([
+      sentimentService.getAssetSentiment(input.assetId, "30d", { fearGreedValue }).catch(() => null),
+      input.assetId === "BTC" ? Promise.resolve(null) : sentimentService.getAssetSentiment("BTC", "30d", { fearGreedValue }).catch(() => null),
+    ]);
+
+    const result = assessAssetHealth({ assetSentiment, btcSentiment, isRetiredFromStrategy });
+    return AssetHealthResultSchema.parse(result);
+  }));
+
   // --- STRATEGY REVISIONS ---
   ipcMain.handle("strategyRevisions:list", withResult(async (_, input?: { cycleId?: string }) => {
     const db = getDb();
@@ -1270,6 +1483,21 @@ function setupIpcHandlers() {
   ipcMain.handle("treasury:allocateEurcToRebuy", withResult(async (_, payload) => {
     const data = AllocateEurcToRebuySchema.parse(payload);
     return getTreasuryRepository().allocateEurcToRebuy(data, getCoinbaseEurcBalance());
+  }));
+
+  ipcMain.handle("treasury:allocateCashToRebuy", withResult(async (_, payload) => {
+    const data = AllocateCashToRebuySchema.parse(payload);
+    return getTreasuryRepository().allocateCashToRebuy(data);
+  }));
+
+  ipcMain.handle("treasury:listCycleLiquidity", withResult(async (_, input?: { cycleId?: string; status?: "reserved" | "used" | "released" }) => {
+    const rows = getTreasuryRepository().listCycleLiquidity(input ?? {});
+    return rows.map((row) => CycleLiquidityAllocationSchema.parse(row));
+  }));
+
+  ipcMain.handle("treasury:listFiscalReserveMovements", withResult(async (_, input?: { realizedGainIds?: string[] }) => {
+    const rows = getTreasuryRepository().listFiscalReserveMovements(input ?? {});
+    return rows.map((row) => FiscalReserveMovementSchema.parse(row));
   }));
 
   // --- TARGETS ---

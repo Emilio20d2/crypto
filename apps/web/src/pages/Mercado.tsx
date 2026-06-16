@@ -174,10 +174,16 @@ export function Mercado() {
   const fearGreed = fearGreedRes?.ok ? fearGreedRes.data : null;
   const globalMetrics = globalMetricsRes?.ok ? globalMetricsRes.data : null;
 
-  // Use BTC dominance from global metrics if available (BTC asset shows "No aplica" otherwise)
-  const dominance = selectedAsset?.id === "BTC" && globalMetrics?.btcDominance != null
-    ? globalMetrics.btcDominance
-    : overview?.dominance ?? null;
+  // Dominance only has meaning for BTC/ETH — other assets correctly show
+  // "No aplica". For BTC/ETH a null value means the global metrics source
+  // (CoinGecko) is temporarily unavailable, which must read as "No
+  // disponible", not "No aplica" (that previously conflated the two).
+  const dominanceApplicable = selectedAsset?.id === "BTC" || selectedAsset?.id === "ETH";
+  const dominance = selectedAsset?.id === "BTC"
+    ? globalMetrics?.btcDominance ?? null
+    : selectedAsset?.id === "ETH"
+      ? globalMetrics?.ethDominance ?? null
+      : overview?.dominance ?? null;
   const headerSourceLabel = sourceLabelFor(
     overview?.provider ?? (priceRes?.ok ? priceRes.data.provider : null),
     priceRes?.ok ? priceRes.data.state === "cached" : false
@@ -251,6 +257,7 @@ export function Mercado() {
             volume24h={overview?.volume24h}
             marketCap={overview?.marketCap}
             dominance={dominance}
+            dominanceApplicable={dominanceApplicable}
             sourceLabel={headerSourceLabel}
           />
           <MarketChartPanel

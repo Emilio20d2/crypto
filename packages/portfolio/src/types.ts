@@ -22,5 +22,8 @@ export interface TransactionInput {
   externalId?: string | null;
   notes?: string | null;
   fees?: TransactionFeeInput[];
+  // Explicit cycle override. When absent, belongsToCycle() in
+  // cycle-metrics.ts falls back to matching by date range.
+  cycleId?: string | null;
 }
 

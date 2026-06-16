@@ -42,6 +42,7 @@ export const CreateTransactionSchema = z.object({
   date: z.number().int(),
   externalId: z.string().optional(),
   notes: z.string().optional(),
+  cycleId: z.string().nullable().optional(),
   legs: z.array(TransactionLegSchema).min(1),
   fees: z.array(FeeSchema).optional()
 });
@@ -60,6 +61,7 @@ export const TransactionInputSchema = z.object({
   date: z.number().int(),
   externalId: z.string().nullable().optional(),
   notes: z.string().nullable().optional(),
+  cycleId: z.string().nullable().optional(),
   fees: z.array(FeeSchema).optional(),
   legs: z.array(TransactionLegInputSchema)
 });
@@ -273,6 +275,8 @@ export const TreasurySummarySchema = z.object({
   totalLiquidity: z.number(),
   freeRebuyLiquidity: z.number(),
   allocatedToRebuy: z.number(),
+  freeCashForRebuy: z.number(),
+  allocatedCashToRebuy: z.number(),
   recommendedFiscalReserve: z.number(),
   pendingEstimatedTaxes: z.number(),
   updatedAt: TimestampSchema
@@ -287,15 +291,22 @@ export const AllocateEurcToRebuySchema = z.object({
   cycleId: z.string().trim().nullable().optional(),
   amountEur: z.number().positive(),
   reason: z.string().trim().min(1),
+  targetAssetId: z.string().trim().nullable().optional(),
   referenceType: z.string().trim().nullable().optional(),
   referenceId: z.string().trim().nullable().optional(),
   notes: OptionalTextSchema
 });
 
+export const AllocateCashToRebuySchema = AllocateEurcToRebuySchema;
+
+export const CycleLiquiditySourceTypeSchema = z.enum(["eurc", "cash"]);
+
 export const CycleLiquidityAllocationSchema = z.object({
   id: z.string().min(1),
   cycleId: z.string().nullable(),
   amountEur: z.number().positive(),
+  sourceType: CycleLiquiditySourceTypeSchema,
+  targetAssetId: z.string().nullable().optional(),
   status: CycleLiquidityStatusSchema,
   reason: z.string().min(1),
   referenceType: z.string().nullable().optional(),
@@ -304,6 +315,77 @@ export const CycleLiquidityAllocationSchema = z.object({
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
   usedAt: TimestampSchema.nullable()
+});
+
+export const FiscalReserveMovementSchema = z.object({
+  id: z.string().min(1),
+  treasuryMovementId: z.string().nullable(),
+  realizedGainId: z.string().nullable(),
+  date: TimestampSchema,
+  amountEur: z.number(),
+  reason: z.string().min(1),
+  notes: z.string().nullable().optional(),
+  createdAt: TimestampSchema
+});
+
+export const MarketPhaseEnum = z.enum([
+  "acumulacion", "inicio_alcista", "alcista_fuerte", "euforia", "distribucion", "bajista", "capitulacion"
+]);
+
+export const CryptoControlIndexSchema = z.object({
+  phase: MarketPhaseEnum.nullable(),
+  confidence: z.enum(["alta", "media", "baja"]),
+  indicatorsUsed: z.array(z.string()),
+  indicatorsUnavailable: z.array(z.string()),
+  reasoning: z.string(),
+  calculatedAt: TimestampSchema
+});
+
+export const CreatePartialSaleSchema = z.object({
+  cycleId: z.string().min(1),
+  transactionId: z.string().min(1),
+  percentageOfHolding: z.number().positive().max(100),
+  proceedsEur: z.number().positive(),
+  notes: OptionalTextSchema
+});
+
+export const PartialSaleSchema = z.object({
+  id: z.string().min(1),
+  cycleId: z.string().min(1),
+  transactionId: z.string().min(1),
+  assetId: z.string().min(1),
+  percentageOfHolding: z.number(),
+  proceedsEur: z.number(),
+  date: TimestampSchema,
+  notes: z.string().nullable().optional(),
+  createdAt: TimestampSchema
+});
+
+export const MonthlyContributionSchema = z.object({
+  monthKey: z.string(),
+  programmedEur: z.number(),
+  actualEur: z.number(),
+  extraEur: z.number()
+});
+
+export const CycleMetricsSchema = z.object({
+  cycleId: z.string(),
+  monthsElapsed: z.number(),
+  monthsRemaining: z.number().nullable(),
+  percentComplete: z.number().nullable(),
+  expectedContributionMonthly: z.number(),
+  expectedContributionAnnual: z.number(),
+  expectedContributionToDate: z.number(),
+  expectedContributionTotal: z.number().nullable(),
+  actualContribution: z.number(),
+  contributionDifference: z.number(),
+  extraContribution: z.number(),
+  monthlyContributions: z.array(MonthlyContributionSchema),
+  currentValueEur: z.number(),
+  heldCostBasisEur: z.number(),
+  profitEur: z.number(),
+  roiPercentage: z.number().nullable(),
+  hasPendingValuation: z.boolean()
 });
 
 export type CreateTransactionInput = z.infer<typeof CreateTransactionSchema>;
@@ -336,4 +418,26 @@ export type TreasurySummary = z.infer<typeof TreasurySummarySchema>;
 export type SetFiscalReserveInput = z.infer<typeof SetFiscalReserveSchema>;
 export type AllocateEurcToRebuyInput = z.infer<typeof AllocateEurcToRebuySchema>;
 export type CycleLiquidityStatus = z.infer<typeof CycleLiquidityStatusSchema>;
+export type CycleLiquiditySourceType = z.infer<typeof CycleLiquiditySourceTypeSchema>;
 export type CycleLiquidityAllocation = z.infer<typeof CycleLiquidityAllocationSchema>;
+export type AllocateCashToRebuyInput = z.infer<typeof AllocateCashToRebuySchema>;
+export type FiscalReserveMovement = z.infer<typeof FiscalReserveMovementSchema>;
+export type CycleMetrics = z.infer<typeof CycleMetricsSchema>;
+export type CreatePartialSaleInput = z.infer<typeof CreatePartialSaleSchema>;
+export type PartialSale = z.infer<typeof PartialSaleSchema>;
+export type MarketPhaseValue = z.infer<typeof MarketPhaseEnum>;
+export type CryptoControlIndex = z.infer<typeof CryptoControlIndexSchema>;
+
+export const AssetHealthStatusEnum = z.enum(["activo", "observacion", "riesgo_elevado", "salida_recomendada", "retirado"]);
+
+export const AssetHealthResultSchema = z.object({
+  status: AssetHealthStatusEnum,
+  relativeStrengthVsBtc: z.number().nullable(),
+  strongEntrySignal: z.boolean(),
+  reasoning: z.string(),
+  signalsUsed: z.array(z.string()),
+  signalsUnavailable: z.array(z.string())
+});
+
+export type AssetHealthStatus = z.infer<typeof AssetHealthStatusEnum>;
+export type AssetHealthResult = z.infer<typeof AssetHealthResultSchema>;

@@ -41,6 +41,7 @@ export class DatabasePortfolioRepository implements PortfolioRepository {
       date: tx.date,
       externalId: tx.externalId,
       notes: tx.notes,
+      cycleId: tx.cycleId,
       fees: feesByTxId[tx.id] || [],
       legs: legsByTxId[tx.id] || []
     }));

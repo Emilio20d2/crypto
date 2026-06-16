@@ -54,7 +54,9 @@ function formatPercentPoints(value: number | null | undefined, fallback = "Pendi
 }
 
 function formatMoneyPerCoin(value: number | null | undefined, fallback = "Pendiente") {
-  return typeof value === "number" && Number.isFinite(value) ? `${formatMoney(value)} / moneda` : fallback;
+  // No " / moneda" suffix: with real prices (e.g. "59.710,94 €") it pushed the
+  // value past the card's ellipsis truncation, hiding the actual number.
+  return typeof value === "number" && Number.isFinite(value) ? formatMoney(value) : fallback;
 }
 
 export function DataStatus({ state, reason }: { state?: string; reason?: string }) {

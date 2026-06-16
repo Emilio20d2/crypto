@@ -1076,9 +1076,10 @@ dd {
 }
 
 .position-card-metrics strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Truncating a financial value is worse than wrapping it: an ellipsis
+     hides digits with no way to recover them (no tooltip/title here). */
+  overflow-wrap: break-word;
+  white-space: normal;
   font-size: 13px;
 }
 
@@ -1582,7 +1583,7 @@ dd {
 
 .market-macro-grid {
   display: grid;
-  grid-template-columns: 200px 200px minmax(0, 1fr);
+  grid-template-columns: minmax(220px, 300px) minmax(220px, 300px) minmax(0, 1fr);
   gap: var(--panel-gap);
   align-items: start;
 }
@@ -1591,6 +1592,23 @@ dd {
 .global-metrics-card .panel-caption {
   color: var(--text-secondary);
   font-size: 12px;
+}
+
+/* 5 small numeric stats read better as compact tiles than one tall list. */
+.global-metrics-card .stats-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.global-metrics-card .stats-list div {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  min-height: 56px;
+}
+
+.global-metrics-card .stats-list dd {
+  text-align: left;
 }
 
 .fear-greed-content {
@@ -2095,8 +2113,16 @@ dd {
   font-size: 12px;
 }
 
-.operation-delete {
+.operation-card-actions {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
   margin-right: 10px;
+}
+
+.operation-delete {
+  margin-right: 0;
 }
 
 .operation-detail {
@@ -3267,6 +3293,19 @@ dd {
   }
 }
 
+/* Below 834px the two fixed 200px macro cards left no room for the top
+   assets panel — collapse to 2 fluid columns earlier, same as the 640px
+   layout, so nothing gets cramped or scrolls horizontally on tablets. */
+@media (max-width: 768px) {
+  .market-macro-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .market-macro-grid > *:last-child {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (max-width: 640px) {
   :root {
     --panel-padding-xl: 16px;
@@ -3460,6 +3499,23 @@ dd {
 
   .portfolio-metric {
     min-height: 68px;
+  }
+
+  /* 2 columns get too narrow for labels like "Dominancia BTC" below 430px —
+     one column per stat reads cleanly instead of wrapping mid-word. */
+  .global-metrics-card .stats-list {
+    grid-template-columns: 1fr;
+  }
+
+  .global-metrics-card .stats-list div {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 42px;
+  }
+
+  .global-metrics-card .stats-list dd {
+    text-align: right;
   }
 
   /* market grids keep 2 columns at 430px — content fits comfortably */

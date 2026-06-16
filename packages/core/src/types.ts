@@ -106,7 +106,10 @@ export type FearGreedResult = z.infer<typeof FearGreedResultSchema>;
 
 export const GlobalMetricsResultSchema = z.object({
   btcDominance: z.number().nullable(),
+  ethDominance: z.number().nullable(),
   totalMarketCapUsd: z.number().nullable(),
+  totalVolumeUsd: z.number().nullable(),
+  marketCapChangePercentage24h: z.number().nullable(),
   fetchedAt: z.number(),
   isCached: z.boolean(),
 });
@@ -154,7 +157,7 @@ export const MarketSentimentHistoryRequestSchema = z.object({
   limit: z.number().int().positive().max(200).optional()
 });
 
-import { Asset, AssetSchema } from "./validation";
+import { Asset, AssetSchema, type CryptoControlIndex } from "./validation";
 export type { Asset };
 export { AssetSchema };
 
@@ -169,6 +172,7 @@ export interface CryptoControlAPI {
     getOverview(input: MarketOverviewRequest): Promise<Result<MarketOverviewResult>>;
     getFearGreed(): Promise<Result<FearGreedResult>>;
     getGlobalMetrics(): Promise<Result<GlobalMetricsResult>>;
+    getCryptoControlIndex(): Promise<Result<CryptoControlIndex>>;
   };
   portfolio: {
     getSummary(): Promise<Result<PortfolioSummary>>;
@@ -176,7 +180,7 @@ export interface CryptoControlAPI {
     getAllocation(): Promise<Result<AssetAllocation[]>>;
     getRealizedGains(): Promise<Result<RealizedGain[]>>;
     getFifoLots(): Promise<Result<FifoLot[]>>;
-    getHistoricalSeries(): Promise<Result<{
+    getHistoricalSeries(input?: { period?: "1h" | "24h" | "1w" | "1m" | "1y" | "all" }): Promise<Result<{
       points: { time: number; value: number }[];
       meta: { txCount: number; pricePoints: number; assetsTracked: string[] };
     }>>;

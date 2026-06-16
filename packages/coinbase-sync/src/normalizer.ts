@@ -264,14 +264,23 @@ export function normalizeV2Transactions(txs: V2Transaction[]): NormalizedTransac
         const baseAsset = tx.amount.currency;
         const baseAmount = parseFloat(tx.amount.amount);
         requiredAssets.push(assetRecord(baseAsset, FIAT_QUOTE_CURRENCIES.has(baseAsset) ? "fiat" : "crypto"));
-        
+
+        // Coinbase reports native_amount (account display currency, EUR for
+        // this app) on every V2 transaction leg — the same field already used
+        // for buy/sell above. Convert legs previously ignored it and were
+        // always left unvalued/pending, silently diluting average cost for
+        // any asset acquired via Convert.
+        const nativeCurrency = tx.native_amount?.currency;
+        const nativeValue = tx.native_amount ? Math.abs(parseFloat(tx.native_amount.amount)) : null;
+        const hasEurValuation = !!nativeCurrency && FIAT_QUOTE_CURRENCIES.has(nativeCurrency) && nativeValue !== null && Number.isFinite(nativeValue);
+
         legs.push({
           assetId: baseAsset,
           amount: baseAmount,
           legType: baseAmount > 0 ? "destination" : "source",
-          acquisitionValueEur: null,
-          unitAcquisitionPriceEur: null,
-          valuationStatus: "pending",
+          acquisitionValueEur: hasEurValuation ? nativeValue : null,
+          unitAcquisitionPriceEur: hasEurValuation && Math.abs(baseAmount) > 0 ? (nativeValue as number) / Math.abs(baseAmount) : null,
+          valuationStatus: hasEurValuation ? "valued" : "pending",
         });
       }
       

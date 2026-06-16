@@ -28,7 +28,20 @@ const PERIOD_WINDOW_MS: Record<Period, number | null> = {
   "all": null,
 };
 
-// Fallback: snapshot-based chart (Coinbase portfolio snapshots from since app installed)
+// The backend (portfolio:get-historical-series, given a period) already
+// returns the exact grid for that period — same granularity Mercado's own
+// candles use, generated from "now" backwards, with explicit zeros before
+// the cartera's first ever transaction. This just shapes those points for
+// the chart component.
+function toChartPoints(points: { time: number; value: number }[]): ChartPoint[] {
+  return points
+    .filter((point) => Number.isFinite(point.value) && point.value >= 0)
+    .map((point) => ({ time: point.time as import("lightweight-charts").Time, value: point.value }))
+    .sort((a, b) => (a.time as number) - (b.time as number));
+}
+
+// Fallback only: Coinbase's own sparse point-in-time snapshots, used when
+// the reconstruction above doesn't have enough price history yet.
 function snapshotChartData(snapshots: any[], period: Period): ChartPoint[] {
   const windowMs = PERIOD_WINDOW_MS[period];
   const now = Date.now();
@@ -174,6 +187,14 @@ export function Portfolio() {
   const backgroundSyncRunning = useRef(false);
   const [manualPortfolioId, setManualPortfolioId] = useState<string | null>(null);
   const [period, setPeriod] = useState<Period>("24h");
+  // Date.now() can't be called during render (impure) — track "now" via an
+  // effect instead, just for anchoring the chart's last point to the live
+  // total below.
+  const [liveNowSeconds, setLiveNowSeconds] = useState<number>(() => Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    const id = window.setInterval(() => setLiveNowSeconds(Math.floor(Date.now() / 1000)), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   const { data: statusRes, isLoading: loadingStatus } = useQuery({
     queryKey: ["coinbase", "status"],
@@ -205,6 +226,24 @@ export function Portfolio() {
     queryFn: () => window.cryptoControl.coinbase.getPortfolioSnapshots(selectedPortfolioId!),
     enabled: !!selectedPortfolioId,
     refetchInterval: 60_000,
+  });
+
+  // Real reconstruction: historical qty (from transactionLegs) × historical
+  // price (from priceHistory/candle cache) per asset, summed per timestamp —
+  // not Coinbase's sparse point-in-time snapshots, which only exist for
+  // moments the app happened to be open and online.
+  const { data: historicalSeriesRes } = useQuery({
+    queryKey: ["portfolio", "historical-series", period],
+    queryFn: () => window.cryptoControl.portfolio.getHistoricalSeries({ period }),
+    staleTime: 60_000,
+  });
+
+  // Independent of the chart's selected period — always 24h, for the
+  // "Variación 24h" metric above the chart.
+  const { data: historicalSeries24hRes } = useQuery({
+    queryKey: ["portfolio", "historical-series", "24h"],
+    queryFn: () => window.cryptoControl.portfolio.getHistoricalSeries({ period: "24h" }),
+    staleTime: 60_000,
   });
 
   const { data: assetsRes } = useQuery({
@@ -240,9 +279,21 @@ export function Portfolio() {
   }, [connected, queryClient]);
 
   const snapshots = useMemo(() => (snapshotsRes?.ok ? snapshotsRes.data : []), [snapshotsRes]);
+  // The backend already generates the exact grid for `period` (same
+  // granularity Mercado uses, zero-padded before the first transaction) —
+  // no client-side windowing/downsampling needed, just shape it for the chart.
+  const reconstructedSeries = useMemo(
+    () => (historicalSeriesRes?.ok ? historicalSeriesRes.data.points : []),
+    [historicalSeriesRes]
+  );
+  const series24h = useMemo(
+    () => (historicalSeries24hRes?.ok ? historicalSeries24hRes.data.points : []),
+    [historicalSeries24hRes]
+  );
   const chartData = useMemo((): ChartPoint[] => {
-    return snapshotChartData(snapshots, period);
-  }, [snapshots, period]);
+    const reconstructed = toChartPoints(reconstructedSeries);
+    return reconstructed.length >= 2 ? reconstructed : snapshotChartData(snapshots, period);
+  }, [reconstructedSeries, snapshots, period]);
 
   const localPositionMap = useMemo((): Record<string, number> => {
     const rawPositions = localPositionsRes?.ok ? (localPositionsRes.data as any)?.positions : null;
@@ -347,8 +398,23 @@ export function Portfolio() {
 
   const performance = pnlValues.length > 0 ? pnlValues.reduce((sum, value) => sum + value, 0) : null;
   const totalBalance = fallbackTotalBalance(breakdown.balances) ?? positionsTotalBalance(positions);
+  // The reconstruction's last point can lag behind "now" by however stale
+  // price_history's broad-interval rows are (hours to a couple of days) —
+  // anchor it to the live total already shown in the metrics above so the
+  // chart's final value never disagrees with the real current value.
+  const chartDataAnchoredToLiveTotal: ChartPoint[] = (() => {
+    if (typeof totalBalance !== "number" || !Number.isFinite(totalBalance) || totalBalance <= 0) {
+      return chartData;
+    }
+    const nowSeconds = liveNowSeconds as import("lightweight-charts").Time;
+    const livePoint: ChartPoint = { time: nowSeconds, value: totalBalance };
+    if (chartData.length === 0) return [livePoint];
+    const last = chartData[chartData.length - 1];
+    return last.time === nowSeconds ? [...chartData.slice(0, -1), livePoint] : [...chartData, livePoint];
+  })();
   const variationFromPositions = portfolio24hVariation(positions);
-  const chart24h = snapshotChartData(snapshots, "24h");
+  const reconstructed24h = toChartPoints(series24h);
+  const chart24h = reconstructed24h.length >= 2 ? reconstructed24h : snapshotChartData(snapshots, "24h");
   const variationFromChart = chartVariation(chart24h);
   const variation24h = variationFromPositions.value !== null ? variationFromPositions : variationFromChart;
   return (
@@ -387,7 +453,7 @@ export function Portfolio() {
       )}
 
       <div className="portfolio-layout-grid">
-        <PortfolioChart data={chartData} period={period} onPeriodChange={setPeriod} />
+        <PortfolioChart data={chartDataAnchoredToLiveTotal} period={period} onPeriodChange={setPeriod} />
         <AllocationPanel positions={positions} />
       </div>
 

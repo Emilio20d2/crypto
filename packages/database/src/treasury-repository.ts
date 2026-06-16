@@ -29,10 +29,13 @@ export interface TreasuryMovementInput {
   notes?: string | null;
 }
 
+export type CycleLiquiditySourceType = "eurc" | "cash";
+
 export interface CycleLiquidityAllocationInput {
   cycleId?: string | null;
   amountEur: number;
   reason: string;
+  targetAssetId?: string | null;
   referenceType?: string | null;
   referenceId?: string | null;
   notes?: string | null;
@@ -45,6 +48,8 @@ export interface TreasurySummary {
   totalLiquidity: number;
   freeRebuyLiquidity: number;
   allocatedToRebuy: number;
+  freeCashForRebuy: number;
+  allocatedCashToRebuy: number;
   recommendedFiscalReserve: number;
   pendingEstimatedTaxes: number;
   updatedAt: number;
@@ -176,12 +181,18 @@ export class DatabaseTreasuryRepository {
       .from(schema.cycleLiquidityAllocations)
       .where(eq(schema.cycleLiquidityAllocations.status, "reserved"))
       .all();
-    const allocatedToRebuy = allocations.reduce((sum, row) => sum + row.amountEur, 0);
+    const allocatedToRebuy = allocations
+      .filter((row) => row.sourceType === "eurc")
+      .reduce((sum, row) => sum + row.amountEur, 0);
+    const allocatedCashToRebuy = allocations
+      .filter((row) => row.sourceType === "cash")
+      .reduce((sum, row) => sum + row.amountEur, 0);
     const fiscalReserveBalance = Math.max(0, totals.fiscal);
     const observedEurcAvailable = Math.max(0, observedEurcBalance - fiscalReserveBalance);
     const eurcBalance = Math.max(0, totals.eurc, observedEurcAvailable);
     const cashBalance = Math.max(0, totals.cash);
     const freeRebuyLiquidity = Math.max(0, eurcBalance - allocatedToRebuy);
+    const freeCashForRebuy = Math.max(0, cashBalance - allocatedCashToRebuy);
     const recommended = Math.max(0, recommendedFiscalReserve);
 
     return {
@@ -191,6 +202,8 @@ export class DatabaseTreasuryRepository {
       totalLiquidity: cashBalance + eurcBalance + fiscalReserveBalance,
       freeRebuyLiquidity,
       allocatedToRebuy,
+      freeCashForRebuy,
+      allocatedCashToRebuy,
       recommendedFiscalReserve: recommended,
       pendingEstimatedTaxes: Math.max(0, recommended - fiscalReserveBalance),
       updatedAt: Date.now(),
@@ -282,12 +295,16 @@ export class DatabaseTreasuryRepository {
     });
   }
 
-  allocateEurcToRebuy(input: CycleLiquidityAllocationInput, observedEurcBalance = 0) {
+  private reserveLiquidityForRebuy(
+    input: CycleLiquidityAllocationInput,
+    sourceType: CycleLiquiditySourceType,
+    freeLiquidity: number,
+    insufficientMessage: string
+  ) {
     this.ensureDefaultAccounts();
     const amount = finiteAmount(input.amountEur, "La asignación para recompra");
-    const summary = this.getSummary(0, observedEurcBalance);
-    if (amount > summary.freeRebuyLiquidity) {
-      throw new Error("No hay EURC libre suficiente para asignar esta recompra.");
+    if (amount > freeLiquidity) {
+      throw new Error(insufficientMessage);
     }
 
     const now = Date.now();
@@ -297,6 +314,8 @@ export class DatabaseTreasuryRepository {
         id,
         cycleId: input.cycleId ?? null,
         amountEur: amount,
+        sourceType,
+        targetAssetId: input.targetAssetId ?? null,
         status: "reserved",
         reason: input.reason,
         referenceType: input.referenceType ?? null,
@@ -311,10 +330,10 @@ export class DatabaseTreasuryRepository {
         id: crypto.randomUUID(),
         date: now,
         type: "asignar_recompra",
-        sourceAccountType: "eurc",
+        sourceAccountType: sourceType,
         destinationAccountType: null,
         amount,
-        currency: "EURC",
+        currency: sourceType === "eurc" ? "EURC" : "EUR",
         reason: input.reason,
         referenceType: "cycle_liquidity_allocation",
         referenceId: id,
@@ -325,5 +344,33 @@ export class DatabaseTreasuryRepository {
     });
 
     return { id };
+  }
+
+  allocateEurcToRebuy(input: CycleLiquidityAllocationInput, observedEurcBalance = 0) {
+    const summary = this.getSummary(0, observedEurcBalance);
+    return this.reserveLiquidityForRebuy(input, "eurc", summary.freeRebuyLiquidity, "No hay EURC libre suficiente para asignar esta recompra.");
+  }
+
+  allocateCashToRebuy(input: CycleLiquidityAllocationInput) {
+    const summary = this.getSummary(0, 0);
+    return this.reserveLiquidityForRebuy(input, "cash", summary.freeCashForRebuy, "No hay efectivo libre suficiente para asignar esta recompra.");
+  }
+
+  listCycleLiquidity(filter: { cycleId?: string; status?: CycleLiquidityStatus } = {}) {
+    this.ensureDefaultAccounts();
+    const rows = this.db.select().from(schema.cycleLiquidityAllocations).all();
+    return rows.filter((row) =>
+      (filter.cycleId === undefined || row.cycleId === filter.cycleId) &&
+      (filter.status === undefined || row.status === filter.status)
+    );
+  }
+
+  listFiscalReserveMovements(filter: { realizedGainIds?: string[] } = {}) {
+    const rows = this.db.select().from(schema.fiscalReserveMovements)
+      .orderBy(asc(schema.fiscalReserveMovements.date))
+      .all();
+    if (!filter.realizedGainIds) return rows;
+    const allowed = new Set(filter.realizedGainIds);
+    return rows.filter((row) => row.realizedGainId !== null && allowed.has(row.realizedGainId));
   }
 }

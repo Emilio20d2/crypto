@@ -71,7 +71,10 @@ export class PortfolioCalculator {
           pos.balance -= amountSold;
           pos.totalInvestedEur = Math.max(0, pos.totalInvestedEur - costBasis); // Prevent negative due to floats
 
-          if (tx.type !== "transfer_in" && tx.type !== "transfer_out") {
+          // "buy" outflows are the fiat leg funding the purchase, not a
+          // disposal — counting them produced a phantom 100% realized gain
+          // on the EUR spent (cost basis 0, since EUR is never "acquired").
+          if (tx.type !== "transfer_in" && tx.type !== "transfer_out" && tx.type !== "buy") {
              if (impact.valuation !== undefined) {
                const sellValue = Math.abs(impact.valuation);
                realizedGains.push({

@@ -25,8 +25,16 @@ export const transactions = sqliteTable("transactions", {
   date: integer("date").notNull(), // timestamp ms
   externalId: text("external_id"),
   notes: text("notes"),
+  // Explicit override only — when null, the owning cycle is resolved at read
+  // time from the cycle's [startDate, endDate ?? now] range so editing or
+  // adding cycles later never rewrites historical transactions.
+  cycleId: text("cycle_id").references(() => investmentCycles.id, { onDelete: "set null" }),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull()
+}, (table) => {
+  return {
+    idxTransactionsCycle: index("idx_transactions_cycle").on(table.cycleId)
+  };
 });
 
 export const transactionLegs = sqliteTable("transaction_legs", {
@@ -258,6 +266,8 @@ export const cycleLiquidityAllocations = sqliteTable("cycle_liquidity_allocation
   id: text("id").primaryKey(),
   cycleId: text("cycle_id").references(() => investmentCycles.id, { onDelete: "set null" }),
   amountEur: real("amount_eur").notNull(),
+  sourceType: text("source_type").notNull().default("eurc"), // "eurc" | "cash"
+  targetAssetId: text("target_asset_id").references(() => assets.id), // objetivo de recompra, opcional
   status: text("status").notNull().default("reserved"), // "reserved" | "used" | "released"
   reason: text("reason").notNull(),
   referenceType: text("reference_type"),
@@ -271,6 +281,42 @@ export const cycleLiquidityAllocations = sqliteTable("cycle_liquidity_allocation
     idxCycleLiquidityCycle: index("idx_cycle_liquidity_cycle").on(table.cycleId),
     idxCycleLiquidityStatus: index("idx_cycle_liquidity_status").on(table.status),
     idxCycleLiquidityReference: index("idx_cycle_liquidity_reference").on(table.referenceType, table.referenceId)
+  };
+});
+
+// Metadato puramente aditivo sobre una venta real ya registrada en
+// `transactions` (type "sell"): qué porcentaje de la posición representaba
+// en el momento de venderla. Nunca se borra ni recalcula — es histórico.
+export const cyclePartialSales = sqliteTable("cycle_partial_sales", {
+  id: text("id").primaryKey(),
+  cycleId: text("cycle_id").notNull().references(() => investmentCycles.id, { onDelete: "cascade" }),
+  transactionId: text("transaction_id").notNull().references(() => transactions.id, { onDelete: "cascade" }),
+  assetId: text("asset_id").notNull().references(() => assets.id),
+  percentageOfHolding: real("percentage_of_holding").notNull(),
+  proceedsEur: real("proceeds_eur").notNull(),
+  date: integer("date").notNull(),
+  notes: text("notes"),
+  createdAt: integer("created_at").notNull()
+}, (table) => {
+  return {
+    idxCyclePartialSalesCycle: index("idx_cycle_partial_sales_cycle").on(table.cycleId),
+    idxCyclePartialSalesTransaction: uniqueIndex("idx_cycle_partial_sales_transaction").on(table.transactionId)
+  };
+});
+
+// Configurable, never executed automatically — only feeds evaluateRebuyTiers
+// to suggest an amount of already-reserved liquidity to deploy after a
+// correction. Per cycle so different strategies can use different tiers.
+export const cycleRebuyTiers = sqliteTable("cycle_rebuy_tiers", {
+  id: text("id").primaryKey(),
+  cycleId: text("cycle_id").notNull().references(() => investmentCycles.id, { onDelete: "cascade" }),
+  drawdownPercentage: real("drawdown_percentage").notNull(),
+  usagePercentage: real("usage_percentage").notNull(),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull()
+}, (table) => {
+  return {
+    idxCycleRebuyTiersCycle: index("idx_cycle_rebuy_tiers_cycle").on(table.cycleId)
   };
 });
 

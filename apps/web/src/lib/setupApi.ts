@@ -27,7 +27,7 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
       getAllocation:        () => ipc("portfolio:get-allocation"),
       getRealizedGains:    () => ipc("portfolio:get-realized-gains"),
       getFifoLots:         () => ipc("portfolio:get-fifo-lots"),
-      getHistoricalSeries: () => ipc("portfolio:get-historical-series"),
+      getHistoricalSeries: (i?: unknown) => ipc("portfolio:get-historical-series", i),
     },
     transactions: {
       list:   () =>                              ipc("transactions:list"),
@@ -41,6 +41,7 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
       getOverview:         (i: unknown) =>      ipc("market:get-overview", i),
       getFearGreed:        () =>                ipc("market:get-fear-greed"),
       getGlobalMetrics:    () =>                ipc("market:get-global-metrics"),
+      getCryptoControlIndex: () =>              ipc("market:getCryptoControlIndex"),
     },
     settings: {
       get:    (key: unknown) =>                 ipc("settings:get", key),
@@ -96,6 +97,7 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
       pause:  (id: unknown, d?: unknown) =>     ipc("investmentAssets:pause", id, d),
       close:  (id: unknown, d?: unknown) =>     ipc("investmentAssets:close", id, d),
       delete: (id: unknown) =>                  ipc("investmentAssets:delete", id),
+      getHealth: (i: unknown) =>                ipc("investmentAssets:getHealth", i),
     },
     strategyRevisions: {
       list:   (i?: unknown) =>                  ipc("strategyRevisions:list", i),

@@ -9,11 +9,13 @@ interface PeriodSelectorProps {
   className?: string;
 }
 
+// Nomenclatura fija en toda la app: 1h, 1d, 1s, 1m, 1a, Todo — nunca "24h",
+// "7d", "30d" ni otras variantes.
 const DEFAULT_PERIOD_OPTIONS: { value: Period; label: string }[] = [
   { value: "1h", label: "1h" },
-  { value: "24h", label: "24h" },
-  { value: "1w", label: "7d" },
-  { value: "1m", label: "30d" },
+  { value: "24h", label: "1d" },
+  { value: "1w", label: "1s" },
+  { value: "1m", label: "1m" },
   { value: "1y", label: "1a" },
   { value: "all", label: "Todo" },
 ];

@@ -386,13 +386,23 @@ export class CoinbasePortfolioService {
         if (!pos.is_cash && pos.asset !== currency) {
           const productId = `${pos.asset}-${currency}`;
 
-          const fetchLiveMarket = async (): Promise<{ marketData: CoinbaseProductView | null; sparkline: CoinbaseCandlePoint[] }> => {
+          // Source hierarchy for both price and history: Coinbase Advanced
+          // Trade -> Coinbase public Exchange API / CoinGecko (inside
+          // getPublicMarketFallback) -> local SQLite cache (via withTimeout
+          // below). Tracked explicitly so we can log exactly which tier each
+          // asset actually used, per the "never hide an asset for a missing
+          // price/pair" rule — nothing here ever removes a position.
+          const fetchLiveMarket = async (): Promise<{ marketData: CoinbaseProductView | null; sparkline: CoinbaseCandlePoint[]; priceSource: string; historySource: string }> => {
             let liveMarket: CoinbaseProductView | null = null;
             let liveSparkline: CoinbaseCandlePoint[] = [];
+            let priceSource = "none";
+            let historySource = "none";
             try {
               liveMarket = await this.getProduct(productId);
+              if (liveMarket?.price !== null && liveMarket?.price !== undefined) priceSource = "coinbase-advanced-trade";
               // 24h sparkline (1 hour candles * 24)
               liveSparkline = await this.getCandles(productId, "24h");
+              if (liveSparkline.length >= 2) historySource = "coinbase-advanced-trade";
             } catch (e) {
               console.warn(`Failed to fetch market data for ${productId}:`, e);
             }
@@ -400,7 +410,9 @@ export class CoinbasePortfolioService {
             if (!liveMarket || liveMarket.price === null || liveSparkline.length < 2) {
               try {
                 const fallback = await this.getPublicMarketFallback(pos.asset, currency);
+                const fallbackProvider = fallback.market?.status?.replace(/^fallback:/, "") || "unknown";
                 if (fallback.market) {
+                  if (priceSource === "none" && fallback.market.price !== null) priceSource = fallbackProvider;
                   liveMarket = liveMarket ? {
                     ...liveMarket,
                     price: liveMarket.price ?? fallback.market.price,
@@ -420,13 +432,14 @@ export class CoinbasePortfolioService {
 
                 if (liveSparkline.length < 2 && fallback.sparkline.length >= 2) {
                   liveSparkline = fallback.sparkline;
+                  historySource = fallbackProvider;
                 }
               } catch (fallbackError) {
                 console.warn(`Failed to fetch public market fallback for ${productId}:`, fallbackError);
               }
             }
 
-            return { marketData: liveMarket, sparkline: liveSparkline };
+            return { marketData: liveMarket, sparkline: liveSparkline, priceSource, historySource };
           };
 
           const cachedMarket = this.getCachedProduct(productId);
@@ -434,7 +447,12 @@ export class CoinbasePortfolioService {
           const enriched = await withTimeout(
             fetchLiveMarket(),
             MARKET_ENRICHMENT_TIMEOUT_MS,
-            () => ({ marketData: cachedMarket, sparkline: cachedSparkline })
+            () => ({ marketData: cachedMarket, sparkline: cachedSparkline, priceSource: "cache-timeout", historySource: "cache-timeout" })
+          );
+
+          const fallbackUsed = enriched.priceSource !== "coinbase-advanced-trade" || enriched.historySource !== "coinbase-advanced-trade";
+          console.info(
+            `[MarketSource] asset=${pos.asset} priceSource=${enriched.priceSource} historySource=${enriched.historySource} fallbackUsed=${fallbackUsed}`
           );
 
           marketData = enriched.marketData ?? cachedMarket;

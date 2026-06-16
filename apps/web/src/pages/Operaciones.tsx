@@ -28,6 +28,46 @@ const uiSchema = z.object({
 
 type FormData = z.infer<typeof uiSchema>;
 
+function toDatetimeLocalValue(ms: number) {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// Inverse of onSubmit's leg-building below: rebuilds form values from a
+// stored transaction so "Editar" can prefill the same form used to create it.
+function transactionToFormValues(tx: any): FormData {
+  const source = tx.legs.find((leg: any) => leg.legType === "source");
+  const destination = tx.legs.find((leg: any) => leg.legType === "destination");
+  const feeAmount = tx.fees?.[0]?.amount ?? 0;
+  const date = toDatetimeLocalValue(tx.date);
+
+  if (tx.type === "convert") {
+    return {
+      type: "convert",
+      date,
+      sourceAsset: source?.assetId ?? "",
+      amount: Math.abs(source?.amount ?? 0),
+      destinationAsset: destination?.assetId ?? "",
+      destinationAmount: destination?.amount ?? undefined,
+      feeAmount,
+    };
+  }
+
+  const primaryLeg = source ?? destination ?? tx.legs[0];
+  const amount = Math.abs(primaryLeg?.amount ?? 0);
+  const valuation = primaryLeg?.valuationEur ?? primaryLeg?.acquisitionValueEur;
+
+  return {
+    type: tx.type,
+    date,
+    sourceAsset: primaryLeg?.assetId ?? "",
+    amount,
+    priceEur: typeof valuation === "number" && amount > 0 ? valuation / amount : undefined,
+    feeAmount,
+  };
+}
+
 export function Operaciones() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -36,6 +76,7 @@ export function Operaciones() {
   const [successMsg, setSuccessMsg] = useState("");
   const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState("all");
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const { register, watch, handleSubmit, reset, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(uiSchema),
@@ -93,19 +134,24 @@ export function Operaciones() {
         ? [{ assetId: data.sourceAsset, amount: data.feeAmount }]
         : [];
 
-      const result = await window.cryptoControl.transactions.create({
+      const payload = {
         type: data.type,
         date: dateMs,
         legs,
         fees: fees.length ? fees : undefined,
-      });
+      };
+
+      const result = editingId
+        ? await window.cryptoControl.transactions.update(editingId, payload)
+        : await window.cryptoControl.transactions.create(payload);
 
       if (!result.ok) {
         setErrorMsg(result.error?.message ?? "Error desconocido");
         return;
       }
 
-      setSuccessMsg("Operación guardada correctamente.");
+      setSuccessMsg(editingId ? "Operación actualizada correctamente." : "Operación guardada correctamente.");
+      setEditingId(null);
       reset({ type: "buy", amount: undefined, feeAmount: 0 });
       await queryClient.invalidateQueries({ queryKey: ["transactions"] });
       await queryClient.invalidateQueries({ queryKey: ["portfolio"] });
@@ -116,12 +162,30 @@ export function Operaciones() {
     }
   };
 
+  const handleEdit = (id: string) => {
+    const tx = transactions.find((item) => item.id === id);
+    if (!tx) return;
+    setErrorMsg("");
+    setSuccessMsg("");
+    setEditingId(id);
+    setSelectedTxId(id);
+    reset(transactionToFormValues(tx));
+  };
+
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setErrorMsg("");
+    setSuccessMsg("");
+    reset({ type: "buy", amount: undefined, feeAmount: 0 });
+  };
+
   const handleDelete = async (id: string) => {
     if (!confirm("¿Eliminar esta operación?")) return;
     const result = await window.cryptoControl.transactions.delete(id);
     if (result.ok) {
       await queryClient.invalidateQueries({ queryKey: ["transactions"] });
       if (selectedTxId === id) setSelectedTxId(null);
+      if (editingId === id) handleCancelEdit();
     }
   };
 
@@ -153,7 +217,7 @@ export function Operaciones() {
       <div className="operations-layout">
         <Card className="operation-form-panel">
           <CardHeader>
-            <CardTitle>Registrar Operación</CardTitle>
+            <CardTitle>{editingId ? "Editar Operación" : "Registrar Operación"}</CardTitle>
           </CardHeader>
           <CardContent>
             {errorMsg && <div className="banner banner-error">{errorMsg}</div>}
@@ -219,8 +283,13 @@ export function Operaciones() {
               </FormField>
 
               <Button type="submit" fullWidth loading={submitting}>
-                Guardar Operación
+                {editingId ? "Guardar cambios" : "Guardar Operación"}
               </Button>
+              {editingId && (
+                <Button type="button" variant="secondary" fullWidth onClick={handleCancelEdit}>
+                  Cancelar edición
+                </Button>
+              )}
             </form>
           </CardContent>
         </Card>
@@ -244,6 +313,7 @@ export function Operaciones() {
                 assets={assets}
                 selectedId={selectedTx?.id}
                 onSelect={setSelectedTxId}
+                onEdit={handleEdit}
                 onDelete={handleDelete}
               />
             )}
