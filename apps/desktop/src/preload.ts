@@ -30,6 +30,10 @@ const cryptoControl: FullCryptoControlAPI = {
     getRealizedGains:     () => ipcRenderer.invoke("portfolio:get-realized-gains"),
     getFifoLots:          () => ipcRenderer.invoke("portfolio:get-fifo-lots"),
     getHistoricalSeries:  (input?: { period?: string }) => ipcRenderer.invoke("portfolio:get-historical-series", input),
+    backfillCostBasis:    () => ipcRenderer.invoke("portfolio:backfillCostBasis"),
+  },
+  diagnostics: {
+    getReport: () => ipcRenderer.invoke("diagnostics:getReport"),
   },
   transactions: {
     list:   ()                                     => ipcRenderer.invoke("transactions:list"),

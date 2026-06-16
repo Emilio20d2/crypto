@@ -184,5 +184,33 @@ export interface CryptoControlAPI {
       points: { time: number; value: number }[];
       meta: { txCount: number; pricePoints: number; assetsTracked: string[] };
     }>>;
+    backfillCostBasis(): Promise<Result<{
+      legsChecked: number;
+      legsBackfilled: number;
+      legsStillPending: number;
+      byAsset: Record<string, { checked: number; backfilled: number }>;
+    }>>;
+  };
+  diagnostics: {
+    getReport(): Promise<Result<{
+      accounts: number;
+      balances: number;
+      transactions: number;
+      conversions: number;
+      fees: number;
+      assets: number;
+      positions: number;
+      historicalPrices: number;
+      missingPrices: number;
+      missingCosts: number;
+      perAsset: {
+        symbol: string;
+        amount: number;
+        hasPrice: boolean;
+        hasHistoricalPrice: boolean;
+        hasCostBasis: boolean;
+        rendered: boolean;
+      }[];
+    }>>;
   };
 }

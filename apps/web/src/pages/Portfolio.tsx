@@ -454,10 +454,10 @@ export function Portfolio() {
 
       <div className="portfolio-layout-grid">
         <PortfolioChart data={chartDataAnchoredToLiveTotal} period={period} onPeriodChange={setPeriod} />
-        <AllocationPanel positions={positions} />
+        <AllocationPanel positions={positions} localCostByAsset={localPositionMap} />
       </div>
 
-      <PositionList positions={positions} assets={assets} onSelect={(assetId) => navigate(`/activo/${assetId}`)} />
+      <PositionList positions={positions} assets={assets} onSelect={(assetId) => navigate(`/activo/${assetId}`)} localCostByAsset={localPositionMap} />
     </section>
   );
 }

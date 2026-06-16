@@ -23,6 +23,9 @@ function setupEmptyMock() {
       getRealizedGains: async () => ({ ok: true as const, data: [] }),
       getFifoLots: async () => ({ ok: true as const, data: [] }),
     },
+    diagnostics: {
+      getReport: async () => ({ ok: true as const, data: { accounts: 0, balances: 0, transactions: 0, conversions: 0, fees: 0, assets: 0, positions: 0, historicalPrices: 0, missingPrices: 0, missingCosts: 0, perAsset: [] } }),
+    },
     transactions: {
       ...window.cryptoControl.transactions,
       list: async () => ({ ok: true as const, data: [] }),
@@ -89,6 +92,10 @@ describe("Fiscalidad", () => {
         getRealizedGains: async () => ({ ok: true as const, data: [] }),
         getFifoLots: async () => ({ ok: true as const, data: [] }),
         getHistoricalSeries: async () => ({ ok: true as const, data: { points: [], meta: { txCount: 0, pricePoints: 0, assetsTracked: [] } } }),
+      backfillCostBasis: async () => ({ ok: true as const, data: { legsChecked: 0, legsBackfilled: 0, legsStillPending: 0, byAsset: {} } }),
+      },
+      diagnostics: {
+        getReport: async () => ({ ok: true as const, data: { accounts: 0, balances: 0, transactions: 0, conversions: 0, fees: 0, assets: 0, positions: 0, historicalPrices: 0, missingPrices: 0, missingCosts: 0, perAsset: [] } }),
       },
       transactions: {
         list: async () => ({ ok: true as const, data: [] }),

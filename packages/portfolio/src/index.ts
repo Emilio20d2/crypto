@@ -7,3 +7,4 @@ export * from "./fifo";
 export * from "./cycle-metrics";
 export * from "./rebuy-tiers";
 export * from "./value-grid";
+export * from "./cost-basis-backfill";

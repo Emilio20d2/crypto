@@ -18,31 +18,37 @@ function finiteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function positionInvested(position: any) {
-  return finiteNumber(position.costBasis?.value);
+// Coinbase's own cost_basis is frequently missing (older transactions,
+// transfers-in, staking rewards) — fall back to the cost reconstructed
+// locally from transactionLegs (the same number the "Total invertido"
+// summary already uses) before giving up and showing "Pendiente".
+function positionInvested(position: any, localCostByAsset: Record<string, number> = {}) {
+  const coinbaseCost = finiteNumber(position.costBasis?.value);
+  if (coinbaseCost !== null && coinbaseCost > 0) return coinbaseCost;
+  return finiteNumber(localCostByAsset[position.asset]) ?? coinbaseCost;
 }
 
-function positionPnL(position: any) {
+function positionPnL(position: any, localCostByAsset: Record<string, number> = {}) {
   const coinbasePnl = finiteNumber(position.unrealizedPnl);
   if (coinbasePnl !== null) return coinbasePnl;
 
-  const invested = positionInvested(position);
+  const invested = positionInvested(position, localCostByAsset);
   const value = finiteNumber(position.totalBalanceFiat);
   if (invested !== null && value !== null) return value - invested;
   return null;
 }
 
-function positionRoi(position: any) {
-  const invested = positionInvested(position);
-  const pnl = positionPnL(position);
+function positionRoi(position: any, localCostByAsset: Record<string, number> = {}) {
+  const invested = positionInvested(position, localCostByAsset);
+  const pnl = positionPnL(position, localCostByAsset);
   return invested !== null && invested > 0 && pnl !== null ? (pnl / invested) * 100 : null;
 }
 
-function positionAverageCost(position: any) {
+function positionAverageCost(position: any, localCostByAsset: Record<string, number> = {}) {
   const coinbaseAverage = finiteNumber(position.averageEntryPrice?.value);
   if (coinbaseAverage !== null) return coinbaseAverage;
 
-  const invested = positionInvested(position);
+  const invested = positionInvested(position, localCostByAsset);
   const quantity = finiteNumber(position.totalBalanceCrypto);
   return invested !== null && quantity !== null && quantity > 0 ? invested / quantity : null;
 }
@@ -145,7 +151,7 @@ export function PortfolioChart({
   );
 }
 
-export function AllocationPanel({ positions }: { positions: any[] }) {
+export function AllocationPanel({ positions, localCostByAsset = {} }: { positions: any[]; localCostByAsset?: Record<string, number> }) {
   const allocated = positions.flatMap((position, index) => {
     const percent = formatAllocation(position.allocation);
     if (percent === null || percent <= 0) return [];
@@ -156,6 +162,16 @@ export function AllocationPanel({ positions }: { positions: any[] }) {
     }];
   });
 
+  // Held with a real balance but no resolvable price anywhere (Coinbase nor
+  // the secondary fallbacks) — never just drop these from the breakdown,
+  // show them explicitly as pending instead of silently disappearing.
+  const pendingPrice = positions.filter((position) => {
+    const percent = formatAllocation(position.allocation);
+    if (percent !== null && percent > 0) return false;
+    const crypto = finiteNumber(position.totalBalanceCrypto);
+    return crypto !== null && crypto > 1e-12;
+  });
+
   return (
     <Card className="allocation-panel">
       <CardHeader className="stacked-card-header">
@@ -163,22 +179,25 @@ export function AllocationPanel({ positions }: { positions: any[] }) {
         <p className="panel-caption">Asignación informada por Coinbase</p>
       </CardHeader>
       <CardContent>
-        {allocated.length === 0 ? (
+        {allocated.length === 0 && pendingPrice.length === 0 ? (
           <p className="empty-inline">No disponible en Coinbase</p>
         ) : (
           <>
-            <div className="allocation-bar" aria-label="Distribución de cartera">
-              {allocated.map(({ position, percent, color }) => {
-                const style: AllocationStyle = {
-                  "--allocation-width": `${percent}%`,
-                  "--allocation-color": color,
-                };
-                return <span key={position.accountUuid || position.asset} style={style} title={`${position.asset} ${percent.toFixed(2)}%`} />;
-              })}
-            </div>
+            {allocated.length > 0 && (
+              <div className="allocation-bar" aria-label="Distribución de cartera">
+                {allocated.map(({ position, percent, color }) => {
+                  const style: AllocationStyle = {
+                    "--allocation-width": `${percent}%`,
+                    "--allocation-color": color,
+                  };
+                  return <span key={position.accountUuid || position.asset} style={style} title={`${position.asset} ${percent.toFixed(2)}%`} />;
+                })}
+              </div>
+            )}
             <div className="allocation-list">
               {allocated.slice(0, 8).map(({ position, percent, color }) => {
                 const style: AllocationStyle = { "--allocation-color": color };
+                const pnl = positionPnL(position, localCostByAsset);
                 return (
                   <button type="button" className="allocation-item" key={position.accountUuid || position.asset}>
                     <LocalAssetLogo logoUrl={position.assetImageUrl || position.market?.iconUrl} symbol={position.asset} size={28} />
@@ -189,12 +208,25 @@ export function AllocationPanel({ positions }: { positions: any[] }) {
                     <i style={style} />
                     <em>{percent.toLocaleString("es-ES", { maximumFractionDigits: 2 })}%</em>
                     <b>{formatMoney(position.totalBalanceFiat)}</b>
-                    <strong className={position.unrealizedPnl && position.unrealizedPnl < 0 ? "allocation-pnl text-negative" : "allocation-pnl text-positive"}>
-                      {formatMoney(position.unrealizedPnl, "PnL pendiente")}
+                    <strong className={pnl !== null && pnl < 0 ? "allocation-pnl text-negative" : "allocation-pnl text-positive"}>
+                      {formatMoney(pnl, "PnL pendiente")}
                     </strong>
                   </button>
                 );
               })}
+              {pendingPrice.map((position) => (
+                <button type="button" className="allocation-item" key={position.accountUuid || position.asset}>
+                  <LocalAssetLogo logoUrl={position.assetImageUrl || position.market?.iconUrl} symbol={position.asset} size={28} />
+                  <span>
+                    <strong>{position.market?.baseName || position.asset}</strong>
+                    <small>{position.asset}</small>
+                  </span>
+                  <i />
+                  <em>Precio pendiente</em>
+                  <b>{formatCrypto(position.totalBalanceCrypto)} {position.asset}</b>
+                  <strong className="allocation-pnl">Pendiente</strong>
+                </button>
+              ))}
             </div>
           </>
         )}
@@ -203,11 +235,23 @@ export function AllocationPanel({ positions }: { positions: any[] }) {
   );
 }
 
-function PositionCard({ position, name, logoUrl, onSelect }: { position: any; name: string; logoUrl?: string | null; onSelect: () => void }) {
-  const invested = positionInvested(position);
-  const pnl = positionPnL(position);
-  const roi = positionRoi(position);
-  const averageCost = positionAverageCost(position);
+function PositionCard({
+  position,
+  name,
+  logoUrl,
+  onSelect,
+  localCostByAsset,
+}: {
+  position: any;
+  name: string;
+  logoUrl?: string | null;
+  onSelect: () => void;
+  localCostByAsset: Record<string, number>;
+}) {
+  const invested = positionInvested(position, localCostByAsset);
+  const pnl = positionPnL(position, localCostByAsset);
+  const roi = positionRoi(position, localCostByAsset);
+  const averageCost = positionAverageCost(position, localCostByAsset);
   const weight = formatAllocation(position.allocation);
   const change = finiteNumber(position.market?.pricePercentageChange24h);
 
@@ -250,10 +294,12 @@ export function PositionList({
   positions,
   assets,
   onSelect,
+  localCostByAsset = {},
 }: {
   positions: any[];
   assets: any[];
   onSelect: (assetId: string) => void;
+  localCostByAsset?: Record<string, number>;
 }) {
   return (
     <Card className="position-list-panel">
@@ -276,6 +322,7 @@ export function PositionList({
                 name={name}
                 logoUrl={logoUrl}
                 onSelect={() => onSelect(position.asset)}
+                localCostByAsset={localCostByAsset}
               />
             );
           })}

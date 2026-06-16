@@ -28,6 +28,10 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
       getRealizedGains:    () => ipc("portfolio:get-realized-gains"),
       getFifoLots:         () => ipc("portfolio:get-fifo-lots"),
       getHistoricalSeries: (i?: unknown) => ipc("portfolio:get-historical-series", i),
+      backfillCostBasis:   () => ipc("portfolio:backfillCostBasis"),
+    },
+    diagnostics: {
+      getReport: () => ipc("diagnostics:getReport"),
     },
     transactions: {
       list:   () =>                              ipc("transactions:list"),

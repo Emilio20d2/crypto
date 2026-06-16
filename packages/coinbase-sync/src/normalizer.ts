@@ -226,14 +226,8 @@ export function normalizeV2Transactions(txs: V2Transaction[]): NormalizedTransac
   for (const tx of txs) {
     if (tx.status !== "completed") continue;
     if (tx.type === "advanced_trade_fill") continue;
-    
-    // TEMPORARY LOG FOR DEBUGGING
-    // TEMPORARY LOG FOR DEBUGGING
-    console.log(`[V2_DUMP_TX_ALL] Type: ${tx.type}, Keys: ${Object.keys(tx).join(", ")}`);
-    if (tx.type !== "send" && tx.type !== "receive" && tx.type !== "exchange_deposit" && tx.type !== "exchange_withdrawal") {
-        console.log(`[V2_DUMP_TX_PAYLOAD]`, JSON.stringify(tx));
-    }
-    
+
+
     let groupId: string | null = null;
     if (tx.type === "trade" && tx.trade?.id) groupId = `trade_${tx.trade.id}`;
     else if (tx.type === "buy" && tx.buy?.id) groupId = `buy_${tx.buy.id}`;

@@ -36,7 +36,7 @@ import {
   UpdateTreasuryMovementSchema,
 } from "@crypto-control/core";
 import crypto from "crypto";
-import { eq, and, or, asc, desc } from "drizzle-orm";
+import { eq, and, or, asc, desc, isNull } from "drizzle-orm";
 import * as fs from "fs";
 import * as http from "http";
 
@@ -1709,7 +1709,180 @@ function setupIpcHandlers() {
     const syncDb = getDb();
     const client = new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem);
     const syncService = new CoinbaseSyncService(syncDb, schema, client);
-    return await syncService.syncWithErrorHandling();
+    const result = await syncService.syncWithErrorHandling();
+
+    // Best-effort, non-blocking — newly-imported legs get a chance at a real
+    // historical-price cost basis right away without slowing down sync itself.
+    backfillCostBasis()
+      .then((r) => console.log(`[CostBasis] Backfill: ${r.legsBackfilled}/${r.legsChecked} legs resueltos, ${r.legsStillPending} siguen pendientes.`))
+      .catch((e) => console.warn("[CostBasis] Backfill falló:", e));
+
+    return result;
+  }));
+
+  // Backfills cost basis for legs Coinbase never valued (crypto-to-crypto
+  // converts, rewards, transfers-in) using a REAL historical market price at
+  // the leg's own transaction date — never a guess, never another date's
+  // price. Legs that still can't be resolved stay "pending" and are reported
+  // as such; "Coste pendiente" must always mean "we genuinely don't know",
+  // not "we didn't try". Run after every sync so newly-imported legs get a
+  // chance immediately, and also exposed for an on-demand re-run.
+  async function backfillCostBasis() {
+    const { computeBackfillForLeg, priceAtOrBefore } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    const { getAssetMetadata } = require("@crypto-control/market-data") as typeof import("@crypto-control/market-data");
+
+    const pendingRows = db
+      .select({
+        legId: schema.transactionLegs.id,
+        assetId: schema.transactionLegs.assetId,
+        amount: schema.transactionLegs.amount,
+        transactionDate: schema.transactions.date,
+      })
+      .from(schema.transactionLegs)
+      .innerJoin(schema.transactions, eq(schema.transactionLegs.transactionId, schema.transactions.id))
+      .where(and(
+        eq(schema.transactionLegs.valuationStatus, "pending"),
+        isNull(schema.transactionLegs.acquisitionValueEur),
+      ))
+      .all();
+
+    const byAsset = new Map<string, typeof pendingRows>();
+    for (const row of pendingRows) {
+      const assetRow = db.select({ type: schema.assets.type }).from(schema.assets).where(eq(schema.assets.id, row.assetId)).get();
+      if (assetRow?.type === "fiat") continue;
+      if (!getAssetMetadata(row.assetId)) continue;
+      const list = byAsset.get(row.assetId) ?? [];
+      list.push(row);
+      byAsset.set(row.assetId, list);
+    }
+
+    let legsBackfilled = 0;
+    const byAssetSummary: Record<string, { checked: number; backfilled: number }> = {};
+
+    for (const [assetId, legs] of byAsset.entries()) {
+      byAssetSummary[assetId] = { checked: legs.length, backfilled: 0 };
+      let priceSeries: { time: number; price: number }[];
+      try {
+        const result = await marketService.getHistoricalPrices(assetId, "all");
+        priceSeries = result.points.map((p) => ({ time: p.timestamp, price: p.price })).sort((a, b) => a.time - b.time);
+      } catch {
+        continue;
+      }
+      if (priceSeries.length === 0) continue;
+
+      for (const leg of legs) {
+        const price = priceAtOrBefore(priceSeries, leg.transactionDate);
+        const backfill = computeBackfillForLeg({ id: leg.legId, assetId, amount: leg.amount, transactionDate: leg.transactionDate }, price);
+        if (!backfill) continue;
+
+        db.update(schema.transactionLegs)
+          .set({
+            acquisitionValueEur: backfill.acquisitionValueEur,
+            unitAcquisitionPriceEur: backfill.unitAcquisitionPriceEur,
+            valuationStatus: "estimated",
+            valuationSource: "historical-price-backfill",
+            valuationTimestamp: Date.now(),
+          })
+          .where(eq(schema.transactionLegs.id, leg.legId))
+          .run();
+
+        legsBackfilled++;
+        byAssetSummary[assetId].backfilled++;
+      }
+    }
+
+    return {
+      legsChecked: pendingRows.length,
+      legsBackfilled,
+      legsStillPending: pendingRows.length - legsBackfilled,
+      byAsset: byAssetSummary,
+    };
+  }
+
+  ipcMain.handle("portfolio:backfillCostBasis", withResult(backfillCostBasis));
+
+  // D10: end-to-end pipeline diagnostic — Coinbase API -> accounts/balances
+  // -> transactions/legs/fees -> SQLite -> PortfolioService -> what actually
+  // renders. Exists so "is this number trustworthy" has a real answer
+  // instead of having to read code/logs.
+  ipcMain.handle("diagnostics:getReport", withResult(async () => {
+    const accountsCount = db.select({ id: schema.accounts.id }).from(schema.accounts).all().length;
+    const balancesPositive = db.select({ balance: schema.accounts.balance }).from(schema.accounts).all()
+      .filter((r) => r.balance > 1e-12).length;
+    const transactionsCount = db.select({ id: schema.transactions.id }).from(schema.transactions).all().length;
+    const conversionsCount = db.select({ id: schema.transactions.id }).from(schema.transactions)
+      .where(eq(schema.transactions.type, "convert")).all().length;
+    const feesCount = db.select({ id: schema.fees.id }).from(schema.fees).all().length;
+    const assetsCount = db.select({ id: schema.assets.id }).from(schema.assets).all().length;
+    const priceHistoryCount = db.select({ assetId: schema.priceHistory.assetId }).from(schema.priceHistory).all().length;
+    const candleCacheCount = db.select({ id: schema.coinbaseCandleCache.id }).from(schema.coinbaseCandleCache).all().length;
+
+    const pendingLegs = db
+      .select({ id: schema.transactionLegs.id })
+      .from(schema.transactionLegs)
+      .where(and(eq(schema.transactionLegs.valuationStatus, "pending"), isNull(schema.transactionLegs.acquisitionValueEur)))
+      .all().length;
+
+    const { positions } = await getPortfolioService().getPositions();
+    const heldPositions = Object.values(positions).filter((p) => p.balance > 1e-12);
+
+    const perAsset: {
+      symbol: string;
+      amount: number;
+      hasPrice: boolean;
+      hasHistoricalPrice: boolean;
+      hasCostBasis: boolean;
+      rendered: boolean;
+    }[] = [];
+    let missingPrices = 0;
+
+    for (const pos of heldPositions) {
+      const assetRow = db.select({ type: schema.assets.type }).from(schema.assets).where(eq(schema.assets.id, pos.assetId)).get();
+      let hasPrice = false;
+      try {
+        const priceResult = await marketService.getCurrentPriceEur(pos.assetId);
+        hasPrice = priceResult.price !== null;
+      } catch {
+        hasPrice = false;
+      }
+      if (!hasPrice) missingPrices++;
+
+      const hasHistoricalPriceRow = db.select({ assetId: schema.priceHistory.assetId }).from(schema.priceHistory)
+        .where(eq(schema.priceHistory.assetId, pos.assetId)).limit(1).get();
+      const hasHistoricalCandleRow = (() => {
+        const meta = (require("@crypto-control/market-data") as typeof import("@crypto-control/market-data")).getAssetMetadata(pos.assetId);
+        if (!meta) return null;
+        return db.select({ id: schema.coinbaseCandleCache.id }).from(schema.coinbaseCandleCache)
+          .where(eq(schema.coinbaseCandleCache.productId, meta.coinbaseProductId)).limit(1).get();
+      })();
+
+      // EURC/EUR are treated as cash/treasury, not a Cartera position —
+      // intentionally excluded there, not a data gap.
+      const isCash = pos.assetId === "EUR" || pos.assetId === "EURC" || assetRow?.type === "fiat";
+
+      perAsset.push({
+        symbol: pos.assetId,
+        amount: pos.balance,
+        hasPrice,
+        hasHistoricalPrice: !!hasHistoricalPriceRow || !!hasHistoricalCandleRow,
+        hasCostBasis: pos.totalInvestedEur > 0 && !pos.hasPendingValuation,
+        rendered: !isCash,
+      });
+    }
+
+    return {
+      accounts: accountsCount,
+      balances: balancesPositive,
+      transactions: transactionsCount,
+      conversions: conversionsCount,
+      fees: feesCount,
+      assets: assetsCount,
+      positions: heldPositions.length,
+      historicalPrices: priceHistoryCount + candleCacheCount,
+      missingPrices,
+      missingCosts: pendingLegs,
+      perAsset,
+    };
   }));
 
   ipcMain.handle("coinbase:get-sync-history", withResult(async () => {
