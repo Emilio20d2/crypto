@@ -136,7 +136,7 @@ export function PortfolioChart({
       <CardHeader className="chart-panel-header">
         <div>
           <CardTitle>Evolución de cartera</CardTitle>
-          <p className="panel-caption">Instantáneas reales capturadas desde Coinbase</p>
+          <p className="panel-caption">Reconstrucción histórica: cantidad real × precio de mercado</p>
         </div>
         <PeriodSelector value={period} onChange={onPeriodChange} />
       </CardHeader>

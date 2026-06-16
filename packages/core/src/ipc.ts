@@ -89,7 +89,33 @@ export interface CoinbaseSyncHistoryItem {
   error?: string | null;
 }
 
+export interface DiagnosticsAsset {
+  symbol: string;
+  amount: number;
+  hasPrice: boolean;
+  hasHistoricalPrice: boolean;
+  hasCostBasis: boolean;
+  rendered: boolean;
+}
+
+export interface DiagnosticsReport {
+  accounts: number;
+  balances: number;
+  transactions: number;
+  conversions: number;
+  fees: number;
+  assets: number;
+  positions: number;
+  historicalPrices: number;
+  missingPrices: number;
+  missingCosts: number;
+  perAsset: DiagnosticsAsset[];
+}
+
 export interface FullCryptoControlAPI extends CryptoControlAPI {
+  diagnostics: {
+    getReport: () => Promise<Result<DiagnosticsReport>>;
+  };
   transactions: {
     list: () => Promise<Result<TransactionInput[]>>;
     create: (data: CreateTransactionInput) => Promise<Result<{ id?: string }>>;

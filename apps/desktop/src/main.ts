@@ -641,6 +641,29 @@ function setupIpcHandlers() {
         }
       }
 
+      // Short-period rescue: if the exact-period fetch failed for 1h or 24h,
+      // try the next broader-but-still-granular period before falling to coarse
+      // daily data. Daily data produces only 0–1 price points inside a 1h/24h
+      // window, making the chart a flat line instead of real movement.
+      // "1h" → try "24h" (1-hour candles); "24h" → try "7d" (6-hour candles).
+      if (marketPeriod === "1h" || marketPeriod === "24h") {
+        const rescuePeriod = marketPeriod === "1h" ? "24h" : "7d";
+        try {
+          const rescueResult = await marketService.getHistoricalPrices(assetId, rescuePeriod);
+          if (rescueResult.points.length > 1) {
+            pricesByAsset[assetId] = rescueResult.points
+              .map(p => ({ time: p.timestamp, price: p.price }))
+              .sort((a, b) => a.time - b.time);
+            priceSourceByAsset[assetId] = `${rescueResult.provider}(${rescuePeriod}-rescue)`;
+            marketPointCountByAsset[assetId] = rescueResult.points.length;
+            totalPricePoints += rescueResult.points.length;
+            return;
+          }
+        } catch {
+          // fall through to coarse sources
+        }
+      }
+
       // 1. priceHistory table (broad intervals only)
       const phRows = db.select({ timestamp: schema.priceHistory.timestamp, price: schema.priceHistory.price })
         .from(schema.priceHistory)
@@ -1714,7 +1737,13 @@ function setupIpcHandlers() {
     // Best-effort, non-blocking — newly-imported legs get a chance at a real
     // historical-price cost basis right away without slowing down sync itself.
     backfillCostBasis()
-      .then((r) => console.log(`[CostBasis] Backfill: ${r.legsBackfilled}/${r.legsChecked} legs resueltos, ${r.legsStillPending} siguen pendientes.`))
+      .then(async (r) => {
+        console.log(`[CostBasis] Backfill: ${r.legsBackfilled}/${r.legsChecked} legs resueltos, ${r.legsStillPending} siguen pendientes.`);
+        if (r.legsBackfilled > 0) {
+          await getPortfolioService().recalculateFifo();
+          console.log("[CostBasis] FIFO recalculado tras backfill.");
+        }
+      })
       .catch((e) => console.warn("[CostBasis] Backfill falló:", e));
 
     return result;

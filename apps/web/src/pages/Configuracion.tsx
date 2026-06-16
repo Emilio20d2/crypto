@@ -1,13 +1,99 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Database, KeyRound, MonitorCog, Settings, Shield, SlidersHorizontal } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/Card";
 import { CoinbaseSettingsPanel } from "../components/CoinbasePanels";
+import { LoadingState } from "../components/LoadingState";
 import { PageToolbar } from "../components/PageToolbar";
 import { Select } from "../components/Select";
 import { SettingsList, SettingsRow } from "../components/SettingsPanels";
+import type { DiagnosticsReport } from "@crypto-control/core";
+
+function DiagnosticsPanel() {
+  const [backfilling, setBackfilling] = useState(false);
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ["diagnostics:getReport"],
+    queryFn: async () => {
+      const result = await window.cryptoControl.diagnostics.getReport();
+      if (!result.ok) throw new Error(result.error.message);
+      return result.data as DiagnosticsReport;
+    },
+    staleTime: 30_000,
+  });
+
+  async function handleBackfill() {
+    setBackfilling(true);
+    try {
+      await window.cryptoControl.portfolio.backfillCostBasis();
+      await refetch();
+    } finally {
+      setBackfilling(false);
+    }
+  }
+
+  if (isLoading) return <LoadingState message="Cargando diagnóstico..." />;
+  if (isError || !data) return <p className="empty-inline">Error al cargar el diagnóstico.</p>;
+
+  const renderedAssets = data.perAsset.filter((a) => a.rendered);
+
+  return (
+    <>
+      <SettingsRow
+        label="Transacciones"
+        description="Total de registros procesados en la base de datos"
+        control={<Badge>{data.transactions.toLocaleString("es-ES")}</Badge>}
+      />
+      <SettingsRow
+        label="Posiciones con precio"
+        description="Activos que resuelven precio de mercado"
+        control={
+          <Badge variant={data.missingPrices === 0 ? "success" : undefined}>
+            {data.positions - data.missingPrices} / {data.positions}
+          </Badge>
+        }
+      />
+      <SettingsRow
+        label="Sin coste base"
+        description="Legs de transacción sin valoración"
+        control={
+          <Badge variant={data.missingCosts === 0 ? "success" : undefined}>
+            {data.missingCosts}
+          </Badge>
+        }
+      />
+      <SettingsRow
+        label="Backfill de coste"
+        description="Rellenar valoraciones pendientes usando histórico de mercado"
+        control={
+          <Button type="button" variant="secondary" size="sm" loading={backfilling} onClick={handleBackfill}>
+            Ejecutar ahora
+          </Button>
+        }
+      />
+      {renderedAssets.length > 0 && (
+        <div className="diagnostics-asset-list">
+          {renderedAssets.map((asset) => (
+            <div key={asset.symbol} className="diagnostics-asset-row">
+              <span className="diagnostics-asset-symbol">{asset.symbol}</span>
+              <span className={asset.hasPrice ? "text-positive" : "text-negative"}>
+                {asset.hasPrice ? "Precio ✓" : "Sin precio"}
+              </span>
+              <span className={asset.hasHistoricalPrice ? "text-positive" : "text-negative"}>
+                {asset.hasHistoricalPrice ? "Histórico ✓" : "Sin histórico"}
+              </span>
+              <span className={asset.hasCostBasis ? "text-positive" : "text-negative"}>
+                {asset.hasCostBasis ? "Coste ✓" : "Sin coste"}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
 
 const SECTIONS = [
   { id: "general", label: "General", icon: <Settings size={16} /> },
@@ -92,13 +178,7 @@ export function Configuracion() {
                 </>
               )}
 
-              {active === "diagnostico" && (
-                <>
-                  <SettingsRow label="Renderer" description="React + Vite dentro de Electron" control={<Badge>Activo</Badge>} />
-                  <SettingsRow label="Carga producción" description="Electron usa loadFile para file://" control={<Badge variant="success">Configurado</Badge>} />
-                  <SettingsRow label="Herramientas" description="Ejecuta validaciones desde el repositorio" control={<Button type="button" variant="secondary" size="sm">Verificar</Button>} />
-                </>
-              )}
+              {active === "diagnostico" && <DiagnosticsPanel />}
             </CardContent>
           </Card>
         )}
