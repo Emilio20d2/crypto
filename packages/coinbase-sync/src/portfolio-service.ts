@@ -115,6 +115,29 @@ function computedFiatValue(amount: number | null, price: number | null): number 
 }
 
 const BALANCE_EPSILON = 1e-12;
+const MARKET_ENRICHMENT_TIMEOUT_MS = 3000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, onTimeout: () => T): Promise<T> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(onTimeout());
+    }, ms);
+    promise.then((value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    }).catch(() => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(onTimeout());
+    });
+  });
+}
 
 function safeSelectAll(db: any, table: any): any[] {
   try {
@@ -306,14 +329,16 @@ export class CoinbasePortfolioService {
         source: "coinbase_portfolio_breakdown"
       }).run();
 
-      const positions: CoinbaseSpotPositionView[] = [];
-
       // Delete old cached positions for this portfolio to replace them
       this.db.delete(schema.coinbaseSpotPositionSnapshots)
         .where(eq(schema.coinbaseSpotPositionSnapshots.portfolioUuid, portfolioUuid))
         .run();
 
-      for (const pos of b.spot_positions || []) {
+      // Enrich every position concurrently: sequential awaits here previously
+      // chained N positions' worth of Coinbase round-trips, regularly blowing
+      // past the 8s live/cache race timeout in main.ts and forcing a stale
+      // cache fallback even when Coinbase itself was healthy.
+      const enrichPosition = async (pos: NonNullable<typeof b.spot_positions>[number]): Promise<CoinbaseSpotPositionView> => {
         const costBasis = parseMoney(pos.cost_basis);
         const avgEntry = parseMoney(pos.average_entry_price);
 
@@ -350,51 +375,70 @@ export class CoinbasePortfolioService {
           capturedAt: now
         }).run();
 
-        // Let's fetch market and candle silently if possible, but we don't want to block everything if it fails
-        let marketData = null;
-        let sparkline: any[] = [];
+        // Market/sparkline enrichment is best-effort decoration, not part of the
+        // cost basis / balance data Coinbase already gave us above. When a pair
+        // is unsupported (e.g. delisted on the public Exchange API) it falls
+        // through to CoinGecko, whose rate-limit backoff can stall for many
+        // seconds — bound it so one slow asset can't stall the whole breakdown
+        // and push the live/cache race in main.ts to time out for everyone.
+        let marketData: CoinbaseProductView | null = null;
+        let sparkline: CoinbaseCandlePoint[] = [];
         if (!pos.is_cash && pos.asset !== currency) {
           const productId = `${pos.asset}-${currency}`;
-          try {
-            marketData = await this.getProduct(productId);
-            // 24h sparkline (1 hour candles * 24)
-            const candlesRes = await this.getCandles(productId, "24h");
-            sparkline = candlesRes;
-          } catch(e) {
-            console.warn(`Failed to fetch market data for ${productId}:`, e);
-            // Fallback to cache
-            marketData = this.getCachedProduct(productId);
-            sparkline = this.getCachedCandles(productId, "ONE_HOUR"); // Approximate sparkline fallback
-          }
 
-          if (!marketData || marketData.price === null || sparkline.length < 2) {
+          const fetchLiveMarket = async (): Promise<{ marketData: CoinbaseProductView | null; sparkline: CoinbaseCandlePoint[] }> => {
+            let liveMarket: CoinbaseProductView | null = null;
+            let liveSparkline: CoinbaseCandlePoint[] = [];
             try {
-              const fallback = await this.getPublicMarketFallback(pos.asset, currency);
-              if (fallback.market) {
-                marketData = marketData ? {
-                  ...marketData,
-                  price: marketData.price ?? fallback.market.price,
-                  pricePercentageChange24h: marketData.pricePercentageChange24h ?? fallback.market.pricePercentageChange24h,
-                  volume24h: marketData.volume24h ?? fallback.market.volume24h,
-                  volumePercentageChange24h: marketData.volumePercentageChange24h ?? fallback.market.volumePercentageChange24h,
-                  marketCap: marketData.marketCap ?? fallback.market.marketCap,
-                  baseName: marketData.baseName ?? fallback.market.baseName,
-                  baseDisplaySymbol: marketData.baseDisplaySymbol ?? fallback.market.baseDisplaySymbol,
-                  quoteDisplaySymbol: marketData.quoteDisplaySymbol ?? fallback.market.quoteDisplaySymbol,
-                  iconUrl: marketData.iconUrl ?? fallback.market.iconUrl,
-                  status: marketData.status ?? fallback.market.status,
-                  tradingDisabled: marketData.tradingDisabled ?? fallback.market.tradingDisabled,
-                  viewOnly: marketData.viewOnly ?? fallback.market.viewOnly
-                } : fallback.market;
-              }
-
-              if (sparkline.length < 2 && fallback.sparkline.length >= 2) {
-                sparkline = fallback.sparkline;
-              }
-            } catch (fallbackError) {
-              console.warn(`Failed to fetch public market fallback for ${productId}:`, fallbackError);
+              liveMarket = await this.getProduct(productId);
+              // 24h sparkline (1 hour candles * 24)
+              liveSparkline = await this.getCandles(productId, "24h");
+            } catch (e) {
+              console.warn(`Failed to fetch market data for ${productId}:`, e);
             }
-          }
+
+            if (!liveMarket || liveMarket.price === null || liveSparkline.length < 2) {
+              try {
+                const fallback = await this.getPublicMarketFallback(pos.asset, currency);
+                if (fallback.market) {
+                  liveMarket = liveMarket ? {
+                    ...liveMarket,
+                    price: liveMarket.price ?? fallback.market.price,
+                    pricePercentageChange24h: liveMarket.pricePercentageChange24h ?? fallback.market.pricePercentageChange24h,
+                    volume24h: liveMarket.volume24h ?? fallback.market.volume24h,
+                    volumePercentageChange24h: liveMarket.volumePercentageChange24h ?? fallback.market.volumePercentageChange24h,
+                    marketCap: liveMarket.marketCap ?? fallback.market.marketCap,
+                    baseName: liveMarket.baseName ?? fallback.market.baseName,
+                    baseDisplaySymbol: liveMarket.baseDisplaySymbol ?? fallback.market.baseDisplaySymbol,
+                    quoteDisplaySymbol: liveMarket.quoteDisplaySymbol ?? fallback.market.quoteDisplaySymbol,
+                    iconUrl: liveMarket.iconUrl ?? fallback.market.iconUrl,
+                    status: liveMarket.status ?? fallback.market.status,
+                    tradingDisabled: liveMarket.tradingDisabled ?? fallback.market.tradingDisabled,
+                    viewOnly: liveMarket.viewOnly ?? fallback.market.viewOnly
+                  } : fallback.market;
+                }
+
+                if (liveSparkline.length < 2 && fallback.sparkline.length >= 2) {
+                  liveSparkline = fallback.sparkline;
+                }
+              } catch (fallbackError) {
+                console.warn(`Failed to fetch public market fallback for ${productId}:`, fallbackError);
+              }
+            }
+
+            return { marketData: liveMarket, sparkline: liveSparkline };
+          };
+
+          const cachedMarket = this.getCachedProduct(productId);
+          const cachedSparkline = this.getCachedCandles(productId, "ONE_HOUR");
+          const enriched = await withTimeout(
+            fetchLiveMarket(),
+            MARKET_ENRICHMENT_TIMEOUT_MS,
+            () => ({ marketData: cachedMarket, sparkline: cachedSparkline })
+          );
+
+          marketData = enriched.marketData ?? cachedMarket;
+          sparkline = enriched.sparkline.length > 0 ? enriched.sparkline : cachedSparkline;
         }
 
         if (totalFiat === null) {
@@ -402,7 +446,7 @@ export class CoinbasePortfolioService {
           totalFiat = computedFiatValue(totalCrypto, price);
         }
 
-        positions.push({
+        return {
           asset: pos.asset,
           assetUuid: pos.asset_uuid,
           accountUuid: pos.account_uuid,
@@ -425,8 +469,12 @@ export class CoinbasePortfolioService {
           accountType: pos.account_type,
           market: marketData,
           sparkline
-        });
-      }
+        };
+      };
+
+      const positions: CoinbaseSpotPositionView[] = await Promise.all(
+        (b.spot_positions || []).map(enrichPosition)
+      );
 
       const result: CoinbasePortfolioView = {
         portfolio: {
