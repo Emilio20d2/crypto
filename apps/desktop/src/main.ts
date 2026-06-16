@@ -1540,8 +1540,14 @@ function setupIpcHandlers() {
     return await getPortfolioServiceInst().getPortfolioSnapshots(portfolioUuid);
   }));
 
-  // Local HTTP API bridge — exposes all IPC channels as POST /api/ipc
-  // Allows browser clients (Tailscale) to share the same backend and SQLite DB
+  // Ping channel: called by the preload every 200 ms to drive uv_run so the
+  // Node.js http.Server below can accept TCP connections (Electron event-loop quirk).
+  ipcMain.handle("__ping__", () => true);
+
+  // Local HTTP API bridge — exposes all IPC channels as POST /api/ipc, and
+  // serves the built web app as static files. Allows browser clients
+  // (Tailscale) to load the UI and share the same backend and SQLite DB
+  // without needing a separate "vite preview" server running.
   const HTTP_PORT = 3001;
   const CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
@@ -1549,11 +1555,63 @@ function setupIpcHandlers() {
     "Access-Control-Allow-Headers": "Content-Type",
   };
 
+  const webDistPath = app.isPackaged
+    ? path.join(process.resourcesPath, "web/dist")
+    : path.join(__dirname, "../../web/dist");
+
+  const MIME_TYPES: Record<string, string> = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+  };
+
+  function serveStaticFile(req: http.IncomingMessage, res: http.ServerResponse) {
+    const urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
+    const relativePath = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
+    let filePath = path.join(webDistPath, relativePath);
+
+    // Prevent path traversal outside webDistPath
+    if (!filePath.startsWith(webDistPath)) {
+      res.writeHead(403, CORS_HEADERS);
+      res.end();
+      return;
+    }
+
+    if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+      // SPA fallback: unknown routes (e.g. /portfolio) resolve to index.html
+      filePath = path.join(webDistPath, "index.html");
+    }
+
+    fs.readFile(filePath, (err, data) => {
+      if (err) {
+        res.writeHead(404, CORS_HEADERS);
+        res.end();
+        return;
+      }
+      const ext = path.extname(filePath);
+      res.writeHead(200, { ...CORS_HEADERS, "Content-Type": MIME_TYPES[ext] || "application/octet-stream" });
+      res.end(data);
+    });
+  }
+
   const apiServer = http.createServer((req, res) => {
     if (req.method === "OPTIONS") {
       res.writeHead(200, CORS_HEADERS);
       res.end();
       return;
+    }
+
+    if (req.method === "GET" || req.method === "HEAD") {
+      if (req.url !== "/api/ipc") {
+        serveStaticFile(req, res);
+        return;
+      }
     }
 
     if (req.method !== "POST" || req.url !== "/api/ipc") {

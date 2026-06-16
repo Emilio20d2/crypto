@@ -114,3 +114,6 @@ const cryptoControl: FullCryptoControlAPI = {
 
 contextBridge.exposeInMainWorld("cryptoControl", cryptoControl);
 console.log("[preload] cryptoControl API expuesta correctamente");
+
+// Drive uv_run in the main process so the HTTP bridge (port 3001) can accept TCP connections.
+setInterval(() => { ipcRenderer.invoke("__ping__").catch(() => {}); }, 200);
