@@ -4,14 +4,17 @@ import type {
   Asset,
   AssetHealthResult,
   ContributionSchedule,
+  CycleLiquidityAllocation,
   CycleGoal,
   CycleMetrics,
   CycleRisk,
   InvestmentAsset,
   InvestmentCycle,
   InvestmentPlan,
+  PartialSale,
   Result,
-  StrategyRevision
+  StrategyRevision,
+  TransactionInput,
 } from "@crypto-control/core";
 import { CalendarDays, CheckCircle, CircleOff, Copy, Plus, Save, Trash2, XCircle } from "lucide-react";
 import { Button } from "../components/Button";
@@ -145,6 +148,17 @@ const CS_STATUS_BADGE: Record<ContributionSchedule["status"], string> = {
   pendiente: "badge-warning",
   ejecutada: "badge-success",
   cancelada: "",
+};
+
+const LIQUIDITY_STATUS_LABEL: Record<CycleLiquidityAllocation["status"], string> = {
+  reserved: "Reservada",
+  used: "Usada",
+  released: "Liberada",
+};
+
+const LIQUIDITY_SOURCE_LABEL: Record<CycleLiquidityAllocation["sourceType"], string> = {
+  eurc: "EURC",
+  cash: "Efectivo",
 };
 
 function allocationSummary(item: Pick<InvestmentAsset, "allocationPercentage" | "fixedAmountEur" | "allocationType" | "allocationValue">) {
@@ -467,6 +481,68 @@ function CycleEditor({
     setCsNotes("");
     setCsDestination("");
   }
+  // ── Ventas parciales ────────────────────────────────────────────────────────
+  const psQueryKey = ["partial-sales", cycle.id] as const;
+
+  const partialSalesQuery = useQuery({
+    queryKey: psQueryKey,
+    queryFn: () => unwrap(window.cryptoControl.investmentCycles.listPartialSales({ cycleId: cycle.id })),
+  });
+  const partialSales: PartialSale[] = partialSalesQuery.data ?? [];
+
+  const sellTxQuery = useQuery({
+    queryKey: ["transactions", "sell"],
+    queryFn: async () => {
+      const all = await unwrap(window.cryptoControl.transactions.list());
+      return all.filter((tx: TransactionInput) => tx.type === "sell");
+    },
+    staleTime: 60 * 1000,
+  });
+  const sellTransactions: TransactionInput[] = sellTxQuery.data ?? [];
+
+  const [psTransactionId, setPsTransactionId] = useState("");
+  const [psPercentage, setPsPercentage] = useState("");
+  const [psProceeds, setPsProceeds] = useState("");
+  const [psNotes, setPsNotes] = useState("");
+
+  const invalidatePS = () => csQueryClient.invalidateQueries({ queryKey: psQueryKey });
+
+  const createPS = useMutation({
+    mutationFn: (data: { cycleId: string; transactionId: string; percentageOfHolding: number; proceedsEur: number; notes: string | null }) =>
+      unwrap(window.cryptoControl.investmentCycles.createPartialSale(data)),
+    onSuccess: () => { void invalidatePS(); },
+  });
+
+  const deletePS = useMutation({
+    mutationFn: (id: string) => unwrap(window.cryptoControl.investmentCycles.deletePartialSale(id)),
+    onSuccess: () => { void invalidatePS(); },
+  });
+
+  async function submitPS(event: FormEvent) {
+    event.preventDefault();
+    if (!psTransactionId) return;
+    const pct = parseNumber(psPercentage);
+    const proceeds = parseNumber(psProceeds);
+    if (!pct || !proceeds) return;
+    await createPS.mutateAsync({
+      cycleId: cycle.id,
+      transactionId: psTransactionId,
+      percentageOfHolding: pct,
+      proceedsEur: proceeds,
+      notes: psNotes || null,
+    });
+    setPsTransactionId("");
+    setPsPercentage("");
+    setPsProceeds("");
+    setPsNotes("");
+  }
+
+  // ── Liquidez del ciclo ─────────────────────────────────────────────────────
+  const liquidityQuery = useQuery({
+    queryKey: ["liquidity", cycle.id],
+    queryFn: () => unwrap(window.cryptoControl.treasury.listCycleLiquidity({ cycleId: cycle.id })),
+  });
+  const liquidityItems: CycleLiquidityAllocation[] = liquidityQuery.data ?? [];
   // ──────────────────────────────────────────────────────────────────────────
 
   async function submitCycle(event: FormEvent) {
@@ -976,6 +1052,97 @@ function CycleEditor({
             ))}
           </div>
         </section>
+
+        <section className="investment-section">
+          <div className="investment-section-heading">
+            <h3>Ventas parciales</h3>
+            <span>{partialSales.length} registradas</span>
+          </div>
+
+          <form className="investment-form-grid compact" onSubmit={(event) => void submitPS(event)}>
+            <label className="form-group investment-wide">
+              <span>Operación de venta</span>
+              <select
+                className="ui-select"
+                value={psTransactionId}
+                onChange={(event) => setPsTransactionId(event.target.value)}
+              >
+                <option value="">Selecciona una venta…</option>
+                {sellTransactions.map((tx) => {
+                  const src = tx.legs.find((l) => l.legType === "source");
+                  return (
+                    <option key={tx.id} value={tx.id}>
+                      {formatDate(tx.date)} · {src ? `${src.assetId} ${src.amount}` : "?"} {tx.notes ? `· ${tx.notes}` : ""}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+            <label className="form-group">
+              <span>% del holding</span>
+              <Input inputMode="decimal" value={psPercentage} onChange={(event) => setPsPercentage(event.target.value)} placeholder="Ej. 25" />
+            </label>
+            <label className="form-group">
+              <span>Ingresos EUR</span>
+              <Input inputMode="decimal" value={psProceeds} onChange={(event) => setPsProceeds(event.target.value)} placeholder="Ej. 500" />
+            </label>
+            <label className="form-group investment-wide">
+              <span>Notas</span>
+              <Input value={psNotes} onChange={(event) => setPsNotes(event.target.value)} />
+            </label>
+            <div className="investment-form-actions">
+              <Button type="submit" variant="primary" size="sm" loading={createPS.isPending} disabled={!psTransactionId || !psPercentage || !psProceeds}>
+                <Plus size={15} /> Registrar venta parcial
+              </Button>
+            </div>
+          </form>
+
+          <div className="investment-contribution-list">
+            {partialSales.length === 0 ? (
+              <p className="empty-inline">No hay ventas parciales registradas para este ciclo.</p>
+            ) : partialSales.map((ps) => (
+              <article className="investment-contribution" key={ps.id}>
+                <div className="investment-contribution-header">
+                  <div>
+                    <strong>{ps.assetId} · {ps.percentageOfHolding.toLocaleString("es-ES", { maximumFractionDigits: 2 })}% del holding</strong>
+                    <span>{formatDate(ps.date)} · {formatMoney(ps.proceedsEur)} recibidos</span>
+                  </div>
+                </div>
+                {ps.notes ? <p className="investment-contribution-meta">{ps.notes}</p> : null}
+                <div className="investment-form-actions">
+                  <Button type="button" variant="danger" size="sm" loading={deletePS.isPending} onClick={() => void deletePS.mutateAsync(ps.id)}>
+                    <Trash2 size={15} /> Eliminar
+                  </Button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        {liquidityItems.length > 0 ? (
+          <section className="investment-section">
+            <div className="investment-section-heading">
+              <h3>Liquidez del ciclo</h3>
+              <span>{liquidityItems.length} asignaciones · {formatMoney(liquidityItems.filter((l) => l.status === "reserved").reduce((s, l) => s + l.amountEur, 0))} disponible</span>
+            </div>
+            <div className="investment-contribution-list">
+              {liquidityItems.map((liq) => (
+                <article className="investment-contribution" key={liq.id}>
+                  <div className="investment-contribution-header">
+                    <div>
+                      <strong>{formatMoney(liq.amountEur)}</strong>
+                      <span>{LIQUIDITY_SOURCE_LABEL[liq.sourceType]} · {liq.reason}</span>
+                    </div>
+                    <span className={`badge ${liq.status === "reserved" ? "badge-success" : ""}`}>
+                      {LIQUIDITY_STATUS_LABEL[liq.status]}
+                    </span>
+                  </div>
+                  {liq.notes ? <p className="investment-contribution-meta">{liq.notes}</p> : null}
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
       </CardContent>
     </Card>
   );
