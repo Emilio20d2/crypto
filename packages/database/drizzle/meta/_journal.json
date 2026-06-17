@@ -85,6 +85,13 @@
       "when": 1781623619495,
       "tag": "0011_cycle_rebuy_tiers",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1750161600000,
+      "tag": "0012_fase_e_motor_estrategico",
+      "breakpoints": true
     }
   ]
 }

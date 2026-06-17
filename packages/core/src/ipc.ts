@@ -6,6 +6,11 @@ import type {
   CreateTreasuryMovementInput,
   CreateTransactionInput,
   CreatePartialSaleInput,
+  CreateContributionScheduleInput,
+  UpdateContributionScheduleInput,
+  ContributionSchedule,
+  CreateAssetSubstitutionInput,
+  AssetSubstitution,
   PartialSale,
   InvestmentAsset,
   InvestmentAssetStateChangeInput,
@@ -185,6 +190,18 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
   strategyRevisions: {
     list: (input?: { cycleId?: string }) => Promise<Result<StrategyRevision[]>>;
     create: (data: CreateStrategyRevisionInput) => Promise<Result<{ id: string }>>;
+  };
+  contributionSchedule: {
+    list: (input?: { cycleId?: string; status?: string }) => Promise<Result<ContributionSchedule[]>>;
+    create: (data: CreateContributionScheduleInput) => Promise<Result<{ id: string }>>;
+    update: (id: string, data: UpdateContributionScheduleInput) => Promise<Result<ContributionSchedule>>;
+    execute: (id: string) => Promise<Result<ContributionSchedule>>;
+    delete: (id: string) => Promise<Result<null>>;
+  };
+  assetSubstitutions: {
+    list: (input?: { cycleId?: string; fromAssetId?: string }) => Promise<Result<AssetSubstitution[]>>;
+    create: (data: CreateAssetSubstitutionInput) => Promise<Result<{ id: string }>>;
+    delete: (id: string) => Promise<Result<null>>;
   };
   treasury: {
     getSummary: () => Promise<Result<TreasurySummary>>;

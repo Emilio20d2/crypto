@@ -304,6 +304,9 @@ function setupIpcHandlers() {
     contributionCurrency: row.contributionCurrency,
     status: row.status as "planned" | "active" | "closed" | "paused",
     priority: row.priority,
+    objetivo: (row.objetivo ?? null) as "acumulacion" | "crecimiento" | "preservacion" | "renta" | null,
+    riesgo: (row.riesgo ?? null) as "bajo" | "moderado" | "alto" | "muy_alto" | null,
+    allowExtraContributions: row.allowExtraContributions !== 0,
     notes: row.notes,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -1212,6 +1215,9 @@ function setupIpcHandlers() {
       contributionCurrency: data.contributionCurrency ?? "EUR",
       status: data.status ?? "planned",
       priority: data.priority ?? 0,
+      objetivo: data.objetivo ?? null,
+      riesgo: data.riesgo ?? null,
+      allowExtraContributions: data.allowExtraContributions !== false ? 1 : 0,
       notes: data.notes ?? null,
       createdAt: now,
       updatedAt: now,
@@ -1233,6 +1239,9 @@ function setupIpcHandlers() {
     if (data.contributionCurrency !== undefined) update.contributionCurrency = data.contributionCurrency;
     if (data.status !== undefined) update.status = data.status;
     if (data.priority !== undefined) update.priority = data.priority;
+    if (data.objetivo !== undefined) update.objetivo = data.objetivo ?? null;
+    if (data.riesgo !== undefined) update.riesgo = data.riesgo ?? null;
+    if (data.allowExtraContributions !== undefined) update.allowExtraContributions = data.allowExtraContributions ? 1 : 0;
     if (data.notes !== undefined) update.notes = data.notes ?? null;
 
     const nextRow = { ...existing, ...update };

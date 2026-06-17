@@ -8,6 +8,9 @@ import type {
   CreateTreasuryMovementInput,
   CreateTransactionInput,
   CreatePartialSaleInput,
+  CreateContributionScheduleInput,
+  UpdateContributionScheduleInput,
+  CreateAssetSubstitutionInput,
   FullCryptoControlAPI,
   InvestmentAssetStateChangeInput,
   SetFiscalReserveInput,
@@ -112,6 +115,18 @@ const cryptoControl: FullCryptoControlAPI = {
   strategyRevisions: {
     list:   (input?: { cycleId?: string })                    => ipcRenderer.invoke("strategyRevisions:list", input),
     create: (data: CreateStrategyRevisionInput)               => ipcRenderer.invoke("strategyRevisions:create", data),
+  },
+  contributionSchedule: {
+    list:    (input?: { cycleId?: string; status?: string })       => ipcRenderer.invoke("contributionSchedule:list", input),
+    create:  (data: CreateContributionScheduleInput)               => ipcRenderer.invoke("contributionSchedule:create", data),
+    update:  (id: string, data: UpdateContributionScheduleInput)   => ipcRenderer.invoke("contributionSchedule:update", id, data),
+    execute: (id: string)                                          => ipcRenderer.invoke("contributionSchedule:execute", id),
+    delete:  (id: string)                                          => ipcRenderer.invoke("contributionSchedule:delete", id),
+  },
+  assetSubstitutions: {
+    list:   (input?: { cycleId?: string; fromAssetId?: string })   => ipcRenderer.invoke("assetSubstitutions:list", input),
+    create: (data: CreateAssetSubstitutionInput)                   => ipcRenderer.invoke("assetSubstitutions:create", data),
+    delete: (id: string)                                           => ipcRenderer.invoke("assetSubstitutions:delete", id),
   },
   treasury: {
     getSummary:           ()                                      => ipcRenderer.invoke("treasury:getSummary"),

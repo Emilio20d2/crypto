@@ -156,6 +156,9 @@ export const investmentCycles = sqliteTable("investment_cycles", {
   contributionCurrency: text("contribution_currency").notNull().default("EUR"),
   status: text("status").notNull().default("planned"), // "planned" | "active" | "closed" | "paused"
   priority: integer("priority").notNull().default(0),
+  objetivo: text("objetivo"),               // "acumulacion" | "crecimiento" | "preservacion" | "renta"
+  riesgo: text("riesgo"),                   // "bajo" | "moderado" | "alto" | "muy_alto"
+  allowExtraContributions: integer("allow_extra_contributions").notNull().default(1), // boolean
   notes: text("notes"),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull()
@@ -301,6 +304,51 @@ export const cyclePartialSales = sqliteTable("cycle_partial_sales", {
   return {
     idxCyclePartialSalesCycle: index("idx_cycle_partial_sales_cycle").on(table.cycleId),
     idxCyclePartialSalesTransaction: uniqueIndex("idx_cycle_partial_sales_transaction").on(table.transactionId)
+  };
+});
+
+// Plan de aportaciones: registro de contribuciones planificadas (periódicas y
+// extraordinarias). Solo planificación — no ejecuta compras automáticamente.
+export const contributionSchedule = sqliteTable("contribution_schedule", {
+  id: text("id").primaryKey(),
+  cycleId: text("cycle_id").notNull().references(() => investmentCycles.id, { onDelete: "cascade" }),
+  type: text("type").notNull().default("periodica"), // "periodica" | "extraordinaria"
+  plannedDate: integer("planned_date").notNull(),
+  amountEur: real("amount_eur").notNull(),
+  currency: text("currency").notNull().default("EUR"),
+  destination: text("destination"),                   // assetId objetivo, null = distribuir según ciclo
+  status: text("status").notNull().default("pendiente"), // "pendiente" | "ejecutada" | "cancelada"
+  executedAt: integer("executed_at"),
+  notes: text("notes"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull()
+}, (table) => {
+  return {
+    idxContributionScheduleCycle:  index("idx_contribution_schedule_cycle").on(table.cycleId),
+    idxContributionScheduleDate:   index("idx_contribution_schedule_date").on(table.plannedDate),
+    idxContributionScheduleStatus: index("idx_contribution_schedule_status").on(table.status)
+  };
+});
+
+// Historial de sustituciones de activos dentro de un ciclo.
+// Mantiene trazabilidad completa: qué se cerró, qué lo sustituyó y por qué.
+export const assetSubstitutions = sqliteTable("asset_substitutions", {
+  id: text("id").primaryKey(),
+  cycleId: text("cycle_id").notNull().references(() => investmentCycles.id, { onDelete: "cascade" }),
+  fromAssetId: text("from_asset_id").notNull().references(() => assets.id),
+  toAssetId: text("to_asset_id").references(() => assets.id), // null = retirada sin sustitución
+  fromInvestmentAssetId: text("from_investment_asset_id").references(() => investmentAssets.id, { onDelete: "set null" }),
+  toInvestmentAssetId: text("to_investment_asset_id").references(() => investmentAssets.id, { onDelete: "set null" }),
+  effectiveDate: integer("effective_date").notNull(),
+  reason: text("reason").notNull(),
+  notes: text("notes"),
+  createdAt: integer("created_at").notNull()
+}, (table) => {
+  return {
+    idxAssetSubstitutionsCycle: index("idx_asset_substitutions_cycle").on(table.cycleId),
+    idxAssetSubstitutionsFrom:  index("idx_asset_substitutions_from").on(table.fromAssetId),
+    idxAssetSubstitutionsTo:    index("idx_asset_substitutions_to").on(table.toAssetId),
+    idxAssetSubstitutionsDate:  index("idx_asset_substitutions_date").on(table.effectiveDate)
   };
 });
 

@@ -101,6 +101,8 @@ export const UpdateInvestmentPlanSchema = z.object({
 });
 
 export const InvestmentCycleStatusSchema = z.enum(["planned", "active", "closed", "paused"]);
+export const CycleGoalEnum = z.enum(["acumulacion", "crecimiento", "preservacion", "renta"]);
+export const CycleRiskEnum = z.enum(["bajo", "moderado", "alto", "muy_alto"]);
 
 export const InvestmentCycleSchema = z.object({
   id: z.string().min(1),
@@ -112,6 +114,9 @@ export const InvestmentCycleSchema = z.object({
   contributionCurrency: z.string().min(1),
   status: InvestmentCycleStatusSchema,
   priority: z.number().int(),
+  objetivo: CycleGoalEnum.nullable().optional(),
+  riesgo: CycleRiskEnum.nullable().optional(),
+  allowExtraContributions: z.boolean().optional().default(true),
   notes: z.string().nullable().optional(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema
@@ -126,6 +131,9 @@ export const CreateInvestmentCycleSchema = z.object({
   contributionCurrency: z.string().trim().min(1).optional(),
   status: InvestmentCycleStatusSchema.optional(),
   priority: z.number().int().optional(),
+  objetivo: CycleGoalEnum.nullable().optional(),
+  riesgo: CycleRiskEnum.nullable().optional(),
+  allowExtraContributions: z.boolean().optional(),
   notes: OptionalTextSchema
 });
 
@@ -138,6 +146,9 @@ export const UpdateInvestmentCycleSchema = z.object({
   contributionCurrency: z.string().trim().min(1).optional(),
   status: InvestmentCycleStatusSchema.optional(),
   priority: z.number().int().optional(),
+  objetivo: CycleGoalEnum.nullable().optional(),
+  riesgo: CycleRiskEnum.nullable().optional(),
+  allowExtraContributions: z.boolean().optional(),
   notes: OptionalTextSchema
 });
 
@@ -427,6 +438,83 @@ export type CreatePartialSaleInput = z.infer<typeof CreatePartialSaleSchema>;
 export type PartialSale = z.infer<typeof PartialSaleSchema>;
 export type MarketPhaseValue = z.infer<typeof MarketPhaseEnum>;
 export type CryptoControlIndex = z.infer<typeof CryptoControlIndexSchema>;
+
+// --- CONTRIBUTION SCHEDULE ---
+
+export const ContributionTypeEnum = z.enum(["periodica", "extraordinaria"]);
+export const ContributionStatusEnum = z.enum(["pendiente", "ejecutada", "cancelada"]);
+
+export const ContributionScheduleSchema = z.object({
+  id: z.string().min(1),
+  cycleId: z.string().min(1),
+  type: ContributionTypeEnum,
+  plannedDate: TimestampSchema,
+  amountEur: z.number().positive(),
+  currency: z.string().min(1),
+  destination: z.string().nullable(),
+  status: ContributionStatusEnum,
+  executedAt: TimestampSchema.nullable(),
+  notes: z.string().nullable().optional(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema
+});
+
+export const CreateContributionScheduleSchema = z.object({
+  cycleId: z.string().min(1),
+  type: ContributionTypeEnum.optional(),
+  plannedDate: TimestampSchema,
+  amountEur: z.number().positive(),
+  currency: z.string().trim().min(1).optional(),
+  destination: z.string().nullable().optional(),
+  notes: OptionalTextSchema
+});
+
+export const UpdateContributionScheduleSchema = z.object({
+  plannedDate: TimestampSchema.optional(),
+  amountEur: z.number().positive().optional(),
+  currency: z.string().trim().min(1).optional(),
+  destination: z.string().nullable().optional(),
+  type: ContributionTypeEnum.optional(),
+  notes: OptionalTextSchema
+});
+
+export type ContributionType = z.infer<typeof ContributionTypeEnum>;
+export type ContributionStatus = z.infer<typeof ContributionStatusEnum>;
+export type ContributionSchedule = z.infer<typeof ContributionScheduleSchema>;
+export type CreateContributionScheduleInput = z.infer<typeof CreateContributionScheduleSchema>;
+export type UpdateContributionScheduleInput = z.infer<typeof UpdateContributionScheduleSchema>;
+
+// --- ASSET SUBSTITUTIONS ---
+
+export const AssetSubstitutionSchema = z.object({
+  id: z.string().min(1),
+  cycleId: z.string().min(1),
+  fromAssetId: z.string().min(1),
+  toAssetId: z.string().nullable(),
+  fromInvestmentAssetId: z.string().nullable(),
+  toInvestmentAssetId: z.string().nullable(),
+  effectiveDate: TimestampSchema,
+  reason: z.string().min(1),
+  notes: z.string().nullable().optional(),
+  createdAt: TimestampSchema
+});
+
+export const CreateAssetSubstitutionSchema = z.object({
+  cycleId: z.string().min(1),
+  fromAssetId: z.string().min(1),
+  toAssetId: z.string().nullable().optional(),
+  fromInvestmentAssetId: z.string().nullable().optional(),
+  effectiveDate: TimestampSchema,
+  reason: z.string().min(1),
+  notes: OptionalTextSchema
+});
+
+export type AssetSubstitution = z.infer<typeof AssetSubstitutionSchema>;
+export type CreateAssetSubstitutionInput = z.infer<typeof CreateAssetSubstitutionSchema>;
+export type CycleGoal = z.infer<typeof CycleGoalEnum>;
+export type CycleRisk = z.infer<typeof CycleRiskEnum>;
+
+// --- ASSET HEALTH ---
 
 export const AssetHealthStatusEnum = z.enum(["activo", "observacion", "riesgo_elevado", "salida_recomendada", "retirado"]);
 

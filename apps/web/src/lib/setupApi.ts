@@ -111,6 +111,18 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
       list:   (i?: unknown) =>                  ipc("strategyRevisions:list", i),
       create: (d: unknown) =>                   ipc("strategyRevisions:create", d),
     },
+    contributionSchedule: {
+      list:    (i?: unknown) =>                 ipc("contributionSchedule:list", i),
+      create:  (d: unknown) =>                  ipc("contributionSchedule:create", d),
+      update:  (id: unknown, d: unknown) =>     ipc("contributionSchedule:update", id, d),
+      execute: (id: unknown) =>                 ipc("contributionSchedule:execute", id),
+      delete:  (id: unknown) =>                 ipc("contributionSchedule:delete", id),
+    },
+    assetSubstitutions: {
+      list:   (i?: unknown) =>                  ipc("assetSubstitutions:list", i),
+      create: (d: unknown) =>                   ipc("assetSubstitutions:create", d),
+      delete: (id: unknown) =>                  ipc("assetSubstitutions:delete", id),
+    },
     treasury: {
       getSummary:                 () =>                         ipc("treasury:getSummary"),
       listMovements:              () =>                         ipc("treasury:listMovements"),

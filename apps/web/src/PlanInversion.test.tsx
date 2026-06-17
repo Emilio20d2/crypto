@@ -54,6 +54,18 @@ beforeEach(() => {
       list: () => ok([{ id: "rev-1", cycleId: "cycle-1", effectiveDate: now, title: "Pausar ADA", notes: "Desde esta revisión no se modifica el pasado.", changesJson: JSON.stringify({ type: "pause_asset", assetId: "ADA" }), createdAt: now }]),
       create: () => ok({ id: "rev-new" }),
     },
+    contributionSchedule: {
+      list:    async () => ({ ok: true as const, data: [] }),
+      create:  async () => ({ ok: true as const, data: { id: "mock-contribution" } }),
+      update:  async () => ({ ok: true as const, data: [] as never }),
+      execute: async () => ({ ok: true as const, data: [] as never }),
+      delete:  async () => ({ ok: true as const, data: null }),
+    },
+    assetSubstitutions: {
+      list:   async () => ({ ok: true as const, data: [] }),
+      create: async () => ({ ok: true as const, data: { id: "mock-substitution" } }),
+      delete: async () => ({ ok: true as const, data: null }),
+    },
   };
 });
 
