@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Database, KeyRound, MonitorCog, Settings, Shield, SlidersHorizontal } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Badge } from "../components/Badge";
@@ -10,7 +10,6 @@ import { LoadingState } from "../components/LoadingState";
 import { PageToolbar } from "../components/PageToolbar";
 import { Select } from "../components/Select";
 import { SettingsList, SettingsRow } from "../components/SettingsPanels";
-import type { DiagnosticsReport } from "@crypto-control/core";
 
 function DiagnosticsPanel() {
   const [backfilling, setBackfilling] = useState(false);
@@ -19,7 +18,7 @@ function DiagnosticsPanel() {
     queryFn: async () => {
       const result = await window.cryptoControl.diagnostics.getReport();
       if (!result.ok) throw new Error(result.error.message);
-      return result.data as DiagnosticsReport;
+      return result.data;
     },
     staleTime: 30_000,
   });

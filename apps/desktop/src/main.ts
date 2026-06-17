@@ -679,7 +679,11 @@ function setupIpcHandlers() {
         .orderBy(asc(schema.priceHistory.timestamp))
         .all();
 
-      if (phRows.length > 10) {
+      // Daily data produces exactly 0–1 price points inside a 1h/24h window,
+      // making every grid point resolve to the same stale daily price → flat
+      // chart. Skip the daily fallback for short periods; honest empty/snapshot
+      // is better than a misleading flat line.
+      if (phRows.length > 10 && marketPeriod !== "1h" && marketPeriod !== "24h") {
         pricesByAsset[assetId] = phRows.map(r => ({ time: r.timestamp, price: r.price }));
         priceSourceByAsset[assetId] = "priceHistory";
         totalPricePoints += phRows.length;
@@ -704,6 +708,9 @@ function setupIpcHandlers() {
       }
 
       // 3. Live API fallback (fetches + caches to priceHistory)
+      // Skip "1y" daily data for short-period grids — same flat-chart problem
+      // as the priceHistory fallback above.
+      if (marketPeriod === "1h" || marketPeriod === "24h") return;
       try {
         const result = await marketService.getHistoricalPrices(assetId, "1y");
         if (result.points.length > 0) {
