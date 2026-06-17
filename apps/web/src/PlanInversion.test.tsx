@@ -38,7 +38,7 @@ beforeEach(() => {
     investmentCycles: {
       list: () => ok([{ id: "cycle-1", planId: "plan-1", name: "Ciclo 2026-2030", startDate: now, endDate: null, monthlyAmountEur: 100, contributionCurrency: "EUR", status: "planned", priority: 1, objetivo: null, riesgo: null, allowExtraContributions: true, notes: null, createdAt: now, updatedAt: now }]),
       getCurrent: async () => ({ ok: true as const, data: null }),
-      getMetrics: async () => ({ ok: true as const, data: { cycleId: "cycle-1", monthsElapsed: 6, monthsRemaining: null, percentComplete: null, expectedContributionMonthly: 100, expectedContributionAnnual: 1200, expectedContributionToDate: 600, expectedContributionTotal: null, actualContribution: 600, contributionDifference: 0, extraContribution: 0, monthlyContributions: [], currentValueEur: 650, heldCostBasisEur: 600, profitEur: 50, roiPercentage: 8.33, hasPendingValuation: false } }),
+      getMetrics: async () => ({ ok: true as const, data: { cycleId: "cycle-1", monthsElapsed: 6, monthsRemaining: null, percentComplete: null, expectedContributionMonthly: 100, expectedContributionAnnual: 1200, expectedContributionToDate: 600, expectedContributionTotal: null, actualContribution: 600, contributionDifference: 0, extraContribution: 0, contributionCompliancePercentage: 100, monthlyContributions: [], currentValueEur: 650, heldCostBasisEur: 600, profitEur: 50, roiPercentage: 8.33, hasPendingValuation: false } }),
       listPartialSales: async () => ({ ok: true as const, data: [] }),
       createPartialSale: async () => ({ ok: true as const, data: { id: "mock-sale" } }),
       deletePartialSale: async () => ({ ok: true as const, data: null }),
@@ -66,7 +66,7 @@ beforeEach(() => {
     },
     investmentAssets: {
       list: () => ok([{ id: "asset-1", cycleId: "cycle-1", assetId: "ADA", allocationType: "percentage", allocationValue: 40, allocationPercentage: 40, fixedAmountEur: null, priority: 1, targetAmount: 1000, targetValueEur: 2500, targetPortfolioPercentage: 15, startDate: now, endDate: null, status: "active", isActive: true, notes: null, createdAt: now, updatedAt: now }]),
-      getHealth: async () => ({ ok: true as const, data: { status: "activo" as const, relativeStrengthVsBtc: null, strongEntrySignal: false, reasoning: "mock", signalsUsed: [], signalsUnavailable: [] } }),
+      getHealth: async () => ({ ok: true as const, data: { status: "activo" as const, relativeStrengthVsBtc: null, strongEntrySignal: false, tendencia: null, riesgoNivel: "bajo" as const, estadoEstrategico: "buena" as const, reasoning: "mock", signalsUsed: [], signalsUnavailable: [] } }),
       create: createInvestmentAssetMock,
       update: (_id: string, data: any) => ok({ id: "asset-1", cycleId: "cycle-1", assetId: data.assetId ?? "ADA", allocationType: data.allocationType ?? "percentage", allocationValue: data.allocationValue ?? 40, allocationPercentage: data.allocationPercentage ?? 40, fixedAmountEur: data.fixedAmountEur ?? null, priority: data.priority ?? 1, targetAmount: data.targetAmount ?? 1000, targetValueEur: data.targetValueEur ?? 2500, targetPortfolioPercentage: data.targetPortfolioPercentage ?? 15, startDate: data.startDate ?? now, endDate: data.endDate ?? null, status: data.status ?? "active", isActive: data.isActive ?? true, notes: data.notes ?? null, createdAt: now, updatedAt: now }),
       pause: (_id: string, data: any) => ok({ id: "asset-1", cycleId: "cycle-1", assetId: "ADA", allocationType: "percentage", allocationValue: 40, allocationPercentage: 40, fixedAmountEur: null, priority: 1, targetAmount: 1000, targetValueEur: 2500, targetPortfolioPercentage: 15, startDate: now, endDate: data?.effectiveDate ?? now, status: "paused", isActive: false, notes: data?.notes ?? null, createdAt: now, updatedAt: now }),
@@ -85,9 +85,13 @@ beforeEach(() => {
       delete:  async () => ({ ok: true as const, data: null }),
     },
     assetSubstitutions: {
-      list:   async () => ({ ok: true as const, data: [] }),
-      create: async () => ({ ok: true as const, data: { id: "mock-substitution" } }),
-      delete: async () => ({ ok: true as const, data: null }),
+      list:    async () => ({ ok: true as const, data: [] }),
+      create:  async () => ({ ok: true as const, data: { id: "mock-substitution" } }),
+      execute: async () => ({ ok: true as const, data: { fromInvestmentAssetId: "mock-ia", toInvestmentAssetId: null } }),
+      delete:  async () => ({ ok: true as const, data: null }),
+    },
+    strategicAlerts: {
+      generate: async () => ({ ok: true as const, data: [] }),
     },
   };
 });

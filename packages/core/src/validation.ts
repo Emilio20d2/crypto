@@ -391,6 +391,7 @@ export const CycleMetricsSchema = z.object({
   actualContribution: z.number(),
   contributionDifference: z.number(),
   extraContribution: z.number(),
+  contributionCompliancePercentage: z.number().nullable(),
   monthlyContributions: z.array(MonthlyContributionSchema),
   currentValueEur: z.number(),
   heldCostBasisEur: z.number(),
@@ -517,15 +518,74 @@ export type CycleRisk = z.infer<typeof CycleRiskEnum>;
 // --- ASSET HEALTH ---
 
 export const AssetHealthStatusEnum = z.enum(["activo", "observacion", "riesgo_elevado", "salida_recomendada", "retirado"]);
+export const AssetTrendEnum = z.enum(["alcista", "lateral", "bajista"]);
+export const AssetRiskLevelEnum = z.enum(["bajo", "moderado", "alto", "muy_alto"]);
+export const AssetStrategicStateEnum = z.enum(["excelente", "buena", "neutral", "vigilancia", "deterioro", "sustitucion_recomendada"]);
 
 export const AssetHealthResultSchema = z.object({
   status: AssetHealthStatusEnum,
   relativeStrengthVsBtc: z.number().nullable(),
   strongEntrySignal: z.boolean(),
+  tendencia: AssetTrendEnum.nullable(),
+  riesgoNivel: AssetRiskLevelEnum,
+  estadoEstrategico: AssetStrategicStateEnum,
   reasoning: z.string(),
   signalsUsed: z.array(z.string()),
   signalsUnavailable: z.array(z.string())
 });
 
 export type AssetHealthStatus = z.infer<typeof AssetHealthStatusEnum>;
+export type AssetTrend = z.infer<typeof AssetTrendEnum>;
+export type AssetRiskLevel = z.infer<typeof AssetRiskLevelEnum>;
+export type AssetStrategicState = z.infer<typeof AssetStrategicStateEnum>;
 export type AssetHealthResult = z.infer<typeof AssetHealthResultSchema>;
+
+// --- ALERTAS ESTRATÉGICAS (calculadas por demanda, no persistidas) ---
+
+export const StrategicAlertTypeEnum = z.enum([
+  "debilidad_relativa",
+  "debilidad_critica",
+  "sustitucion_recomendada",
+  "peso_excesivo",
+  "peso_insuficiente",
+  "activo_en_observacion"
+]);
+export const StrategicAlertSeverityEnum = z.enum(["info", "advertencia", "critica"]);
+
+export const StrategicAlertSchema = z.object({
+  id: z.string(),
+  cycleId: z.string(),
+  assetId: z.string().nullable(),
+  type: StrategicAlertTypeEnum,
+  severity: StrategicAlertSeverityEnum,
+  title: z.string(),
+  message: z.string(),
+});
+
+export type StrategicAlertType = z.infer<typeof StrategicAlertTypeEnum>;
+export type StrategicAlertSeverity = z.infer<typeof StrategicAlertSeverityEnum>;
+export type StrategicAlert = z.infer<typeof StrategicAlertSchema>;
+
+// --- PREPARACIÓN FASE G (modelos de datos, sin handlers ni UI todavía) ---
+
+export const MarketPhaseResultSchema = z.object({
+  phase: MarketPhaseEnum,
+  confidence: z.enum(["alta", "media", "baja"]),
+  indicators: z.array(z.string()),
+  reasoning: z.string(),
+  assessedAt: TimestampSchema,
+});
+
+export const StrategicRecommendationSchema = z.object({
+  id: z.string(),
+  cycleId: z.string().nullable(),
+  assetId: z.string().nullable(),
+  type: z.enum(["mantener", "acumular", "reducir", "salir", "vigilar"]),
+  confidence: z.enum(["alta", "media", "baja"]),
+  reasoning: z.string(),
+  generatedAt: TimestampSchema,
+  validUntil: TimestampSchema.nullable(),
+});
+
+export type MarketPhaseResult = z.infer<typeof MarketPhaseResultSchema>;
+export type StrategicRecommendation = z.infer<typeof StrategicRecommendationSchema>;

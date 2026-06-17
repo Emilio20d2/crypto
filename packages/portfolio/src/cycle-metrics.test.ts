@@ -140,4 +140,28 @@ describe("computeCycleMetrics", () => {
     expect(metrics.expectedContributionMonthly).toBe(100);
     expect(metrics.expectedContributionAnnual).toBe(1200);
   });
+
+  test("contributionCompliancePercentage: 75% cuando aportas 75 de 100 esperados", () => {
+    const cycle: CycleInput = { id: "c", startDate: dateMs("2026-01-01"), endDate: null, monthlyAmountEur: 100 };
+    const transactions: TransactionInput[] = [
+      { id: "tx1", type: "buy", date: dateMs("2026-01-15"), legs: [{ assetId: "BTC", amount: 0.001, legType: "destination", valuationEur: 75 }] }
+    ];
+    const metrics = computeCycleMetrics(cycle, transactions, {}, dateMs("2026-02-01"));
+    expect(metrics.contributionCompliancePercentage).toBeCloseTo(75);
+  });
+
+  test("contributionCompliancePercentage: null cuando expectedContributionToDate es 0 (ciclo sin tiempo transcurrido)", () => {
+    const cycle: CycleInput = { id: "c", startDate: dateMs("2026-01-01"), endDate: null, monthlyAmountEur: 100 };
+    const metrics = computeCycleMetrics(cycle, [], {}, dateMs("2026-01-01"));
+    expect(metrics.contributionCompliancePercentage).toBeNull();
+  });
+
+  test("contributionCompliancePercentage: máximo 100% aunque aportes más del esperado", () => {
+    const cycle: CycleInput = { id: "c", startDate: dateMs("2026-01-01"), endDate: null, monthlyAmountEur: 100 };
+    const transactions: TransactionInput[] = [
+      { id: "tx1", type: "buy", date: dateMs("2026-01-10"), legs: [{ assetId: "BTC", amount: 0.01, legType: "destination", valuationEur: 300 }] }
+    ];
+    const metrics = computeCycleMetrics(cycle, transactions, {}, dateMs("2026-02-01"));
+    expect(metrics.contributionCompliancePercentage).toBe(100);
+  });
 });

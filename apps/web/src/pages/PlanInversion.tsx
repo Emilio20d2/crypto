@@ -15,6 +15,7 @@ import type {
   PartialSale,
   Result,
   StrategyRevision,
+  StrategicAlert,
   TransactionInput,
 } from "@crypto-control/core";
 import { CalendarDays, CheckCircle, CircleOff, Copy, Plus, Save, Trash2, XCircle } from "lucide-react";
@@ -132,6 +133,41 @@ const ASSET_HEALTH_BADGE: Record<AssetHealthResult["status"], string> = {
   riesgo_elevado: "badge-danger",
   salida_recomendada: "badge-danger",
   retirado: "",
+};
+
+const ASSET_TREND_LABEL: Record<NonNullable<AssetHealthResult["tendencia"]>, string> = {
+  alcista: "Alcista",
+  lateral: "Lateral",
+  bajista: "Bajista",
+};
+
+const ASSET_RISK_LABEL: Record<AssetHealthResult["riesgoNivel"], string> = {
+  bajo: "Bajo",
+  moderado: "Moderado",
+  alto: "Alto",
+  muy_alto: "Muy alto",
+};
+
+const ASSET_RISK_BADGE: Record<AssetHealthResult["riesgoNivel"], string> = {
+  bajo: "badge-success",
+  moderado: "badge-warning",
+  alto: "badge-danger",
+  muy_alto: "badge-danger",
+};
+
+const STRATEGIC_STATE_LABEL: Record<AssetHealthResult["estadoEstrategico"], string> = {
+  excelente: "Excelente",
+  buena: "Buena",
+  neutral: "Neutral",
+  vigilancia: "Vigilancia",
+  deterioro: "Deterioro",
+  sustitucion_recomendada: "Sustitución recomendada",
+};
+
+const ALERT_SEVERITY_BADGE: Record<string, string> = {
+  critica: "badge-danger",
+  advertencia: "badge-warning",
+  info: "",
 };
 
 const CS_TYPE_LABEL: Record<ContributionSchedule["type"], string> = {
@@ -407,6 +443,13 @@ function CycleEditor({
   });
   const metrics: CycleMetrics | null = metricsQuery.data ?? null;
 
+  const alertsQuery = useQuery({
+    queryKey: ["strategic-alerts", cycle.id],
+    queryFn: () => unwrap(window.cryptoControl.strategicAlerts.generate({ cycleId: cycle.id })),
+    staleTime: 10 * 60 * 1000,
+  });
+  const alerts: StrategicAlert[] = alertsQuery.data ?? [];
+
   const [assetId, setAssetId] = useState(assets[0]?.id ?? "");
   const [allocationPercentage, setAllocationPercentage] = useState("");
   const [fixedAmountEur, setFixedAmountEur] = useState("");
@@ -573,6 +616,11 @@ function CycleEditor({
     onSuccess: () => { void invalidateSubs(); },
   });
 
+  const executeSub = useMutation({
+    mutationFn: (id: string) => unwrap(window.cryptoControl.assetSubstitutions.execute(id)),
+    onSuccess: () => { void invalidateSubs(); },
+  });
+
   async function submitSub(event: FormEvent) {
     event.preventDefault();
     if (!subFromAssetId || !subReason.trim()) return;
@@ -725,16 +773,41 @@ function CycleEditor({
           </div>
         ) : null}
 
+        {alerts.length > 0 ? (
+          <section className="investment-section" role="alert" aria-label="Alertas estratégicas">
+            <div className="investment-section-heading">
+              <h3>Alertas estratégicas</h3>
+              <span className="badge badge-danger">{alerts.filter((a) => a.severity === "critica").length} críticas · {alerts.length} total</span>
+            </div>
+            <div className="investment-contribution-list">
+              {alerts.map((alert) => (
+                <article className="investment-contribution" key={alert.id}>
+                  <div className="investment-contribution-header">
+                    <div>
+                      <strong>{alert.title}</strong>
+                      {alert.assetId ? <span>{alert.assetId}</span> : null}
+                    </div>
+                    <span className={`badge ${ALERT_SEVERITY_BADGE[alert.severity] ?? ""}`}>
+                      {alert.severity === "critica" ? "Crítica" : alert.severity === "advertencia" ? "Advertencia" : "Info"}
+                    </span>
+                  </div>
+                  <p className="investment-contribution-meta">{alert.message}</p>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
         {metrics ? (
           <section className="investment-metrics-grid" aria-label="Métricas del ciclo">
             <article className="investment-summary-tile">
-              <span>Meses transcurridos</span>
-              <strong>{metrics.monthsElapsed}</strong>
+              <span>Tiempo transcurrido</span>
+              <strong>{metrics.monthsElapsed} {metrics.monthsElapsed === 1 ? "mes" : "meses"}</strong>
             </article>
             {metrics.monthsRemaining !== null ? (
               <article className="investment-summary-tile">
-                <span>Meses restantes</span>
-                <strong>{metrics.monthsRemaining}</strong>
+                <span>Tiempo restante</span>
+                <strong>{metrics.monthsRemaining} {metrics.monthsRemaining === 1 ? "mes" : "meses"}</strong>
               </article>
             ) : null}
             {metrics.percentComplete !== null ? (
@@ -744,15 +817,23 @@ function CycleEditor({
               </article>
             ) : null}
             <article className="investment-summary-tile">
-              <span>Aportado real</span>
-              <strong>{formatMoney(metrics.actualContribution)}</strong>
-            </article>
-            <article className="investment-summary-tile">
-              <span>Esperado a fecha</span>
+              <span>Capital esperado</span>
               <strong>{formatMoney(metrics.expectedContributionToDate)}</strong>
             </article>
             <article className="investment-summary-tile">
-              <span>Diferencia</span>
+              <span>Capital real aportado</span>
+              <strong>{formatMoney(metrics.actualContribution)}</strong>
+            </article>
+            {metrics.contributionCompliancePercentage !== null ? (
+              <article className="investment-summary-tile">
+                <span>Cumplimiento aportaciones</span>
+                <strong style={{ color: metrics.contributionCompliancePercentage >= 90 ? "var(--color-success)" : metrics.contributionCompliancePercentage >= 60 ? "var(--color-warning)" : "var(--color-danger)" }}>
+                  {metrics.contributionCompliancePercentage.toLocaleString("es-ES", { maximumFractionDigits: 1 })}%
+                </strong>
+              </article>
+            ) : null}
+            <article className="investment-summary-tile">
+              <span>Desviación</span>
               <strong style={{ color: metrics.contributionDifference >= 0 ? "var(--color-success)" : "var(--color-danger)" }}>
                 {metrics.contributionDifference >= 0 ? "+" : ""}{formatMoney(metrics.contributionDifference)}
               </strong>
@@ -772,7 +853,7 @@ function CycleEditor({
               <strong>{formatMoney(metrics.heldCostBasisEur)}</strong>
             </article>
             <article className="investment-summary-tile">
-              <span>Beneficio</span>
+              <span>Rentabilidad acumulada</span>
               <strong style={{ color: metrics.profitEur >= 0 ? "var(--color-success)" : "var(--color-danger)" }}>
                 {metrics.profitEur >= 0 ? "+" : ""}{formatMoney(metrics.profitEur)}
               </strong>
@@ -1263,6 +1344,19 @@ function CycleEditor({
                   <p className="investment-contribution-meta">{sub.reason}</p>
                   {sub.notes ? <p className="investment-contribution-meta">{sub.notes}</p> : null}
                   <div className="investment-form-actions">
+                    {sub.fromInvestmentAssetId == null ? (
+                      <Button
+                        type="button"
+                        variant="primary"
+                        size="sm"
+                        loading={executeSub.isPending}
+                        onClick={() => void executeSub.mutateAsync(sub.id)}
+                      >
+                        <CheckCircle size={15} /> Ejecutar sustitución
+                      </Button>
+                    ) : (
+                      <span className="badge badge-success">Ejecutada</span>
+                    )}
                     <Button
                       type="button"
                       variant="danger"
@@ -1342,9 +1436,17 @@ function InvestmentAssetEditor({
         <div className="investment-asset-badges">
           <span className={status === "active" ? "badge badge-success" : "badge"}>{ASSET_STATUS_LABEL[status]}</span>
           {health ? (
-            <span className={`badge ${ASSET_HEALTH_BADGE[health.status]}`} title={health.reasoning}>
-              {ASSET_HEALTH_LABEL[health.status]}
-            </span>
+            <>
+              <span className={`badge ${ASSET_HEALTH_BADGE[health.status]}`}>
+                {ASSET_HEALTH_LABEL[health.status]}
+              </span>
+              <span className={`badge ${ASSET_RISK_BADGE[health.riesgoNivel]}`}>
+                Riesgo {ASSET_RISK_LABEL[health.riesgoNivel]}
+              </span>
+              {health.tendencia ? (
+                <span className="badge">{ASSET_TREND_LABEL[health.tendencia]}</span>
+              ) : null}
+            </>
           ) : null}
         </div>
       </div>
@@ -1353,6 +1455,52 @@ function InvestmentAssetEditor({
         <div><dt>Fin</dt><dd>{formatDate(item.endDate)}</dd></div>
         <div><dt>Objetivos</dt><dd>{objectiveParts.length ? objectiveParts.join(" · ") : "Sin objetivo"}</dd></div>
       </dl>
+      {health ? (
+        <section className="investment-section" aria-label="Salud del activo">
+          <div className="investment-section-heading">
+            <h3>Salud del activo</h3>
+            <span className={`badge ${ASSET_HEALTH_BADGE[health.status]}`}>{STRATEGIC_STATE_LABEL[health.estadoEstrategico]}</span>
+          </div>
+          <div className="investment-metrics-grid">
+            <article className="investment-summary-tile">
+              <span>Estado general</span>
+              <strong className={ASSET_HEALTH_BADGE[health.status].replace("badge-", "text-")}>
+                {ASSET_HEALTH_LABEL[health.status]}
+              </strong>
+            </article>
+            <article className="investment-summary-tile">
+              <span>Tendencia</span>
+              <strong>{health.tendencia ? ASSET_TREND_LABEL[health.tendencia] : "Sin datos"}</strong>
+            </article>
+            <article className="investment-summary-tile">
+              <span>Nivel de riesgo</span>
+              <strong>{ASSET_RISK_LABEL[health.riesgoNivel]}</strong>
+            </article>
+            <article className="investment-summary-tile">
+              <span>Fortaleza relativa vs BTC</span>
+              <strong style={{ color: health.relativeStrengthVsBtc !== null ? (health.relativeStrengthVsBtc >= 0 ? "var(--color-success)" : "var(--color-danger)") : undefined }}>
+                {health.relativeStrengthVsBtc !== null ? `${health.relativeStrengthVsBtc >= 0 ? "+" : ""}${health.relativeStrengthVsBtc.toFixed(1)} pts` : "Sin datos"}
+              </strong>
+            </article>
+            <article className="investment-summary-tile">
+              <span>Estado estratégico</span>
+              <strong>{STRATEGIC_STATE_LABEL[health.estadoEstrategico]}</strong>
+            </article>
+            {health.strongEntrySignal ? (
+              <article className="investment-summary-tile">
+                <span>Señal de entrada</span>
+                <strong style={{ color: "var(--color-success)" }}>Fuerte</strong>
+              </article>
+            ) : null}
+          </div>
+          <p className="investment-contribution-meta">{health.reasoning}</p>
+          {health.signalsUnavailable.length > 0 ? (
+            <p className="investment-contribution-meta">
+              Sin datos para: {health.signalsUnavailable.join(", ")}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
       {localError ? <p className="error-msg">{localError}</p> : null}
       <form className="investment-form-grid compact" onSubmit={(event) => {
         event.preventDefault();

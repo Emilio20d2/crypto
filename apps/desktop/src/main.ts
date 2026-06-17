@@ -37,6 +37,7 @@ import {
   CreateContributionScheduleSchema,
   UpdateContributionScheduleSchema,
   CreateAssetSubstitutionSchema,
+  StrategicAlertSchema,
 } from "@crypto-control/core";
 import crypto from "crypto";
 import { eq, and, or, asc, desc, isNull } from "drizzle-orm";
@@ -2124,6 +2125,143 @@ function setupIpcHandlers() {
   ipcMain.handle("assetSubstitutions:delete", withResult(async (_, id: string) => {
     db.delete(schema.assetSubstitutions).where(eq(schema.assetSubstitutions.id, id)).run();
     return null;
+  }));
+
+  // Ejecutar una sustitución: cierra el investmentAsset de origen y crea uno nuevo
+  // para el activo destino heredando la configuración de asignación del origen.
+  ipcMain.handle("assetSubstitutions:execute", withResult(async (_, id: string) => {
+    const db = getDb();
+    const sub = db.select().from(schema.assetSubstitutions).where(eq(schema.assetSubstitutions.id, id)).get();
+    if (!sub) throw new Error(`Sustitución ${id} no encontrada.`);
+
+    const fromAsset = db.select().from(schema.investmentAssets)
+      .where(and(
+        eq(schema.investmentAssets.cycleId, sub.cycleId),
+        eq(schema.investmentAssets.assetId, sub.fromAssetId),
+        eq(schema.investmentAssets.status, "active"),
+      ))
+      .orderBy(desc(schema.investmentAssets.startDate))
+      .limit(1)
+      .get();
+
+    const fromInvestmentAssetId = fromAsset?.id ?? null;
+    let toInvestmentAssetId: string | null = null;
+
+    db.transaction((tx) => {
+      if (fromAsset) {
+        tx.update(schema.investmentAssets)
+          .set({ status: "closed", endDate: sub.effectiveDate, updatedAt: Date.now() })
+          .where(eq(schema.investmentAssets.id, fromAsset.id))
+          .run();
+      }
+
+      if (sub.toAssetId) {
+        const newId = crypto.randomUUID();
+        toInvestmentAssetId = newId;
+        const now = Date.now();
+        tx.insert(schema.investmentAssets).values({
+          id: newId,
+          cycleId: sub.cycleId,
+          assetId: sub.toAssetId,
+          allocationType: fromAsset?.allocationType ?? "percentage",
+          allocationValue: fromAsset?.allocationValue ?? 0,
+          allocationPercentage: fromAsset?.allocationPercentage ?? null,
+          fixedAmountEur: fromAsset?.fixedAmountEur ?? null,
+          priority: fromAsset?.priority ?? 0,
+          targetAmount: fromAsset?.targetAmount ?? null,
+          targetValueEur: fromAsset?.targetValueEur ?? null,
+          targetPortfolioPercentage: fromAsset?.targetPortfolioPercentage ?? null,
+          startDate: sub.effectiveDate,
+          endDate: null,
+          status: "active",
+          notes: `Sustitución desde ${sub.fromAssetId}. ${sub.reason}`,
+          createdAt: now,
+          updatedAt: now,
+        }).run();
+      }
+
+      tx.update(schema.assetSubstitutions)
+        .set({
+          fromInvestmentAssetId: fromInvestmentAssetId ?? undefined,
+          toInvestmentAssetId: toInvestmentAssetId ?? undefined,
+        })
+        .where(eq(schema.assetSubstitutions.id, id))
+        .run();
+    });
+
+    return { fromInvestmentAssetId, toInvestmentAssetId };
+  }));
+
+  // Alertas estratégicas calculadas por demanda para un ciclo concreto.
+  // No se persisten: se calculan desde el estado actual de los activos.
+  ipcMain.handle("strategicAlerts:generate", withResult(async (_, input: { cycleId: string }) => {
+    const { assessAssetHealth } = require("@crypto-control/market-data") as typeof import("@crypto-control/market-data");
+    const db = getDb();
+
+    const assetRows = db.select().from(schema.investmentAssets)
+      .where(and(
+        eq(schema.investmentAssets.cycleId, input.cycleId),
+        eq(schema.investmentAssets.status, "active"),
+      ))
+      .all();
+
+    const alerts = [];
+    for (const assetRow of assetRows) {
+      const isRetiredFromStrategy = assetRow.status === "closed";
+      const fearGreedValue = getCachedFearGreed();
+      const [assetSentiment, btcSentiment] = await Promise.all([
+        sentimentService.getAssetSentiment(assetRow.assetId, "30d", { fearGreedValue }).catch(() => null),
+        assetRow.assetId === "BTC" ? Promise.resolve(null) : sentimentService.getAssetSentiment("BTC", "30d", { fearGreedValue }).catch(() => null),
+      ]);
+
+      const health = assessAssetHealth({ assetSentiment, btcSentiment, isRetiredFromStrategy });
+
+      if (health.status === "salida_recomendada") {
+        alerts.push(StrategicAlertSchema.parse({
+          id: `${assetRow.assetId}-sustitucion`,
+          cycleId: input.cycleId,
+          assetId: assetRow.assetId,
+          type: "sustitucion_recomendada",
+          severity: "critica",
+          title: `${assetRow.assetId}: Sustitución recomendada`,
+          message: health.reasoning,
+        }));
+      } else if (health.status === "riesgo_elevado") {
+        alerts.push(StrategicAlertSchema.parse({
+          id: `${assetRow.assetId}-deterioro`,
+          cycleId: input.cycleId,
+          assetId: assetRow.assetId,
+          type: "debilidad_critica",
+          severity: "advertencia",
+          title: `${assetRow.assetId}: Deterioro detectado`,
+          message: health.reasoning,
+        }));
+      } else if (health.status === "observacion") {
+        alerts.push(StrategicAlertSchema.parse({
+          id: `${assetRow.assetId}-observacion`,
+          cycleId: input.cycleId,
+          assetId: assetRow.assetId,
+          type: "activo_en_observacion",
+          severity: "info",
+          title: `${assetRow.assetId}: En observación`,
+          message: health.reasoning,
+        }));
+      }
+
+      if (health.relativeStrengthVsBtc !== null && health.relativeStrengthVsBtc < -15) {
+        alerts.push(StrategicAlertSchema.parse({
+          id: `${assetRow.assetId}-debilidad-relativa`,
+          cycleId: input.cycleId,
+          assetId: assetRow.assetId,
+          type: "debilidad_relativa",
+          severity: health.relativeStrengthVsBtc < -25 ? "advertencia" : "info",
+          title: `${assetRow.assetId}: Debilidad relativa vs BTC`,
+          message: `Fuerza relativa vs BTC: ${health.relativeStrengthVsBtc.toFixed(1)} puntos. ${health.reasoning}`,
+        }));
+      }
+    }
+
+    return alerts;
   }));
 
   // Ping channel: called by the preload every 200 ms to drive uv_run so the

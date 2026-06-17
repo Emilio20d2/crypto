@@ -27,6 +27,7 @@ import type {
   FiscalReserveMovement,
   CycleMetrics,
   AssetHealthResult,
+  StrategicAlert,
   UpdateInvestmentAssetInput,
   UpdateInvestmentCycleInput,
   UpdateInvestmentPlanInput,
@@ -201,7 +202,11 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
   assetSubstitutions: {
     list: (input?: { cycleId?: string; fromAssetId?: string }) => Promise<Result<AssetSubstitution[]>>;
     create: (data: CreateAssetSubstitutionInput) => Promise<Result<{ id: string }>>;
+    execute: (id: string) => Promise<Result<{ fromInvestmentAssetId: string | null; toInvestmentAssetId: string | null }>>;
     delete: (id: string) => Promise<Result<null>>;
+  };
+  strategicAlerts: {
+    generate: (input: { cycleId: string }) => Promise<Result<StrategicAlert[]>>;
   };
   treasury: {
     getSummary: () => Promise<Result<TreasurySummary>>;

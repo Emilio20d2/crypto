@@ -7,6 +7,9 @@ import type { MarketSentiment } from "./sentiment";
 // asset's own 30d trend signal against BTC's, both computed by the same
 // MarketSentimentService so they're on the same comparable scale.
 export type AssetHealthStatus = "activo" | "observacion" | "riesgo_elevado" | "salida_recomendada" | "retirado";
+export type AssetTrend = "alcista" | "lateral" | "bajista";
+export type AssetRiskLevel = "bajo" | "moderado" | "alto" | "muy_alto";
+export type AssetStrategicState = "excelente" | "buena" | "neutral" | "vigilancia" | "deterioro" | "sustitucion_recomendada";
 
 export interface AssetHealthInput {
   assetSentiment: MarketSentiment | null;
@@ -18,6 +21,9 @@ export interface AssetHealthResult {
   status: AssetHealthStatus;
   relativeStrengthVsBtc: number | null;
   strongEntrySignal: boolean;
+  tendencia: AssetTrend | null;
+  riesgoNivel: AssetRiskLevel;
+  estadoEstrategico: AssetStrategicState;
   reasoning: string;
   signalsUsed: string[];
   signalsUnavailable: string[];
@@ -28,12 +34,38 @@ function factorScore(sentiment: MarketSentiment | null | undefined, factorId: st
   return found ? found.contribution : null;
 }
 
+function deriveTrend(direction: MarketSentiment["direction"] | undefined): AssetTrend | null {
+  if (!direction) return null;
+  if (direction === "very_bullish" || direction === "bullish") return "alcista";
+  if (direction === "very_bearish" || direction === "bearish") return "bajista";
+  return "lateral";
+}
+
+function deriveRiskLevel(status: AssetHealthStatus): AssetRiskLevel {
+  if (status === "salida_recomendada") return "muy_alto";
+  if (status === "riesgo_elevado") return "alto";
+  if (status === "observacion") return "moderado";
+  return "bajo";
+}
+
+function deriveStrategicState(status: AssetHealthStatus, strongEntrySignal: boolean): AssetStrategicState {
+  if (status === "salida_recomendada") return "sustitucion_recomendada";
+  if (status === "riesgo_elevado") return "deterioro";
+  if (status === "observacion") return "vigilancia";
+  if (status === "retirado") return "neutral";
+  if (strongEntrySignal) return "excelente";
+  return "buena";
+}
+
 export function assessAssetHealth(input: AssetHealthInput): AssetHealthResult {
   if (input.isRetiredFromStrategy) {
     return {
       status: "retirado",
       relativeStrengthVsBtc: null,
       strongEntrySignal: false,
+      tendencia: null,
+      riesgoNivel: "bajo",
+      estadoEstrategico: "neutral",
       reasoning: "El activo ya está retirado de la estrategia.",
       signalsUsed: [],
       signalsUnavailable: []
@@ -50,6 +82,9 @@ export function assessAssetHealth(input: AssetHealthInput): AssetHealthResult {
       status: "activo",
       relativeStrengthVsBtc: null,
       strongEntrySignal: false,
+      tendencia: null,
+      riesgoNivel: "bajo",
+      estadoEstrategico: "buena",
       reasoning: "Sin datos de sentimiento disponibles; no se puede evaluar deterioro, se asume activo por defecto.",
       signalsUsed: used,
       signalsUnavailable: unavailable
@@ -86,5 +121,19 @@ export function assessAssetHealth(input: AssetHealthInput): AssetHealthResult {
 
   const strongEntrySignal = direction === "very_bullish" && relativeStrengthVsBtc !== null && relativeStrengthVsBtc > 20;
 
-  return { status, relativeStrengthVsBtc, strongEntrySignal, reasoning, signalsUsed: used, signalsUnavailable: unavailable };
+  const tendencia = deriveTrend(direction);
+  const riesgoNivel = deriveRiskLevel(status);
+  const estadoEstrategico = deriveStrategicState(status, strongEntrySignal);
+
+  return {
+    status,
+    relativeStrengthVsBtc,
+    strongEntrySignal,
+    tendencia,
+    riesgoNivel,
+    estadoEstrategico,
+    reasoning,
+    signalsUsed: used,
+    signalsUnavailable: unavailable
+  };
 }

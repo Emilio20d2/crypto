@@ -124,9 +124,13 @@ const cryptoControl: FullCryptoControlAPI = {
     delete:  (id: string)                                          => ipcRenderer.invoke("contributionSchedule:delete", id),
   },
   assetSubstitutions: {
-    list:   (input?: { cycleId?: string; fromAssetId?: string })   => ipcRenderer.invoke("assetSubstitutions:list", input),
-    create: (data: CreateAssetSubstitutionInput)                   => ipcRenderer.invoke("assetSubstitutions:create", data),
-    delete: (id: string)                                           => ipcRenderer.invoke("assetSubstitutions:delete", id),
+    list:    (input?: { cycleId?: string; fromAssetId?: string })  => ipcRenderer.invoke("assetSubstitutions:list", input),
+    create:  (data: CreateAssetSubstitutionInput)                  => ipcRenderer.invoke("assetSubstitutions:create", data),
+    execute: (id: string)                                          => ipcRenderer.invoke("assetSubstitutions:execute", id),
+    delete:  (id: string)                                          => ipcRenderer.invoke("assetSubstitutions:delete", id),
+  },
+  strategicAlerts: {
+    generate: (input: { cycleId: string })                         => ipcRenderer.invoke("strategicAlerts:generate", input),
   },
   treasury: {
     getSummary:           ()                                      => ipcRenderer.invoke("treasury:getSummary"),

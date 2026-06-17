@@ -27,6 +27,7 @@ export interface CycleMetrics {
   actualContribution: number;
   contributionDifference: number;
   extraContribution: number;
+  contributionCompliancePercentage: number | null;
   monthlyContributions: MonthlyContribution[];
   currentValueEur: number;
   heldCostBasisEur: number;
@@ -178,6 +179,8 @@ export function computeCycleMetrics(
 
   const profitEur = currentValueEur - actualContribution;
   const roiPercentage = actualContribution > 0 ? (profitEur / actualContribution) * 100 : null;
+  const contributionCompliancePercentage =
+    expectedContributionToDate > 0 ? Math.min(100, (actualContribution / expectedContributionToDate) * 100) : null;
 
   return {
     cycleId: cycle.id,
@@ -191,6 +194,7 @@ export function computeCycleMetrics(
     actualContribution,
     contributionDifference,
     extraContribution,
+    contributionCompliancePercentage,
     monthlyContributions,
     currentValueEur,
     heldCostBasisEur,
