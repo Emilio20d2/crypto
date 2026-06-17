@@ -7,12 +7,15 @@
 // callers must never label this output as one of those.
 export type MarketPhase =
   | "acumulacion"
+  | "recuperacion"
   | "inicio_alcista"
   | "alcista_fuerte"
   | "euforia"
   | "distribucion"
   | "bajista"
-  | "capitulacion";
+  | "correccion"
+  | "capitulacion"
+  | "incertidumbre";
 
 export interface MarketPhaseInput {
   fearGreed: number | null;
@@ -24,7 +27,7 @@ export interface MarketPhaseInput {
 }
 
 export interface MarketPhaseResult {
-  phase: MarketPhase | null;
+  phase: MarketPhase;
   confidence: "alta" | "media" | "baja";
   indicatorsUsed: string[];
   indicatorsUnavailable: string[];
@@ -59,11 +62,11 @@ export function classifyMarketPhase(input: MarketPhaseInput): MarketPhaseResult 
   const fg = input.fearGreed;
   if (fg === null || !Number.isFinite(fg)) {
     return {
-      phase: null,
+      phase: "incertidumbre",
       confidence: "baja",
       indicatorsUsed: used,
       indicatorsUnavailable: unavailable,
-      reasoning: "Fear & Greed no disponible: es la señal base del Índice Crypto Control y no se estima sin él."
+      reasoning: "Fear & Greed no disponible: es la señal base del Índice Crypto Control. Sin este dato la clasificación no puede establecerse con fiabilidad."
     };
   }
 
@@ -71,17 +74,23 @@ export function classifyMarketPhase(input: MarketPhaseInput): MarketPhaseResult 
   let phase: MarketPhase;
 
   if (fg >= 80) {
+    // Extreme greed: euphoria unless market cap is dropping (distribution)
     phase = mc !== null && mc < 0 ? "distribucion" : "euforia";
   } else if (fg >= 65) {
-    phase = mc !== null && mc > 1 ? "alcista_fuerte" : mc !== null && mc <= 0 ? "distribucion" : "alcista_fuerte";
+    // High greed: strong bull unless selling pressure
+    phase = mc !== null && mc <= 0 ? "distribucion" : "alcista_fuerte";
   } else if (fg >= 45) {
-    phase = mc !== null && mc < -2 ? "bajista" : "inicio_alcista";
-  } else if (fg >= 25) {
+    // Neutral–greed: early bull; correction if clear pullback
+    phase = mc !== null && mc < -2 ? "correccion" : "inicio_alcista";
+  } else if (fg >= 30) {
+    // Mild fear: accumulation; bear if significant drops
     phase = mc !== null && mc < -2 ? "bajista" : "acumulacion";
   } else if (fg >= 16) {
-    phase = mc !== null && mc > 0 ? "acumulacion" : "bajista";
+    // High fear: recovery if price bouncing, otherwise bear/accumulation
+    phase = mc !== null && mc > 0 ? "recuperacion" : mc !== null && mc < -3 ? "bajista" : "acumulacion";
   } else {
-    phase = mc !== null && mc > 2 ? "acumulacion" : "capitulacion";
+    // Extreme fear: capitulation unless bouncing strongly
+    phase = mc !== null && mc > 2 ? "recuperacion" : "capitulacion";
   }
 
   const confidence: MarketPhaseResult["confidence"] =

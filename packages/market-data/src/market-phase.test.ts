@@ -4,9 +4,9 @@ import { classifyMarketPhase } from "./market-phase";
 const base = { fearGreed: null, marketCapChangePercentage24h: null, btcDominance: null, ethDominance: null };
 
 describe("classifyMarketPhase — Índice Crypto Control", () => {
-  test("sin Fear & Greed: fase indeterminada, nunca se inventa", () => {
+  test("sin Fear & Greed: incertidumbre, confianza baja, nunca se inventa", () => {
     const result = classifyMarketPhase(base);
-    expect(result.phase).toBeNull();
+    expect(result.phase).toBe("incertidumbre");
     expect(result.confidence).toBe("baja");
   });
 
@@ -41,8 +41,13 @@ describe("classifyMarketPhase — Índice Crypto Control", () => {
     expect(result.phase).toBe("inicio_alcista");
   });
 
-  test("bajista: sentimiento neutral pero caída de market cap pronunciada", () => {
+  test("corrección: sentimiento neutral pero pullback pronunciado (no bear sostenido)", () => {
     const result = classifyMarketPhase({ ...base, fearGreed: 50, marketCapChangePercentage24h: -3 });
+    expect(result.phase).toBe("correccion");
+  });
+
+  test("bajista: miedo moderado y caída de market cap pronunciada", () => {
+    const result = classifyMarketPhase({ ...base, fearGreed: 35, marketCapChangePercentage24h: -3 });
     expect(result.phase).toBe("bajista");
   });
 
@@ -51,9 +56,14 @@ describe("classifyMarketPhase — Índice Crypto Control", () => {
     expect(result.phase).toBe("acumulacion");
   });
 
-  test("acumulación: miedo extremo pero precio ya recuperando", () => {
+  test("recuperación: miedo extremo pero precio ya rebotando positivamente", () => {
     const result = classifyMarketPhase({ ...base, fearGreed: 20, marketCapChangePercentage24h: 1 });
-    expect(result.phase).toBe("acumulacion");
+    expect(result.phase).toBe("recuperacion");
+  });
+
+  test("recuperación también desde FG muy bajo con rebote fuerte", () => {
+    const result = classifyMarketPhase({ ...base, fearGreed: 8, marketCapChangePercentage24h: 4 });
+    expect(result.phase).toBe("recuperacion");
   });
 
   test("capitulación: miedo extremo profundo sin señales de recuperación", () => {

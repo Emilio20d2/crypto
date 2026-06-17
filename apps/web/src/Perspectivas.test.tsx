@@ -1,14 +1,13 @@
 import { describe, expect, test, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter } from "react-router-dom";
-import { Tesoreria } from "./pages/Tesoreria";
+import { Perspectivas } from "./pages/Perspectivas";
 
-function renderWithQuery(ui: React.ReactElement) {
+function renderWithQuery() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter>{ui}</MemoryRouter>
+      <Perspectivas />
     </QueryClientProvider>
   );
 }
@@ -27,10 +26,10 @@ beforeEach(() => {
       getOverview: () => ok({ price: null, change24h: null, high24h: null, low24h: null, volume24h: null, volumeChange24h: null, marketCap: null, dominance: null, fetchedAt: null, provider: "mock" }),
       getFearGreed: () => ok({ value: 50, label: "Neutral", timestamp: now, fetchedAt: now, isCached: false }),
       getGlobalMetrics: () => ok({ btcDominance: null, ethDominance: null, totalMarketCapUsd: null, totalVolumeUsd: null, marketCapChangePercentage24h: null, fetchedAt: now, isCached: false }),
-      getCryptoControlIndex: async () => ({ ok: true as const, data: { phase: null, confidence: "baja" as const, indicatorsUsed: [], indicatorsUnavailable: [], reasoning: "mock", calculatedAt: Date.now() } }),
+      getCryptoControlIndex: async () => ({ ok: true as const, data: { phase: null, confidence: "baja" as const, indicatorsUsed: [], indicatorsUnavailable: [], reasoning: "mock", calculatedAt: now } }),
     },
     portfolio: {
-      getSummary: () => ok({ totalValueEur: 0, totalInvestedEur: 0, unrealizedGainEur: 0, unrealizedGainPercentage: 0, valuationStatus: "empty" as const, valuedAssets: 0, unavailableAssets: 0, lastSuccessfulPriceAt: null }),
+      getSummary: () => ok({ totalValueEur: 5000, totalInvestedEur: 4000, unrealizedGainEur: 1000, unrealizedGainPercentage: 25, valuationStatus: "ok" as const, valuedAssets: 2, unavailableAssets: 0, lastSuccessfulPriceAt: now }),
       getPositions: () => ok({}),
       getAllocation: () => ok([]),
       getRealizedGains: () => ok([]),
@@ -88,23 +87,23 @@ beforeEach(() => {
       delete: () => ok(null),
     },
     investmentCycles: {
-      getMetrics: async () => ({ ok: true as const, data: { cycleId: "mock-cycle", monthsElapsed: 0, monthsRemaining: null, percentComplete: null, expectedContributionMonthly: 0, expectedContributionAnnual: 0, expectedContributionToDate: 0, expectedContributionTotal: null, actualContribution: 0, contributionDifference: 0, extraContribution: 0, contributionCompliancePercentage: null, monthlyContributions: [], currentValueEur: 0, heldCostBasisEur: 0, profitEur: 0, roiPercentage: null, hasPendingValuation: false } }),
-      listPartialSales: async () => ({ ok: true as const, data: [] }),
-      createPartialSale: async () => ({ ok: true as const, data: { id: "mock-sale", cycleId: "mock-cycle", transactionId: "mock-tx", assetId: "BTC", percentageOfHolding: 10, proceedsEur: 100, date: 0, notes: null, createdAt: 0 } }),
-      deletePartialSale: async () => ({ ok: true as const, data: null }),
-      list: () => ok([]),
+      list: () => ok([{ id: "cycle-1", planId: "plan-1", name: "Ciclo 2026-2030", startDate: now, endDate: now + 4 * 365 * 86400000, monthlyAmountEur: 200, contributionCurrency: "EUR", status: "active" as const, priority: 1, objetivo: null, riesgo: null, allowExtraContributions: true, notes: null, createdAt: now, updatedAt: now }]),
       getCurrent: async () => ({ ok: true as const, data: null }),
-      create: () => ok({ id: "mock-cycle" }),
-      update: () => ok({ id: "mock-cycle", planId: "mock-plan", name: "Ciclo", startDate: 0, endDate: null, monthlyAmountEur: 100, contributionCurrency: "EUR", status: "planned" as const, priority: 0, notes: null, allowExtraContributions: true, createdAt: 0, updatedAt: 0 }),
+      getMetrics: async () => ({ ok: true as const, data: { cycleId: "cycle-1", monthsElapsed: 0, monthsRemaining: null, percentComplete: null, expectedContributionMonthly: 200, expectedContributionAnnual: 2400, expectedContributionToDate: 0, expectedContributionTotal: null, actualContribution: 0, contributionDifference: 0, extraContribution: 0, contributionCompliancePercentage: null, monthlyContributions: [], currentValueEur: 0, heldCostBasisEur: 0, profitEur: 0, roiPercentage: null, hasPendingValuation: false } }),
+      listPartialSales: async () => ({ ok: true as const, data: [] }),
+      createPartialSale: async () => ({ ok: true as const, data: { id: "mock-sale" } }),
+      deletePartialSale: async () => ({ ok: true as const, data: null }),
+      create: () => ok({ id: "cycle-new" }),
+      update: (_id: string, data: any) => ok({ id: "cycle-1", planId: "plan-1", name: data.name ?? "Ciclo", startDate: now, endDate: null, monthlyAmountEur: 200, contributionCurrency: "EUR", status: "active" as const, priority: 1, objetivo: null, riesgo: null, allowExtraContributions: true, notes: null, createdAt: now, updatedAt: now }),
       delete: () => ok(null),
     },
     investmentAssets: {
       getHealth: async () => ({ ok: true as const, data: { status: "activo" as const, relativeStrengthVsBtc: null, strongEntrySignal: false, tendencia: null, riesgoNivel: "bajo" as const, estadoEstrategico: "buena" as const, reasoning: "mock", signalsUsed: [], signalsUnavailable: [] } }),
       list: () => ok([]),
       create: () => ok({ id: "mock-investment-asset" }),
-      update: () => ok({ id: "mock-investment-asset", cycleId: "mock-cycle", assetId: "BTC", allocationType: "percentage" as const, allocationValue: 50, allocationPercentage: 50, fixedAmountEur: null, priority: 0, targetAmount: null, targetValueEur: null, targetPortfolioPercentage: null, startDate: 0, endDate: null, status: "active" as const, isActive: true, notes: null, allowExtraContributions: true, createdAt: 0, updatedAt: 0 }),
-      pause: async () => ({ ok: true as const, data: { id: "mock-investment-asset", cycleId: "mock-cycle", assetId: "BTC", allocationType: "percentage" as const, allocationValue: 50, allocationPercentage: 50, fixedAmountEur: null, priority: 0, targetAmount: null, targetValueEur: null, targetPortfolioPercentage: null, startDate: 0, endDate: null, status: "paused" as const, isActive: false, notes: null, allowExtraContributions: true, createdAt: 0, updatedAt: 0 } }),
-      close: async () => ({ ok: true as const, data: { id: "mock-investment-asset", cycleId: "mock-cycle", assetId: "BTC", allocationType: "percentage" as const, allocationValue: 50, allocationPercentage: 50, fixedAmountEur: null, priority: 0, targetAmount: null, targetValueEur: null, targetPortfolioPercentage: null, startDate: 0, endDate: null, status: "closed" as const, isActive: false, notes: null, allowExtraContributions: true, createdAt: 0, updatedAt: 0 } }),
+      update: () => ok({ id: "mock-investment-asset", cycleId: "cycle-1", assetId: "BTC", allocationType: "percentage" as const, allocationValue: 50, allocationPercentage: 50, fixedAmountEur: null, priority: 0, targetAmount: null, targetValueEur: null, targetPortfolioPercentage: null, startDate: now, endDate: null, status: "active" as const, isActive: true, notes: null, allowExtraContributions: true, createdAt: 0, updatedAt: 0 }),
+      pause: async () => ({ ok: true as const, data: { id: "mock-ia", cycleId: "cycle-1", assetId: "BTC", allocationType: "percentage" as const, allocationValue: 50, allocationPercentage: 50, fixedAmountEur: null, priority: 0, targetAmount: null, targetValueEur: null, targetPortfolioPercentage: null, startDate: now, endDate: null, status: "paused" as const, isActive: false, notes: null, allowExtraContributions: true, createdAt: 0, updatedAt: 0 } }),
+      close: async () => ({ ok: true as const, data: { id: "mock-ia", cycleId: "cycle-1", assetId: "BTC", allocationType: "percentage" as const, allocationValue: 50, allocationPercentage: 50, fixedAmountEur: null, priority: 0, targetAmount: null, targetValueEur: null, targetPortfolioPercentage: null, startDate: now, endDate: null, status: "closed" as const, isActive: false, notes: null, allowExtraContributions: true, createdAt: 0, updatedAt: 0 } }),
       delete: () => ok(null),
     },
     strategyRevisions: {
@@ -140,17 +139,7 @@ beforeEach(() => {
       allocateCashToRebuy: async () => ({ ok: true as const, data: { id: "mock-allocation" } }),
       listCycleLiquidity: async () => ({ ok: true as const, data: [] }),
       listFiscalReserveMovements: async () => ({ ok: true as const, data: [] }),
-      getSummary: () => ok({
-        cashBalance: 100,
-        eurcBalance: 80,
-        fiscalReserveBalance: 20,
-        totalLiquidity: 200,
-        freeRebuyLiquidity: 80,
-        allocatedToRebuy: 0, freeCashForRebuy: 0, allocatedCashToRebuy: 0,
-        recommendedFiscalReserve: 30,
-        pendingEstimatedTaxes: 10,
-        updatedAt: now,
-      }),
+      getSummary: () => ok({ cashBalance: 100, eurcBalance: 80, fiscalReserveBalance: 20, totalLiquidity: 200, freeRebuyLiquidity: 80, allocatedToRebuy: 0, freeCashForRebuy: 0, allocatedCashToRebuy: 0, recommendedFiscalReserve: 30, pendingEstimatedTaxes: 10, updatedAt: now }),
       listMovements: () => ok([]),
       createMovement: () => ok({ id: "mock-treasury-movement" }),
       updateMovement: () => ok({ id: "mock-treasury-movement", date: now, type: "efectivo_entrada" as const, sourceAccountType: null, destinationAccountType: "cash" as const, amount: 1, currency: "EUR", reason: "Mock", referenceType: null, referenceId: null, notes: null, createdAt: now, updatedAt: now }),
@@ -158,20 +147,46 @@ beforeEach(() => {
       setFiscalReserve: () => ok({ cashBalance: 100, eurcBalance: 80, fiscalReserveBalance: 20, totalLiquidity: 200, freeRebuyLiquidity: 80, allocatedToRebuy: 0, freeCashForRebuy: 0, allocatedCashToRebuy: 0, recommendedFiscalReserve: 30, pendingEstimatedTaxes: 10, updatedAt: now }),
       allocateEurcToRebuy: () => ok({ id: "mock-allocation" }),
     },
-  };
+  } as any;
 });
 
-describe("Tesorería", () => {
-  test("renderiza resumen y estado sin movimientos", async () => {
-    renderWithQuery(<Tesoreria />);
+describe("Perspectivas", () => {
+  test("renderiza la página con título y secciones principales", async () => {
+    renderWithQuery();
 
     await waitFor(() => {
-      expect(screen.getByText("Tesorería")).toBeInTheDocument();
+      expect(screen.getByText("Perspectivas")).toBeInTheDocument();
     });
-    expect(screen.getByText(/Efectivo disponible/i)).toBeInTheDocument();
-    expect(screen.getByText(/EURC disponible/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/Reserva fiscal/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/Libre para recompras/i)).toBeInTheDocument();
-    expect(screen.getByText(/Sin movimientos de tesorería registrados/i)).toBeInTheDocument();
+    expect(screen.getByText(/Resumen futuro/i)).toBeInTheDocument();
+    expect(screen.getByText(/Proyección por ciclos/i)).toBeInTheDocument();
+    expect(screen.getByText(/Simulador de aportaciones/i)).toBeInTheDocument();
+    expect(screen.getByText(/Objetivos de inversión/i)).toBeInTheDocument();
+    expect(screen.getByText(/Confianza en la proyección/i)).toBeInTheDocument();
+  });
+
+  test("muestra los tres escenarios en el resumen", async () => {
+    renderWithQuery();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Conservador/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Base/i)).toBeInTheDocument();
+    expect(screen.getByText(/Optimista/i)).toBeInTheDocument();
+  });
+
+  test("muestra el ciclo de inversión en la proyección", async () => {
+    renderWithQuery();
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/Ciclo 2026-2030/i).length).toBeGreaterThan(0);
+    });
+  });
+
+  test("muestra mensaje de sin objetivos cuando no hay goals", async () => {
+    renderWithQuery();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Sin objetivos definidos/i)).toBeInTheDocument();
+    });
   });
 });

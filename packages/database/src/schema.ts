@@ -465,6 +465,18 @@ export const coinbaseCandleCache = sqliteTable("coinbase_candle_cache", {
   };
 });
 
+export const perspectivesGoals = sqliteTable("perspectives_goals", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  type: text("type").notNull().default("personalizado"),
+  targetAmountEur: real("target_amount_eur").notNull(),
+  targetDate: integer("target_date"),
+  priority: integer("priority").notNull().default(0),
+  notes: text("notes"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+});
+
 export const marketSentimentSnapshots = sqliteTable("market_sentiment_snapshots", {
   id: text("id").primaryKey(),
   scope: text("scope").notNull(), // "global" | "asset"

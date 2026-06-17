@@ -2390,6 +2390,61 @@ function setupIpcHandlers() {
     });
   }));
 
+  // --- PERSPECTIVAS: objetivos de inversión (CRUD, persistidos en DB) ---
+
+  ipcMain.handle("perspectives:getGoals", withResult(async () => {
+    const db = getDb();
+    const rows = db.select().from(schema.perspectivesGoals).all();
+    return rows.map(r => ({
+      id: r.id, name: r.name, type: r.type,
+      targetAmountEur: r.targetAmountEur, targetDate: r.targetDate ?? null,
+      priority: r.priority, notes: r.notes ?? null,
+      createdAt: r.createdAt, updatedAt: r.updatedAt,
+    }));
+  }));
+
+  ipcMain.handle("perspectives:createGoal", withResult(async (_, data: {
+    name: string; type: string; targetAmountEur: number;
+    targetDate?: number | null; priority?: number; notes?: string | null;
+  }) => {
+    const db = getDb();
+    const id = `goal-${crypto.randomUUID()}`;
+    const now = Date.now();
+    db.insert(schema.perspectivesGoals).values({
+      id, name: data.name, type: data.type,
+      targetAmountEur: data.targetAmountEur,
+      targetDate: data.targetDate ?? null,
+      priority: data.priority ?? 0,
+      notes: data.notes ?? null,
+      createdAt: now, updatedAt: now,
+    }).run();
+    return { id };
+  }));
+
+  ipcMain.handle("perspectives:updateGoal", withResult(async (_, id: string, data: {
+    name?: string; type?: string; targetAmountEur?: number;
+    targetDate?: number | null; priority?: number; notes?: string | null;
+  }) => {
+    const db = getDb();
+    const now = Date.now();
+    const row = db.update(schema.perspectivesGoals)
+      .set({ ...data, updatedAt: now })
+      .where(eq(schema.perspectivesGoals.id, id))
+      .returning()
+      .get();
+    if (!row) throw new Error(`Objetivo ${id} no encontrado.`);
+    return { id: row.id, name: row.name, type: row.type,
+      targetAmountEur: row.targetAmountEur, targetDate: row.targetDate ?? null,
+      priority: row.priority, notes: row.notes ?? null,
+      createdAt: row.createdAt, updatedAt: row.updatedAt };
+  }));
+
+  ipcMain.handle("perspectives:deleteGoal", withResult(async (_, id: string) => {
+    const db = getDb();
+    db.delete(schema.perspectivesGoals).where(eq(schema.perspectivesGoals.id, id)).run();
+    return null;
+  }));
+
   // Ping channel: called by the preload every 200 ms to drive uv_run so the
   // Node.js http.Server below can accept TCP connections (Electron event-loop quirk).
   ipcMain.handle("__ping__", () => true);

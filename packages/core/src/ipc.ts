@@ -29,6 +29,8 @@ import type {
   AssetHealthResult,
   StrategicAlert,
   CycleStrategyReport,
+  PerspectivesGoal,
+  CreatePerspectivesGoalInput,
   UpdateInvestmentAssetInput,
   UpdateInvestmentCycleInput,
   UpdateInvestmentPlanInput,
@@ -211,6 +213,12 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
   };
   strategicDecisions: {
     getCycleReport: (input: { cycleId: string }) => Promise<Result<CycleStrategyReport>>;
+  };
+  perspectives: {
+    getGoals: () => Promise<Result<PerspectivesGoal[]>>;
+    createGoal: (data: CreatePerspectivesGoalInput) => Promise<Result<{ id: string }>>;
+    updateGoal: (id: string, data: Partial<CreatePerspectivesGoalInput>) => Promise<Result<PerspectivesGoal>>;
+    deleteGoal: (id: string) => Promise<Result<null>>;
   };
   treasury: {
     getSummary: () => Promise<Result<TreasurySummary>>;

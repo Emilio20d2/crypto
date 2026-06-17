@@ -92,6 +92,13 @@
       "when": 1750161600000,
       "tag": "0012_fase_e_motor_estrategico",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1750248000000,
+      "tag": "0013_perspectives_goals",
+      "breakpoints": true
     }
   ]
 }

@@ -130,6 +130,12 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
     strategicDecisions: {
       getCycleReport: (i: unknown) =>           ipc("strategicDecisions:getCycleReport", i),
     },
+    perspectives: {
+      getGoals:    () =>                        ipc("perspectives:getGoals"),
+      createGoal:  (d: unknown) =>              ipc("perspectives:createGoal", d),
+      updateGoal:  (id: unknown, d: unknown) => ipc("perspectives:updateGoal", id, d),
+      deleteGoal:  (id: unknown) =>             ipc("perspectives:deleteGoal", id),
+    },
     treasury: {
       getSummary:                 () =>                         ipc("treasury:getSummary"),
       listMovements:              () =>                         ipc("treasury:listMovements"),

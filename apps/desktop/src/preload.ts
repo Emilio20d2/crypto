@@ -135,6 +135,12 @@ const cryptoControl: FullCryptoControlAPI = {
   strategicDecisions: {
     getCycleReport: (input: { cycleId: string })                   => ipcRenderer.invoke("strategicDecisions:getCycleReport", input),
   },
+  perspectives: {
+    getGoals:    ()                                                => ipcRenderer.invoke("perspectives:getGoals"),
+    createGoal:  (data: unknown)                                   => ipcRenderer.invoke("perspectives:createGoal", data),
+    updateGoal:  (id: string, data: unknown)                       => ipcRenderer.invoke("perspectives:updateGoal", id, data),
+    deleteGoal:  (id: string)                                      => ipcRenderer.invoke("perspectives:deleteGoal", id),
+  },
   treasury: {
     getSummary:           ()                                      => ipcRenderer.invoke("treasury:getSummary"),
     listMovements:        ()                                      => ipcRenderer.invoke("treasury:listMovements"),

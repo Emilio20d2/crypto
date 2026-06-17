@@ -184,8 +184,14 @@ describe("Fiscalidad", () => {
         generate: async () => ({ ok: true as const, data: [] }),
       },
       strategicDecisions: {
-        getCycleReport: async () => ({ ok: true as const, data: { cycleId: "mock-cycle", marketPhase: { phase: null, confidence: "baja" as const, indicatorsUsed: [], indicatorsUnavailable: [], reasoning: "mock" }, partialSaleProposals: [], rebuyProposals: [], riskSummary: [], adaptationSuggestions: [], generatedAt: 0 } }),
+        getCycleReport: async () => ({ ok: true as const, data: { cycleId: "mock-cycle", marketPhase: { phase: "incertidumbre" as const, confidence: "baja" as const, indicatorsUsed: [], indicatorsUnavailable: [], reasoning: "mock" }, partialSaleProposals: [], rebuyProposals: [], riskSummary: [], adaptationSuggestions: [], generatedAt: 0 } }),
       },
+    perspectives: {
+      getGoals:    async () => ({ ok: true as const, data: [] }),
+      createGoal:  async () => ({ ok: true as const, data: { id: "mock-goal" } }),
+      updateGoal:  async () => ({ ok: true as const, data: { id: "mock-goal", name: "mock", type: "personalizado" as const, targetAmountEur: 1000, targetDate: null, priority: 0, notes: null, createdAt: 0, updatedAt: 0 } }),
+      deleteGoal:  async () => ({ ok: true as const, data: null }),
+    },
       treasury: {
       allocateCashToRebuy: async () => ({ ok: true as const, data: { id: "mock-allocation" } }),
       listCycleLiquidity: async () => ({ ok: true as const, data: [] }),

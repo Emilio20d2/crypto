@@ -173,22 +173,28 @@ const ALERT_SEVERITY_BADGE: Record<string, string> = {
 
 const MARKET_PHASE_LABEL: Record<string, string> = {
   acumulacion: "Acumulación",
+  recuperacion: "Recuperación",
   inicio_alcista: "Alcista temprano",
   alcista_fuerte: "Alcista avanzado",
   euforia: "Euforia",
   distribucion: "Distribución",
   bajista: "Mercado bajista",
+  correccion: "Corrección",
   capitulacion: "Capitulación",
+  incertidumbre: "Incertidumbre",
 };
 
 const MARKET_PHASE_BADGE: Record<string, string> = {
   acumulacion: "badge-success",
+  recuperacion: "badge-success",
   inicio_alcista: "badge-success",
   alcista_fuerte: "badge-success",
   euforia: "badge-warning",
   distribucion: "badge-warning",
   bajista: "badge-danger",
+  correccion: "badge-warning",
   capitulacion: "badge-danger",
+  incertidumbre: "badge-secondary",
 };
 
 const SALE_PROPOSAL_LABEL: Record<string, string> = {

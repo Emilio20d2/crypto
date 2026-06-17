@@ -340,7 +340,16 @@ export const FiscalReserveMovementSchema = z.object({
 });
 
 export const MarketPhaseEnum = z.enum([
-  "acumulacion", "inicio_alcista", "alcista_fuerte", "euforia", "distribucion", "bajista", "capitulacion"
+  "acumulacion",
+  "recuperacion",
+  "inicio_alcista",
+  "alcista_fuerte",
+  "euforia",
+  "distribucion",
+  "bajista",
+  "correccion",
+  "capitulacion",
+  "incertidumbre",
 ]);
 
 export const CryptoControlIndexSchema = z.object({
@@ -569,7 +578,7 @@ export type StrategicAlert = z.infer<typeof StrategicAlertSchema>;
 // --- FASE G — MOTOR DE DECISIÓN ESTRATÉGICA ---
 
 export const MarketPhaseResultSchema = z.object({
-  phase: MarketPhaseEnum.nullable(),
+  phase: MarketPhaseEnum,
   confidence: z.enum(["alta", "media", "baja"]),
   indicatorsUsed: z.array(z.string()),
   indicatorsUnavailable: z.array(z.string()),
@@ -623,3 +632,38 @@ export const StrategicRecommendationSchema = z.object({
   validUntil: TimestampSchema.nullable(),
 });
 export type StrategicRecommendation = z.infer<typeof StrategicRecommendationSchema>;
+
+// --- PERSPECTIVAS — MOTOR DE SIMULACIÓN Y PROYECCIÓN ---
+
+export const PerspectivesGoalTypeEnum = z.enum([
+  "patrimonio",
+  "vivienda",
+  "jubilacion",
+  "independencia_financiera",
+  "capital_objetivo",
+  "personalizado",
+]);
+export type PerspectivesGoalType = z.infer<typeof PerspectivesGoalTypeEnum>;
+
+export const PerspectivesGoalSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  type: PerspectivesGoalTypeEnum,
+  targetAmountEur: z.number(),
+  targetDate: TimestampSchema.nullable(),
+  priority: z.number().int(),
+  notes: z.string().nullable(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+});
+export type PerspectivesGoal = z.infer<typeof PerspectivesGoalSchema>;
+
+export const CreatePerspectivesGoalSchema = z.object({
+  name: z.string().min(1),
+  type: PerspectivesGoalTypeEnum,
+  targetAmountEur: z.number().positive(),
+  targetDate: TimestampSchema.nullable().optional(),
+  priority: z.number().int().min(0).optional(),
+  notes: z.string().nullable().optional(),
+});
+export type CreatePerspectivesGoalInput = z.infer<typeof CreatePerspectivesGoalSchema>;

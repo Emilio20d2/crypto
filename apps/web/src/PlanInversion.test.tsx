@@ -94,7 +94,13 @@ beforeEach(() => {
       generate: async () => ({ ok: true as const, data: [] }),
     },
     strategicDecisions: {
-      getCycleReport: async () => ({ ok: true as const, data: { cycleId: "cycle-1", marketPhase: { phase: null, confidence: "baja" as const, indicatorsUsed: [], indicatorsUnavailable: [], reasoning: "mock" }, partialSaleProposals: [], rebuyProposals: [], riskSummary: [], adaptationSuggestions: [], generatedAt: 0 } }),
+      getCycleReport: async () => ({ ok: true as const, data: { cycleId: "cycle-1", marketPhase: { phase: "incertidumbre" as const, confidence: "baja" as const, indicatorsUsed: [], indicatorsUnavailable: [], reasoning: "mock" }, partialSaleProposals: [], rebuyProposals: [], riskSummary: [], adaptationSuggestions: [], generatedAt: 0 } }),
+    },
+    perspectives: {
+      getGoals:    async () => ({ ok: true as const, data: [] }),
+      createGoal:  async () => ({ ok: true as const, data: { id: "mock-goal" } }),
+      updateGoal:  async () => ({ ok: true as const, data: { id: "mock-goal", name: "mock", type: "personalizado" as const, targetAmountEur: 1000, targetDate: null, priority: 0, notes: null, createdAt: 0, updatedAt: 0 } }),
+      deleteGoal:  async () => ({ ok: true as const, data: null }),
     },
   };
 });
