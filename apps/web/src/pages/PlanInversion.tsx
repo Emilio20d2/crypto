@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   Asset,
   AssetHealthResult,
+  ContributionSchedule,
   CycleGoal,
   CycleMetrics,
   CycleRisk,
@@ -12,7 +13,7 @@ import type {
   Result,
   StrategyRevision
 } from "@crypto-control/core";
-import { CalendarDays, CircleOff, Copy, Plus, Save, Trash2, XCircle } from "lucide-react";
+import { CalendarDays, CheckCircle, CircleOff, Copy, Plus, Save, Trash2, XCircle } from "lucide-react";
 import { Button } from "../components/Button";
 import { Card, CardActions, CardContent, CardHeader, CardTitle } from "../components/Card";
 import { CryptoLogo } from "../components/CryptoLogo";
@@ -127,6 +128,23 @@ const ASSET_HEALTH_BADGE: Record<AssetHealthResult["status"], string> = {
   riesgo_elevado: "badge-danger",
   salida_recomendada: "badge-danger",
   retirado: "",
+};
+
+const CS_TYPE_LABEL: Record<ContributionSchedule["type"], string> = {
+  periodica: "Periódica",
+  extraordinaria: "Extraordinaria",
+};
+
+const CS_STATUS_LABEL: Record<ContributionSchedule["status"], string> = {
+  pendiente: "Pendiente",
+  ejecutada: "Ejecutada",
+  cancelada: "Cancelada",
+};
+
+const CS_STATUS_BADGE: Record<ContributionSchedule["status"], string> = {
+  pendiente: "badge-warning",
+  ejecutada: "badge-success",
+  cancelada: "",
 };
 
 function allocationSummary(item: Pick<InvestmentAsset, "allocationPercentage" | "fixedAmountEur" | "allocationType" | "allocationValue">) {
@@ -394,6 +412,62 @@ function CycleEditor({
   const [revisionFixedAmountEur, setRevisionFixedAmountEur] = useState("");
   const [revisionNotes, setRevisionNotes] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
+
+  // ── Contribution Schedule ──────────────────────────────────────────────────
+  const csQueryClient = useQueryClient();
+  const csQueryKey = ["contribution-schedule", cycle.id] as const;
+
+  const contributionScheduleQuery = useQuery({
+    queryKey: csQueryKey,
+    queryFn: () => unwrap(window.cryptoControl.contributionSchedule.list({ cycleId: cycle.id })),
+  });
+  const contributions: ContributionSchedule[] = contributionScheduleQuery.data ?? [];
+
+  const [csType, setCsType] = useState<"periodica" | "extraordinaria">("periodica");
+  const [csDate, setCsDate] = useState(toDateInput(Date.now()));
+  const [csAmount, setCsAmount] = useState("");
+  const [csCurrency, setCsCurrency] = useState("EUR");
+  const [csDestination, setCsDestination] = useState("");
+  const [csNotes, setCsNotes] = useState("");
+
+  const invalidateCS = () => csQueryClient.invalidateQueries({ queryKey: csQueryKey });
+
+  const createCS = useMutation({
+    mutationFn: (data: { cycleId: string; type: "periodica" | "extraordinaria"; plannedDate: number; amountEur: number; currency: string; destination: string | null; notes: string | null }) =>
+      unwrap(window.cryptoControl.contributionSchedule.create(data)),
+    onSuccess: () => { void invalidateCS(); },
+  });
+
+  const executeCS = useMutation({
+    mutationFn: (id: string) => unwrap(window.cryptoControl.contributionSchedule.execute(id)),
+    onSuccess: () => { void invalidateCS(); },
+  });
+
+  const deleteCS = useMutation({
+    mutationFn: (id: string) => unwrap(window.cryptoControl.contributionSchedule.delete(id)),
+    onSuccess: () => { void invalidateCS(); },
+  });
+
+  async function submitCS(event: FormEvent) {
+    event.preventDefault();
+    const plannedDate = fromDateInput(csDate, true);
+    if (!plannedDate) return;
+    const amount = parseNumber(csAmount);
+    if (!amount) return;
+    await createCS.mutateAsync({
+      cycleId: cycle.id,
+      type: csType,
+      plannedDate,
+      amountEur: amount,
+      currency: csCurrency || "EUR",
+      destination: csDestination || null,
+      notes: csNotes || null,
+    });
+    setCsAmount("");
+    setCsNotes("");
+    setCsDestination("");
+  }
+  // ──────────────────────────────────────────────────────────────────────────
 
   async function submitCycle(event: FormEvent) {
     event.preventDefault();
@@ -801,6 +875,103 @@ function CycleEditor({
                 <span>{formatDate(revision.effectiveDate)}</span>
                 <span>{revisionSummary(revision, assets)}</span>
                 {revision.notes ? <p>{revision.notes}</p> : null}
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="investment-section">
+          <div className="investment-section-heading">
+            <h3>Plan de aportaciones</h3>
+            <span>{contributions.length} aportaciones · {contributions.filter((c) => c.status === "pendiente").length} pendientes</span>
+          </div>
+
+          <form className="investment-form-grid compact" onSubmit={(event) => void submitCS(event)}>
+            <label className="form-group">
+              <span>Tipo</span>
+              <select className="ui-select" value={csType} onChange={(event) => setCsType(event.target.value as "periodica" | "extraordinaria")}>
+                <option value="periodica">Periódica</option>
+                <option value="extraordinaria">Extraordinaria</option>
+              </select>
+            </label>
+            <label className="form-group">
+              <span>Fecha prevista</span>
+              <Input type="date" value={csDate} onChange={(event) => setCsDate(event.target.value)} />
+            </label>
+            <label className="form-group">
+              <span>Importe (EUR)</span>
+              <Input inputMode="decimal" value={csAmount} onChange={(event) => setCsAmount(event.target.value)} placeholder="Ej. 100" />
+            </label>
+            <label className="form-group">
+              <span>Moneda</span>
+              <Input value={csCurrency} onChange={(event) => setCsCurrency(event.target.value.toUpperCase())} />
+            </label>
+            <label className="form-group">
+              <span>Destino (activo o vacío)</span>
+              <select className="ui-select" value={csDestination} onChange={(event) => setCsDestination(event.target.value)}>
+                <option value="">Distribuir según ciclo</option>
+                {assets.map((a) => (
+                  <option key={a.id} value={a.id}>{a.symbol} · {a.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="form-group investment-wide">
+              <span>Notas</span>
+              <Input value={csNotes} onChange={(event) => setCsNotes(event.target.value)} />
+            </label>
+            <div className="investment-form-actions">
+              <Button type="submit" variant="primary" size="sm" loading={createCS.isPending} disabled={!csAmount}>
+                <Plus size={15} /> Añadir aportación
+              </Button>
+            </div>
+          </form>
+
+          <div className="investment-contribution-list">
+            {contributions.length === 0 ? (
+              <p className="empty-inline">No hay aportaciones planificadas para este ciclo.</p>
+            ) : contributions.map((cs) => (
+              <article className="investment-contribution" key={cs.id}>
+                <div className="investment-contribution-header">
+                  <div>
+                    <strong>{formatMoney(cs.amountEur)} {cs.currency}</strong>
+                    <span>{formatDate(cs.plannedDate)}</span>
+                  </div>
+                  <div className="investment-asset-badges">
+                    <span className="badge">{CS_TYPE_LABEL[cs.type]}</span>
+                    <span className={`badge ${CS_STATUS_BADGE[cs.status]}`}>{CS_STATUS_LABEL[cs.status]}</span>
+                  </div>
+                </div>
+                {cs.destination ? (
+                  <p className="investment-contribution-meta">
+                    Destino: {assets.find((a) => a.id === cs.destination)?.symbol ?? cs.destination}
+                  </p>
+                ) : null}
+                {cs.notes ? <p className="investment-contribution-meta">{cs.notes}</p> : null}
+                {cs.executedAt ? (
+                  <p className="investment-contribution-meta">Ejecutada: {formatDate(cs.executedAt)}</p>
+                ) : null}
+                <div className="investment-form-actions">
+                  {cs.status === "pendiente" ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      loading={executeCS.isPending}
+                      onClick={() => void executeCS.mutateAsync(cs.id)}
+                    >
+                      <CheckCircle size={15} /> Marcar ejecutada
+                    </Button>
+                  ) : null}
+                  <Button
+                    type="button"
+                    variant="danger"
+                    size="sm"
+                    loading={deleteCS.isPending}
+                    onClick={() => void deleteCS.mutateAsync(cs.id)}
+                  >
+                    <Trash2 size={15} /> Eliminar
+                  </Button>
+                </div>
               </article>
             ))}
           </div>
