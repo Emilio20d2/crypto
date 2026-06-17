@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   Asset,
   AssetHealthResult,
+  AssetSubstitution,
   ContributionSchedule,
   CycleLiquidityAllocation,
   CycleGoal,
@@ -543,6 +544,53 @@ function CycleEditor({
     queryFn: () => unwrap(window.cryptoControl.treasury.listCycleLiquidity({ cycleId: cycle.id })),
   });
   const liquidityItems: CycleLiquidityAllocation[] = liquidityQuery.data ?? [];
+
+  // ── Sustituciones de activos ───────────────────────────────────────────────
+  const subsQueryKey = ["asset-substitutions", cycle.id] as const;
+
+  const substitutionsQuery = useQuery({
+    queryKey: subsQueryKey,
+    queryFn: () => unwrap(window.cryptoControl.assetSubstitutions.list({ cycleId: cycle.id })),
+  });
+  const substitutions: AssetSubstitution[] = substitutionsQuery.data ?? [];
+
+  const [subFromAssetId, setSubFromAssetId] = useState("");
+  const [subToAssetId, setSubToAssetId] = useState("");
+  const [subEffectiveDate, setSubEffectiveDate] = useState(toDateInput(Date.now()));
+  const [subReason, setSubReason] = useState("");
+  const [subNotes, setSubNotes] = useState("");
+
+  const invalidateSubs = () => csQueryClient.invalidateQueries({ queryKey: subsQueryKey });
+
+  const createSub = useMutation({
+    mutationFn: (data: { cycleId: string; fromAssetId: string; toAssetId: string | null; effectiveDate: number; reason: string; notes: string | null }) =>
+      unwrap(window.cryptoControl.assetSubstitutions.create(data)),
+    onSuccess: () => { void invalidateSubs(); },
+  });
+
+  const deleteSub = useMutation({
+    mutationFn: (id: string) => unwrap(window.cryptoControl.assetSubstitutions.delete(id)),
+    onSuccess: () => { void invalidateSubs(); },
+  });
+
+  async function submitSub(event: FormEvent) {
+    event.preventDefault();
+    if (!subFromAssetId || !subReason.trim()) return;
+    const effectiveDate = fromDateInput(subEffectiveDate, true);
+    if (!effectiveDate) return;
+    await createSub.mutateAsync({
+      cycleId: cycle.id,
+      fromAssetId: subFromAssetId,
+      toAssetId: subToAssetId || null,
+      effectiveDate,
+      reason: subReason,
+      notes: subNotes || null,
+    });
+    setSubFromAssetId("");
+    setSubToAssetId("");
+    setSubReason("");
+    setSubNotes("");
+  }
   // ──────────────────────────────────────────────────────────────────────────
 
   async function submitCycle(event: FormEvent) {
@@ -1143,6 +1191,93 @@ function CycleEditor({
             </div>
           </section>
         ) : null}
+
+        <section className="investment-section">
+          <div className="investment-section-heading">
+            <h3>Sustitución de activos</h3>
+            <span>{substitutions.length} registradas</span>
+          </div>
+
+          <form className="investment-form-grid compact" onSubmit={(event) => void submitSub(event)}>
+            <label className="form-group">
+              <span>Activo saliente</span>
+              <select className="ui-select" value={subFromAssetId} onChange={(event) => setSubFromAssetId(event.target.value)}>
+                <option value="">Selecciona activo…</option>
+                {assets.map((a) => (
+                  <option key={a.id} value={a.id}>{a.symbol} · {a.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="form-group">
+              <span>Activo entrante (vacío = retirada)</span>
+              <select className="ui-select" value={subToAssetId} onChange={(event) => setSubToAssetId(event.target.value)}>
+                <option value="">Sin sustituto (retirada)</option>
+                {assets.filter((a) => a.id !== subFromAssetId).map((a) => (
+                  <option key={a.id} value={a.id}>{a.symbol} · {a.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="form-group">
+              <span>Fecha efectiva</span>
+              <Input type="date" value={subEffectiveDate} onChange={(event) => setSubEffectiveDate(event.target.value)} />
+            </label>
+            <label className="form-group investment-wide">
+              <span>Motivo</span>
+              <Input value={subReason} onChange={(event) => setSubReason(event.target.value)} placeholder="Ej. Mejor relación riesgo/retorno de TON frente a ADA" />
+            </label>
+            <label className="form-group investment-wide">
+              <span>Notas</span>
+              <Input value={subNotes} onChange={(event) => setSubNotes(event.target.value)} />
+            </label>
+            <div className="investment-form-actions">
+              <Button
+                type="submit"
+                variant="primary"
+                size="sm"
+                loading={createSub.isPending}
+                disabled={!subFromAssetId || !subReason.trim()}
+              >
+                <Plus size={15} /> Registrar sustitución
+              </Button>
+            </div>
+          </form>
+
+          <div className="investment-contribution-list">
+            {substitutions.length === 0 ? (
+              <p className="empty-inline">No hay sustituciones registradas para este ciclo.</p>
+            ) : substitutions.map((sub) => {
+              const fromAsset = assets.find((a) => a.id === sub.fromAssetId);
+              const toAsset = sub.toAssetId ? assets.find((a) => a.id === sub.toAssetId) : null;
+              return (
+                <article className="investment-contribution" key={sub.id}>
+                  <div className="investment-contribution-header">
+                    <div>
+                      <strong>
+                        {fromAsset ? `${fromAsset.symbol} · ${fromAsset.name}` : sub.fromAssetId}
+                        {" → "}
+                        {toAsset ? `${toAsset.symbol} · ${toAsset.name}` : sub.toAssetId ? sub.toAssetId : "Retirada"}
+                      </strong>
+                      <span>{formatDate(sub.effectiveDate)}</span>
+                    </div>
+                  </div>
+                  <p className="investment-contribution-meta">{sub.reason}</p>
+                  {sub.notes ? <p className="investment-contribution-meta">{sub.notes}</p> : null}
+                  <div className="investment-form-actions">
+                    <Button
+                      type="button"
+                      variant="danger"
+                      size="sm"
+                      loading={deleteSub.isPending}
+                      onClick={() => void deleteSub.mutateAsync(sub.id)}
+                    >
+                      <Trash2 size={15} /> Eliminar
+                    </Button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
       </CardContent>
     </Card>
   );
