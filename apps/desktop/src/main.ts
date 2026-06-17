@@ -34,6 +34,9 @@ import {
   UpdateInvestmentCycleSchema,
   UpdateInvestmentPlanSchema,
   UpdateTreasuryMovementSchema,
+  CreateContributionScheduleSchema,
+  UpdateContributionScheduleSchema,
+  CreateAssetSubstitutionSchema,
 } from "@crypto-control/core";
 import crypto from "crypto";
 import { eq, and, or, asc, desc, isNull } from "drizzle-orm";
@@ -340,6 +343,34 @@ function setupIpcHandlers() {
     title: row.title,
     notes: row.notes,
     changesJson: row.changesJson,
+    createdAt: row.createdAt,
+  });
+
+  const mapContributionSchedule = (row: typeof schema.contributionSchedule.$inferSelect) => ({
+    id: row.id,
+    cycleId: row.cycleId,
+    type: row.type as "periodica" | "extraordinaria",
+    plannedDate: row.plannedDate,
+    amountEur: row.amountEur,
+    currency: row.currency,
+    destination: row.destination ?? null,
+    status: row.status as "pendiente" | "ejecutada" | "cancelada",
+    executedAt: row.executedAt ?? null,
+    notes: row.notes ?? null,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  });
+
+  const mapAssetSubstitution = (row: typeof schema.assetSubstitutions.$inferSelect) => ({
+    id: row.id,
+    cycleId: row.cycleId,
+    fromAssetId: row.fromAssetId,
+    toAssetId: row.toAssetId ?? null,
+    fromInvestmentAssetId: row.fromInvestmentAssetId ?? null,
+    toInvestmentAssetId: row.toInvestmentAssetId ?? null,
+    effectiveDate: row.effectiveDate,
+    reason: row.reason,
+    notes: row.notes ?? null,
     createdAt: row.createdAt,
   });
 
@@ -1991,17 +2022,109 @@ function setupIpcHandlers() {
     return await getPortfolioServiceInst().getPortfolioSnapshots(portfolioUuid);
   }));
 
-  // ── contributionSchedule (E2: stubs — full implementation pending) ──────────
-  ipcMain.handle("contributionSchedule:list",    withResult(async () => [] as never[]));
-  ipcMain.handle("contributionSchedule:create",  withResult(async () => ({ id: "" })));
-  ipcMain.handle("contributionSchedule:update",  withResult(async () => null as never));
-  ipcMain.handle("contributionSchedule:execute", withResult(async () => null as never));
-  ipcMain.handle("contributionSchedule:delete",  withResult(async () => null));
+  // ── contributionSchedule ────────────────────────────────────────────────────
+  ipcMain.handle("contributionSchedule:list", withResult(async (_, input?: { cycleId?: string; status?: string }) => {
+    const db = getDb();
+    let query = db.select().from(schema.contributionSchedule).orderBy(asc(schema.contributionSchedule.plannedDate));
+    const conditions = [];
+    if (input?.cycleId) conditions.push(eq(schema.contributionSchedule.cycleId, input.cycleId));
+    if (input?.status)  conditions.push(eq(schema.contributionSchedule.status, input.status));
+    const rows = conditions.length > 0
+      ? query.where(and(...conditions)).all()
+      : query.all();
+    return rows.map(mapContributionSchedule);
+  }));
 
-  // ── assetSubstitutions (E2: stubs — full implementation pending) ─────────
-  ipcMain.handle("assetSubstitutions:list",   withResult(async () => [] as never[]));
-  ipcMain.handle("assetSubstitutions:create", withResult(async () => ({ id: "" })));
-  ipcMain.handle("assetSubstitutions:delete", withResult(async () => null));
+  ipcMain.handle("contributionSchedule:create", withResult(async (_, payload) => {
+    const data = CreateContributionScheduleSchema.parse(payload);
+    const id = crypto.randomUUID();
+    const now = Date.now();
+    db.insert(schema.contributionSchedule).values({
+      id,
+      cycleId: data.cycleId,
+      type: data.type ?? "periodica",
+      plannedDate: data.plannedDate,
+      amountEur: data.amountEur,
+      currency: data.currency ?? "EUR",
+      destination: data.destination ?? null,
+      status: "pendiente",
+      executedAt: null,
+      notes: data.notes ?? null,
+      createdAt: now,
+      updatedAt: now,
+    }).run();
+    return { id };
+  }));
+
+  ipcMain.handle("contributionSchedule:update", withResult(async (_, id: string, payload) => {
+    const data = UpdateContributionScheduleSchema.parse(payload);
+    const row = db.select().from(schema.contributionSchedule).where(eq(schema.contributionSchedule.id, id)).get();
+    if (!row) throw new Error(`Aportación ${id} no encontrada.`);
+    const update: Partial<typeof schema.contributionSchedule.$inferInsert> = { updatedAt: Date.now() };
+    if (data.plannedDate  !== undefined) update.plannedDate  = data.plannedDate;
+    if (data.amountEur    !== undefined) update.amountEur    = data.amountEur;
+    if (data.currency     !== undefined) update.currency     = data.currency;
+    if (data.destination  !== undefined) update.destination  = data.destination ?? null;
+    if (data.type         !== undefined) update.type         = data.type;
+    if (data.notes        !== undefined) update.notes        = data.notes ?? null;
+    db.update(schema.contributionSchedule).set(update).where(eq(schema.contributionSchedule.id, id)).run();
+    const updated = db.select().from(schema.contributionSchedule).where(eq(schema.contributionSchedule.id, id)).get()!;
+    return mapContributionSchedule(updated);
+  }));
+
+  ipcMain.handle("contributionSchedule:execute", withResult(async (_, id: string) => {
+    const row = db.select().from(schema.contributionSchedule).where(eq(schema.contributionSchedule.id, id)).get();
+    if (!row) throw new Error(`Aportación ${id} no encontrada.`);
+    if (row.status === "ejecutada") throw new Error(`La aportación ${id} ya fue ejecutada.`);
+    const now = Date.now();
+    db.update(schema.contributionSchedule)
+      .set({ status: "ejecutada", executedAt: now, updatedAt: now })
+      .where(eq(schema.contributionSchedule.id, id))
+      .run();
+    const updated = db.select().from(schema.contributionSchedule).where(eq(schema.contributionSchedule.id, id)).get()!;
+    return mapContributionSchedule(updated);
+  }));
+
+  ipcMain.handle("contributionSchedule:delete", withResult(async (_, id: string) => {
+    db.delete(schema.contributionSchedule).where(eq(schema.contributionSchedule.id, id)).run();
+    return null;
+  }));
+
+  // ── assetSubstitutions ───────────────────────────────────────────────────────
+  ipcMain.handle("assetSubstitutions:list", withResult(async (_, input?: { cycleId?: string; fromAssetId?: string }) => {
+    const db = getDb();
+    let query = db.select().from(schema.assetSubstitutions).orderBy(asc(schema.assetSubstitutions.effectiveDate));
+    const conditions = [];
+    if (input?.cycleId)     conditions.push(eq(schema.assetSubstitutions.cycleId, input.cycleId));
+    if (input?.fromAssetId) conditions.push(eq(schema.assetSubstitutions.fromAssetId, input.fromAssetId));
+    const rows = conditions.length > 0
+      ? query.where(and(...conditions)).all()
+      : query.all();
+    return rows.map(mapAssetSubstitution);
+  }));
+
+  ipcMain.handle("assetSubstitutions:create", withResult(async (_, payload) => {
+    const data = CreateAssetSubstitutionSchema.parse(payload);
+    const id = crypto.randomUUID();
+    db.insert(schema.assetSubstitutions).values({
+      id,
+      cycleId: data.cycleId,
+      fromAssetId: data.fromAssetId,
+      toAssetId: data.toAssetId ?? null,
+      fromInvestmentAssetId: data.fromInvestmentAssetId ?? null,
+      toInvestmentAssetId: null,
+      effectiveDate: data.effectiveDate,
+      reason: data.reason,
+      notes: data.notes ?? null,
+      createdAt: Date.now(),
+    }).run();
+    return { id };
+  }));
+
+  ipcMain.handle("assetSubstitutions:delete", withResult(async (_, id: string) => {
+    db.delete(schema.assetSubstitutions).where(eq(schema.assetSubstitutions.id, id)).run();
+    return null;
+  }));
 
   // Ping channel: called by the preload every 200 ms to drive uv_run so the
   // Node.js http.Server below can accept TCP connections (Electron event-loop quirk).
