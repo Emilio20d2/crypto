@@ -46,7 +46,7 @@ export default function App() {
               <Route path="/activo/:assetId" element={<AssetDetail />} />
               <Route path="/operaciones" element={<Operaciones />} />
               <Route path="/fiscalidad" element={<Fiscalidad />} />
-              <Route path="/plan-inversion" element={<PlanInversion />} />
+              <Route path="/plan-inversion/*" element={<PlanInversion />} />
               <Route path="/tesoreria" element={<Tesoreria />} />
               <Route path="/perspectivas" element={<Perspectivas />} />
               <Route path="/configuracion" element={<Configuracion />} />

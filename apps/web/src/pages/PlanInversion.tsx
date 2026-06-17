@@ -1,5 +1,8 @@
 import { useMemo, useState, type FormEvent } from "react";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { PlanLayout } from "./plan/PlanLayout";
+import { PlanResumen } from "./plan/PlanResumen";
 import type {
   Asset,
   AssetHealthResult,
@@ -1994,7 +1997,7 @@ function InvestmentAssetEditor({
   );
 }
 
-export function PlanInversion() {
+function PlanInversionCiclos() {
   const queryClient = useQueryClient();
   const [planName, setPlanName] = useState("Plan principal");
   const [planDescription, setPlanDescription] = useState("");
@@ -2538,5 +2541,41 @@ export function PlanInversion() {
         )}
       </div>
     </>
+  );
+}
+
+// Placeholder para secciones aún no implementadas
+function PlanProximamente({ seccion, bloque }: { seccion: string; bloque: string }) {
+  return (
+    <Card>
+      <CardContent>
+        <p className="empty-inline">{seccion} — Disponible en {bloque}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function PlanInversion() {
+  return (
+    <Routes>
+      <Route element={<PlanLayout />}>
+        <Route index element={<Navigate to="resumen" replace />} />
+        <Route path="resumen" element={<PlanResumen />} />
+        {/* "Configurar mi plan": etapas, monedas, reparto, compra inteligente, cambios */}
+        <Route path="configurar/*" element={<PlanInversionCiclos />} />
+        {/* Secciones en construcción — G-A4 y siguientes */}
+        <Route path="aportaciones" element={<PlanProximamente seccion="Aportaciones" bloque="G-A4" />} />
+        <Route path="beneficios-y-caidas" element={<PlanProximamente seccion="Beneficios y caídas" bloque="G-A5" />} />
+        <Route path="seguimiento" element={<PlanProximamente seccion="Seguimiento" bloque="G-A7" />} />
+        {/* Redirects desde rutas antiguas de la arquitectura provisional */}
+        <Route path="ciclos/*" element={<Navigate to="/plan-inversion/configurar" replace />} />
+        <Route path="estrategia" element={<Navigate to="/plan-inversion/configurar" replace />} />
+        <Route path="compra-inteligente" element={<Navigate to="/plan-inversion/configurar" replace />} />
+        <Route path="ventas-recompras" element={<Navigate to="/plan-inversion/beneficios-y-caidas" replace />} />
+        <Route path="sustituciones" element={<Navigate to="/plan-inversion/beneficios-y-caidas" replace />} />
+        <Route path="historial" element={<Navigate to="/plan-inversion/seguimiento" replace />} />
+        <Route path="*" element={<Navigate to="resumen" replace />} />
+      </Route>
+    </Routes>
   );
 }

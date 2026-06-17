@@ -1,18 +1,25 @@
 import { describe, expect, test, beforeEach, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { PlanInversion } from "./pages/PlanInversion";
 
 function ok<T>(data: T) {
   return Promise.resolve({ ok: true as const, data });
 }
 
-function renderWithQuery() {
+// Render bajo /plan-inversion/configurar (nuevo nombre de la sección "ciclos")
+// para que los tests accedan a PlanInversionCiclos sin depender del Resumen
+function renderWithQuery(initialPath = "/plan-inversion/configurar") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <QueryClientProvider client={client}>
-      <PlanInversion />
-    </QueryClientProvider>
+    <MemoryRouter initialEntries={[initialPath]}>
+      <QueryClientProvider client={client}>
+        <Routes>
+          <Route path="/plan-inversion/*" element={<PlanInversion />} />
+        </Routes>
+      </QueryClientProvider>
+    </MemoryRouter>
   );
 }
 
