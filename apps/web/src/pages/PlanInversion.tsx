@@ -8,6 +8,7 @@ import type {
   CycleLiquidityAllocation,
   CycleGoal,
   CycleMetrics,
+  CycleRebuyTier,
   CycleRisk,
   CycleStrategyReport,
   InvestmentAsset,
@@ -15,9 +16,11 @@ import type {
   InvestmentPlan,
   PartialSale,
   Result,
+  SmartBuyRecommendation,
   StrategyRevision,
   StrategicAlert,
   TransactionInput,
+  TreasurySummary,
 } from "@crypto-control/core";
 import { CalendarDays, CheckCircle, CircleOff, Copy, Plus, Save, Trash2, XCircle } from "lucide-react";
 import { Button } from "../components/Button";
@@ -337,6 +340,212 @@ const EMPTY_ASSETS: Asset[] = [];
 const EMPTY_CYCLES: InvestmentCycle[] = [];
 const EMPTY_INVESTMENT_ASSETS: InvestmentAsset[] = [];
 const EMPTY_REVISIONS: StrategyRevision[] = [];
+
+// ── Compra Inteligente ────────────────────────────────────────────────────────
+
+function SmartBuyPanel({ cycleId, defaultAmount }: { cycleId: string; defaultAmount: number }) {
+  const [amount, setAmount] = useState(String(defaultAmount));
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<SmartBuyRecommendation | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const analyze = async () => {
+    const amountNum = parseFloat(amount.replace(",", "."));
+    if (!amountNum || amountNum <= 0) { setError("Introduce un importe válido."); return; }
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await window.cryptoControl.smartBuy.getRecommendation({ cycleId, amount: amountNum });
+      if (!res.ok) { setError(res.error.message); return; }
+      setResult(res.data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error al calcular la recomendación");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <section className="investment-section" aria-label="Compra Inteligente">
+      <div className="investment-section-heading">
+        <h3>Compra Inteligente</h3>
+        <span className="badge">Solo orientativo — no ejecuta compras automáticas</span>
+      </div>
+      <p className="panel-caption">
+        Distribuye el importe disponible entre los activos del ciclo para restaurar las ponderaciones objetivo. Detecta oportunidades cuando el precio está por debajo del coste medio.
+      </p>
+      <div className="investment-form-grid" style={{ marginBottom: 12 }}>
+        <label className="form-group">
+          <span>Importe a distribuir (EUR)</span>
+          <Input
+            inputMode="decimal"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder={String(defaultAmount)}
+          />
+        </label>
+        <div className="investment-form-actions" style={{ alignSelf: "flex-end" }}>
+          <Button type="button" loading={loading} onClick={() => void analyze()}>
+            Calcular recomendación
+          </Button>
+        </div>
+      </div>
+
+      {error ? <p className="error-msg">{error}</p> : null}
+
+      {result ? (
+        <div>
+          <div className="investment-distribution" style={{ marginBottom: 8 }}>
+            <span>Cartera actual: <strong>{result.totalPortfolioValueEur !== null ? `${formatMoney(result.totalPortfolioValueEur)}` : "Sin datos"}</strong></span>
+            <span>Importe analizado: <strong>{formatMoney(result.analyzedAmountEur)}</strong></span>
+            <span>Calidad de datos: <strong>{result.dataQuality === "completo" ? "Completa" : result.dataQuality === "parcial" ? "Parcial" : "Sin datos"}</strong></span>
+            {result.hasOpportunities ? <span className="badge badge-success">Oportunidades detectadas</span> : null}
+          </div>
+
+          {result.restrictionsApplied.length > 0 ? (
+            <div className="investment-warning" role="status">
+              {result.restrictionsApplied.map((r) => <span key={r}>{r}</span>)}
+            </div>
+          ) : null}
+
+          {result.recommendations.length === 0 ? (
+            <p className="empty-inline">No hay activos activos en el ciclo para distribuir.</p>
+          ) : (
+            <div className="investment-contribution-list">
+              {result.recommendations.map((rec) => (
+                <article
+                  key={rec.assetId}
+                  className={`investment-contribution${rec.isOpportunity ? " investment-contribution--opportunity" : ""}`}
+                >
+                  <div className="investment-contribution-header">
+                    <div>
+                      <strong>{rec.assetId}</strong>
+                      {rec.targetAllocationPct !== null ? <span>{rec.targetAllocationPct}% objetivo</span> : null}
+                    </div>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      {rec.isOpportunity ? <span className="badge badge-success">Oportunidad</span> : null}
+                      {rec.isUnderweight ? <span className="badge">Infraponderado</span> : null}
+                      <span className="badge">{rec.confidenceLevel === "alta" ? "Confianza alta" : rec.confidenceLevel === "media" ? "Confianza media" : "Sin datos"}</span>
+                    </div>
+                  </div>
+                  <p className="investment-contribution-meta">
+                    Recomendado: <strong>{formatMoney(rec.recommendedAmountEur)}</strong>
+                    {" "} · Base por ponderación: {formatMoney(rec.baseAmountEur)}
+                    {rec.deviationFromBaseEur !== 0 ? ` · Ajuste: ${rec.deviationFromBaseEur > 0 ? "+" : ""}${formatMoney(rec.deviationFromBaseEur)}` : ""}
+                  </p>
+                  {rec.currentValueEur !== null ? (
+                    <p className="investment-contribution-meta">
+                      Actual: {formatMoney(rec.currentValueEur)} · Objetivo: {rec.targetValueEur !== null ? formatMoney(rec.targetValueEur) : "—"}
+                    </p>
+                  ) : null}
+                  {rec.opportunityReason ? (
+                    <p className="investment-contribution-meta" style={{ color: "var(--color-success, green)" }}>
+                      {rec.opportunityReason}
+                    </p>
+                  ) : null}
+                  <p className="investment-contribution-meta">{rec.reason}</p>
+                </article>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+// ── Reglas de Recompra (configurable) ────────────────────────────────────────
+
+function RebuyTiersConfig({ cycleId }: { cycleId: string }) {
+  const qc = useQueryClient();
+  const queryKey = ["rebuyTiers", cycleId] as const;
+
+  const tiersQuery = useQuery({
+    queryKey,
+    queryFn: () => unwrap(window.cryptoControl.rebuyTiers.list({ cycleId })),
+  });
+  const tiers: CycleRebuyTier[] = tiersQuery.data ?? [];
+
+  const [drawdown, setDrawdown] = useState("-15");
+  const [usage, setUsage] = useState("30");
+  const [tierError, setTierError] = useState<string | null>(null);
+
+  const upsert = useMutation({
+    mutationFn: (data: { id?: string; cycleId: string; drawdownPercentage: number; usagePercentage: number }) =>
+      unwrap(window.cryptoControl.rebuyTiers.upsert(data)),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey }); },
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: string) => unwrap(window.cryptoControl.rebuyTiers.delete(id)),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey }); },
+  });
+
+  const submitTier = async (e: FormEvent) => {
+    e.preventDefault();
+    setTierError(null);
+    const d = parseFloat(drawdown.replace(",", "."));
+    const u = parseFloat(usage.replace(",", "."));
+    if (isNaN(d) || isNaN(u)) { setTierError("Introduce valores numéricos válidos."); return; }
+    if (d >= 0) { setTierError("El drawdown debe ser negativo (ej: -15)."); return; }
+    if (u <= 0 || u > 100) { setTierError("El uso debe estar entre 1% y 100%."); return; }
+    await upsert.mutateAsync({ cycleId, drawdownPercentage: d, usagePercentage: u });
+    setDrawdown("-15");
+    setUsage("30");
+  };
+
+  return (
+    <section className="investment-section" aria-label="Reglas de recompra">
+      <div className="investment-section-heading">
+        <h3>Reglas de recompra</h3>
+        {tiers.length === 0 ? <span className="badge">Usando valores predeterminados</span> : <span className="badge badge-success">{tiers.length} reglas configuradas</span>}
+      </div>
+      <p className="panel-caption">
+        Define a qué porcentaje de caída desplegar qué porcentaje de la liquidez libre. Si no hay reglas configuradas, se usan los valores predeterminados: −15% → 30%, −25% → 50%, −40% → 70%.
+      </p>
+
+      {tiers.length > 0 ? (
+        <div className="investment-contribution-list" style={{ marginBottom: 12 }}>
+          {tiers.map((tier) => (
+            <article key={tier.id} className="investment-contribution">
+              <div className="investment-contribution-header">
+                <div>
+                  <strong>Caída {tier.drawdownPercentage}%</strong>
+                  <span>Desplegar {tier.usagePercentage}% de liquidez libre</span>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  loading={remove.isPending}
+                  onClick={() => void remove.mutateAsync(tier.id)}
+                >
+                  <Trash2 size={14} />
+                </Button>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : null}
+
+      {tierError ? <p className="error-msg">{tierError}</p> : null}
+
+      <form className="investment-form-grid" onSubmit={(e) => void submitTier(e)}>
+        <label className="form-group">
+          <span>Caída (%) negativo, ej: −15</span>
+          <Input inputMode="decimal" value={drawdown} onChange={(e) => setDrawdown(e.target.value)} placeholder="-15" />
+        </label>
+        <label className="form-group">
+          <span>Uso de liquidez (%)</span>
+          <Input inputMode="decimal" value={usage} onChange={(e) => setUsage(e.target.value)} placeholder="30" />
+        </label>
+        <div className="investment-form-actions" style={{ alignSelf: "flex-end" }}>
+          <Button type="submit" loading={upsert.isPending}><Plus size={15} /> Añadir regla</Button>
+        </div>
+      </form>
+    </section>
+  );
+}
 
 type PlanEditorProps = {
   plan: InvestmentPlan;
@@ -1036,6 +1245,10 @@ function CycleEditor({
             ) : null}
           </section>
         ) : null}
+
+        <SmartBuyPanel cycleId={cycle.id} defaultAmount={cycle.monthlyAmountEur} />
+
+        <RebuyTiersConfig cycleId={cycle.id} />
 
         <form className="investment-form-grid" onSubmit={(event) => void submitCycle(event)}>
           <label className="form-group">
@@ -1841,6 +2054,13 @@ export function PlanInversion() {
     queryFn: () => unwrap(window.cryptoControl.strategyRevisions.list()),
   });
 
+  const treasurySummaryQuery = useQuery({
+    queryKey: ["treasury", "summary"],
+    queryFn: () => unwrap(window.cryptoControl.treasury.getSummary()),
+    staleTime: 5 * 60 * 1000,
+  });
+  const treasurySummary: TreasurySummary | null = treasurySummaryQuery.data ?? null;
+
   async function invalidatePlan() {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["investment-plan"] }),
@@ -2247,6 +2467,45 @@ export function PlanInversion() {
                 </form>
               </CardContent>
             </Card>
+
+            {treasurySummary ? (
+              <Card>
+                <CardHeader>
+                  <div>
+                    <CardTitle>Tesorería (resumen)</CardTitle>
+                    <p className="panel-caption">Liquidez disponible para la estrategia. Gestión completa en la sección Tesorería.</p>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <section className="investment-metrics-grid" aria-label="Resumen de tesorería">
+                    <article className="investment-summary-tile">
+                      <span>Efectivo</span>
+                      <strong>{formatMoney(treasurySummary.cashBalance)}</strong>
+                    </article>
+                    <article className="investment-summary-tile">
+                      <span>EURC</span>
+                      <strong>{formatMoney(treasurySummary.eurcBalance)}</strong>
+                    </article>
+                    <article className="investment-summary-tile">
+                      <span>Liquidez total</span>
+                      <strong>{formatMoney(treasurySummary.totalLiquidity)}</strong>
+                    </article>
+                    <article className="investment-summary-tile">
+                      <span>Libre para recompras</span>
+                      <strong>{formatMoney(treasurySummary.freeRebuyLiquidity)}</strong>
+                    </article>
+                    <article className="investment-summary-tile">
+                      <span>Reserva fiscal</span>
+                      <strong>{formatMoney(treasurySummary.fiscalReserveBalance)}</strong>
+                    </article>
+                    <article className="investment-summary-tile">
+                      <span>Impuestos estimados pendientes</span>
+                      <strong>{formatMoney(treasurySummary.pendingEstimatedTaxes)}</strong>
+                    </article>
+                  </section>
+                </CardContent>
+              </Card>
+            ) : null}
 
             <div className="investment-cycle-grid">
               {cycles.length === 0 ? (

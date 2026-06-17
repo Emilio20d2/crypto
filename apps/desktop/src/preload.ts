@@ -141,6 +141,14 @@ const cryptoControl: FullCryptoControlAPI = {
     updateGoal:  (id: string, data: unknown)                       => ipcRenderer.invoke("perspectives:updateGoal", id, data),
     deleteGoal:  (id: string)                                      => ipcRenderer.invoke("perspectives:deleteGoal", id),
   },
+  smartBuy: {
+    getRecommendation: (input: unknown) => ipcRenderer.invoke("smartBuy:getRecommendation", input),
+  },
+  rebuyTiers: {
+    list:   (input: unknown)   => ipcRenderer.invoke("rebuyTiers:list", input),
+    upsert: (data: unknown)    => ipcRenderer.invoke("rebuyTiers:upsert", data),
+    delete: (id: string)       => ipcRenderer.invoke("rebuyTiers:delete", id),
+  },
   treasury: {
     getSummary:           ()                                      => ipcRenderer.invoke("treasury:getSummary"),
     listMovements:        ()                                      => ipcRenderer.invoke("treasury:listMovements"),

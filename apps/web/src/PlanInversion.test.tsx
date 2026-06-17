@@ -102,6 +102,14 @@ beforeEach(() => {
       updateGoal:  async () => ({ ok: true as const, data: { id: "mock-goal", name: "mock", type: "personalizado" as const, targetAmountEur: 1000, targetDate: null, priority: 0, notes: null, createdAt: 0, updatedAt: 0 } }),
       deleteGoal:  async () => ({ ok: true as const, data: null }),
     },
+    smartBuy: {
+      getRecommendation: async () => ({ ok: true as const, data: { cycleId: "mock-cycle", analyzedAmountEur: 200, totalPortfolioValueEur: 5000, recommendations: [], hasOpportunities: false, restrictionsApplied: [], dataQuality: "sin_datos" as const, generatedAt: 0 } }),
+    },
+    rebuyTiers: {
+      list:   async () => ({ ok: true as const, data: [] }),
+      upsert: async () => ({ ok: true as const, data: { id: "mock-tier" } }),
+      delete: async () => ({ ok: true as const, data: null }),
+    },
   };
 });
 

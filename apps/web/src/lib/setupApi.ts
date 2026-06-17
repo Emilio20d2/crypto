@@ -136,6 +136,14 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
       updateGoal:  (id: unknown, d: unknown) => ipc("perspectives:updateGoal", id, d),
       deleteGoal:  (id: unknown) =>             ipc("perspectives:deleteGoal", id),
     },
+    smartBuy: {
+      getRecommendation: (input: unknown) => ipc("smartBuy:getRecommendation", input),
+    },
+    rebuyTiers: {
+      list:   (input: unknown)  => ipc("rebuyTiers:list", input),
+      upsert: (data: unknown)   => ipc("rebuyTiers:upsert", data),
+      delete: (id: unknown)     => ipc("rebuyTiers:delete", id),
+    },
     treasury: {
       getSummary:                 () =>                         ipc("treasury:getSummary"),
       listMovements:              () =>                         ipc("treasury:listMovements"),

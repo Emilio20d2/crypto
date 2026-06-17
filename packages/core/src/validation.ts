@@ -667,3 +667,43 @@ export const CreatePerspectivesGoalSchema = z.object({
   notes: z.string().nullable().optional(),
 });
 export type CreatePerspectivesGoalInput = z.infer<typeof CreatePerspectivesGoalSchema>;
+
+// --- PLAN — COMPRA INTELIGENTE Y REGLAS DE RECOMPRA ---
+
+export const SmartBuyAssetRecommendationSchema = z.object({
+  assetId: z.string(),
+  recommendedAmountEur: z.number(),
+  baseAmountEur: z.number(),
+  deviationFromBaseEur: z.number(),
+  targetAllocationPct: z.number().nullable(),
+  currentValueEur: z.number().nullable(),
+  targetValueEur: z.number().nullable(),
+  isUnderweight: z.boolean(),
+  isOpportunity: z.boolean(),
+  opportunityReason: z.string().nullable(),
+  confidenceLevel: z.enum(["alta", "media", "baja"]),
+  reason: z.string(),
+});
+export type SmartBuyAssetRecommendation = z.infer<typeof SmartBuyAssetRecommendationSchema>;
+
+export const SmartBuyRecommendationSchema = z.object({
+  cycleId: z.string(),
+  analyzedAmountEur: z.number(),
+  totalPortfolioValueEur: z.number().nullable(),
+  recommendations: z.array(SmartBuyAssetRecommendationSchema),
+  hasOpportunities: z.boolean(),
+  restrictionsApplied: z.array(z.string()),
+  dataQuality: z.enum(["completo", "parcial", "sin_datos"]),
+  generatedAt: TimestampSchema,
+});
+export type SmartBuyRecommendation = z.infer<typeof SmartBuyRecommendationSchema>;
+
+export const CycleRebuyTierSchema = z.object({
+  id: z.string(),
+  cycleId: z.string(),
+  drawdownPercentage: z.number(),
+  usagePercentage: z.number(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+});
+export type CycleRebuyTier = z.infer<typeof CycleRebuyTierSchema>;

@@ -2350,7 +2350,15 @@ function setupIpcHandlers() {
         const assetLiquidity = freeRebuyLiquidity * fraction;
         if (assetLiquidity < 5) continue;
 
-        for (const [drop, deployFraction, label] of [[-15, 0.3, "Corrección moderada"], [-25, 0.5, "Corrección fuerte"], [-40, 0.7, "Corrección extrema"]] as const) {
+        // Use configured DB tiers; fall back to defaults if none exist
+        const dbTiers = db.select().from(schema.cycleRebuyTiers)
+          .where(eq(schema.cycleRebuyTiers.cycleId, input.cycleId))
+          .orderBy(schema.cycleRebuyTiers.drawdownPercentage)
+          .all();
+        const tierDefs: Array<[number, number, string]> = dbTiers.length > 0
+          ? dbTiers.map(t => [t.drawdownPercentage, t.usagePercentage / 100, `Corrección ${Math.abs(t.drawdownPercentage)}%`])
+          : [[-15, 0.3, "Corrección moderada"], [-25, 0.5, "Corrección fuerte"], [-40, 0.7, "Corrección extrema"]];
+        for (const [drop, deployFraction, label] of tierDefs) {
           const amount = Math.round(assetLiquidity * deployFraction * 100) / 100;
           if (amount < 5) continue;
           rebuyProposals.push(RebuyProposalSchema.parse({
@@ -2442,6 +2450,143 @@ function setupIpcHandlers() {
   ipcMain.handle("perspectives:deleteGoal", withResult(async (_, id: string) => {
     const db = getDb();
     db.delete(schema.perspectivesGoals).where(eq(schema.perspectivesGoals.id, id)).run();
+    return null;
+  }));
+
+  // --- COMPRA INTELIGENTE: rebalanceo proporcional sin ejecución automática ---
+
+  ipcMain.handle("smartBuy:getRecommendation", withResult(async (_, input: { cycleId: string; amount: number }) => {
+    const db = getDb();
+
+    const assetRows = db.select().from(schema.investmentAssets)
+      .where(and(
+        eq(schema.investmentAssets.cycleId, input.cycleId),
+        eq(schema.investmentAssets.status, "active"),
+      ))
+      .all();
+
+    const now = Date.now();
+
+    if (assetRows.length === 0) {
+      return {
+        cycleId: input.cycleId,
+        analyzedAmountEur: input.amount,
+        totalPortfolioValueEur: null,
+        recommendations: [],
+        hasOpportunities: false,
+        restrictionsApplied: ["Sin activos activos en el ciclo"],
+        dataQuality: "sin_datos" as const,
+        generatedAt: now,
+      };
+    }
+
+    const portfolioResult = await getPortfolioService().getPositions();
+    const positions: Record<string, { balance: number; averagePriceEur: number | null; totalInvestedEur: number }> = portfolioResult.positions as Record<string, { balance: number; averagePriceEur: number | null; totalInvestedEur: number }>;
+
+    const allocations = await getPortfolioService().getAllocation();
+    const allocationMap = new Map(allocations.map((a: { assetId: string; valueEur: number }) => [a.assetId, a]));
+    const totalPortfolioValue = allocations.reduce((sum: number, a: { valueEur: number }) => sum + a.valueEur, 0);
+    const projectedTotal = totalPortfolioValue + input.amount;
+
+    let totalUnderweight = 0;
+    const assetData = assetRows.map(asset => {
+      const allocation = allocationMap.get(asset.assetId);
+      const position = positions[asset.assetId];
+      const currentValueEur = allocation ? allocation.valueEur : 0;
+      const targetPct = (asset.allocationPercentage ?? 0) / 100;
+      const targetValueEur = projectedTotal * targetPct;
+      const underweightEur = Math.max(0, targetValueEur - currentValueEur);
+      totalUnderweight += underweightEur;
+      return { asset, targetPct, currentValueEur, targetValueEur, underweightEur, position };
+    });
+
+    let hasOpportunities = false;
+    const recommendations = assetData.map(({ asset, targetPct, currentValueEur, targetValueEur, underweightEur, position }) => {
+      const baseAmount = Math.round(targetPct * input.amount * 100) / 100;
+      const recommendedAmountEur = totalUnderweight > 0
+        ? Math.round((underweightEur / totalUnderweight) * input.amount * 100) / 100
+        : baseAmount;
+
+      const balance = position?.balance ?? 0;
+      const avgCostPerUnit = position?.averagePriceEur ?? null;
+      const currentPricePerUnit = balance > 0 && currentValueEur > 0 ? currentValueEur / balance : null;
+      const isOpportunity = avgCostPerUnit !== null && currentPricePerUnit !== null && currentPricePerUnit < avgCostPerUnit * 0.95;
+      if (isOpportunity) hasOpportunities = true;
+
+      const opportunityReason = isOpportunity && currentPricePerUnit !== null && avgCostPerUnit !== null
+        ? `Precio actual (${currentPricePerUnit.toFixed(2)} €/u) está un ${((1 - currentPricePerUnit / avgCostPerUnit) * 100).toFixed(1)}% por debajo del coste medio (${avgCostPerUnit.toFixed(2)} €/u)`
+        : null;
+
+      const isUnderweight = currentValueEur < targetValueEur;
+      const reason = isUnderweight
+        ? `${asset.assetId} está infraponderado: ${currentValueEur.toFixed(0)} € actuales vs ${targetValueEur.toFixed(0)} € objetivo (${asset.allocationPercentage ?? 0}% del total proyectado).`
+        : `${asset.assetId} está en o por encima de su objetivo: ${currentValueEur.toFixed(0)} € actuales vs ${targetValueEur.toFixed(0)} € objetivo.`;
+
+      return {
+        assetId: asset.assetId,
+        recommendedAmountEur,
+        baseAmountEur: baseAmount,
+        deviationFromBaseEur: Math.round((recommendedAmountEur - baseAmount) * 100) / 100,
+        targetAllocationPct: asset.allocationPercentage ?? null,
+        currentValueEur: currentValueEur > 0 ? Math.round(currentValueEur * 100) / 100 : null,
+        targetValueEur: Math.round(targetValueEur * 100) / 100,
+        isUnderweight,
+        isOpportunity,
+        opportunityReason,
+        confidenceLevel: (position && currentValueEur > 0 ? "alta" : position ? "media" : "baja") as "alta" | "media" | "baja",
+        reason,
+      };
+    });
+
+    const dataQuality = allocations.length > 0 ? "completo" as const : "parcial" as const;
+
+    return {
+      cycleId: input.cycleId,
+      analyzedAmountEur: input.amount,
+      totalPortfolioValueEur: Math.round(totalPortfolioValue * 100) / 100,
+      recommendations,
+      hasOpportunities,
+      restrictionsApplied: [],
+      dataQuality,
+      generatedAt: now,
+    };
+  }));
+
+  // --- REGLAS DE RECOMPRA: CRUD sobre cycleRebuyTiers ---
+
+  ipcMain.handle("rebuyTiers:list", withResult(async (_, input: { cycleId: string }) => {
+    const db = getDb();
+    const rows = db.select().from(schema.cycleRebuyTiers)
+      .where(eq(schema.cycleRebuyTiers.cycleId, input.cycleId))
+      .orderBy(schema.cycleRebuyTiers.drawdownPercentage)
+      .all();
+    return rows.map(r => ({
+      id: r.id,
+      cycleId: r.cycleId,
+      drawdownPercentage: r.drawdownPercentage,
+      usagePercentage: r.usagePercentage,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    }));
+  }));
+
+  ipcMain.handle("rebuyTiers:upsert", withResult(async (_, data: { id?: string; cycleId: string; drawdownPercentage: number; usagePercentage: number }) => {
+    const db = getDb();
+    const now = Date.now();
+    const id = data.id ?? crypto.randomUUID();
+    db.insert(schema.cycleRebuyTiers)
+      .values({ id, cycleId: data.cycleId, drawdownPercentage: data.drawdownPercentage, usagePercentage: data.usagePercentage, createdAt: now, updatedAt: now })
+      .onConflictDoUpdate({
+        target: schema.cycleRebuyTiers.id,
+        set: { drawdownPercentage: data.drawdownPercentage, usagePercentage: data.usagePercentage, updatedAt: now },
+      })
+      .run();
+    return { id };
+  }));
+
+  ipcMain.handle("rebuyTiers:delete", withResult(async (_, id: string) => {
+    const db = getDb();
+    db.delete(schema.cycleRebuyTiers).where(eq(schema.cycleRebuyTiers.id, id)).run();
     return null;
   }));
 

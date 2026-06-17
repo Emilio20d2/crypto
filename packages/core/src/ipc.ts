@@ -31,6 +31,8 @@ import type {
   CycleStrategyReport,
   PerspectivesGoal,
   CreatePerspectivesGoalInput,
+  SmartBuyRecommendation,
+  CycleRebuyTier,
   UpdateInvestmentAssetInput,
   UpdateInvestmentCycleInput,
   UpdateInvestmentPlanInput,
@@ -219,6 +221,14 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
     createGoal: (data: CreatePerspectivesGoalInput) => Promise<Result<{ id: string }>>;
     updateGoal: (id: string, data: Partial<CreatePerspectivesGoalInput>) => Promise<Result<PerspectivesGoal>>;
     deleteGoal: (id: string) => Promise<Result<null>>;
+  };
+  smartBuy: {
+    getRecommendation: (input: { cycleId: string; amount: number }) => Promise<Result<SmartBuyRecommendation>>;
+  };
+  rebuyTiers: {
+    list: (input: { cycleId: string }) => Promise<Result<CycleRebuyTier[]>>;
+    upsert: (data: { id?: string; cycleId: string; drawdownPercentage: number; usagePercentage: number }) => Promise<Result<{ id: string }>>;
+    delete: (id: string) => Promise<Result<null>>;
   };
   treasury: {
     getSummary: () => Promise<Result<TreasurySummary>>;
