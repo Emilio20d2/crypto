@@ -2264,6 +2264,132 @@ function setupIpcHandlers() {
     return alerts;
   }));
 
+  // G3+G4+G5+G6+G8 — Informe estratégico completo del ciclo (calculado por demanda, no persistido).
+  ipcMain.handle("strategicDecisions:getCycleReport", withResult(async (_, input: { cycleId: string }) => {
+    const { assessAssetHealth, classifyMarketPhase } = require("@crypto-control/market-data") as typeof import("@crypto-control/market-data");
+    const { CycleStrategyReportSchema, PartialSaleProposalSchema, RebuyProposalSchema } = require("@crypto-control/core") as typeof import("@crypto-control/core");
+    const db = getDb();
+
+    // Market phase (G1+G2)
+    const [fearGreedResult, globalMetrics] = await Promise.all([
+      fearGreedService.get().catch(() => ({ value: null as number | null })),
+      fetchGlobalMetrics().catch(() => ({ btcDominance: null, ethDominance: null, marketCapChangePercentage24h: null })),
+    ]);
+    const marketPhaseResult = classifyMarketPhase({
+      fearGreed: fearGreedResult.value,
+      marketCapChangePercentage24h: globalMetrics.marketCapChangePercentage24h,
+      btcDominance: globalMetrics.btcDominance,
+      ethDominance: globalMetrics.ethDominance,
+    });
+
+    // Active assets for this cycle
+    const assetRows = db.select().from(schema.investmentAssets)
+      .where(and(
+        eq(schema.investmentAssets.cycleId, input.cycleId),
+        eq(schema.investmentAssets.status, "active"),
+      ))
+      .all();
+
+    // Health per asset (G5)
+    const fearGreedValue = getCachedFearGreed();
+    const healthMap = new Map<string, ReturnType<typeof assessAssetHealth>>();
+    for (const assetRow of assetRows) {
+      const [assetSentiment, btcSentiment] = await Promise.all([
+        sentimentService.getAssetSentiment(assetRow.assetId, "30d", { fearGreedValue }).catch(() => null),
+        assetRow.assetId === "BTC" ? Promise.resolve(null) : sentimentService.getAssetSentiment("BTC", "30d", { fearGreedValue }).catch(() => null),
+      ]);
+      healthMap.set(assetRow.assetId, assessAssetHealth({ assetSentiment, btcSentiment, isRetiredFromStrategy: false }));
+    }
+
+    // G3 — Propuestas de venta parcial
+    const partialSaleProposals = [];
+    for (const assetRow of assetRows) {
+      const health = healthMap.get(assetRow.assetId);
+      if (!health) continue;
+      const phase = marketPhaseResult.phase;
+
+      let type: "mantener" | "vigilar" | "venta_parcial" | "recogida_beneficios";
+      let percentageSuggested: number | null = null;
+      let reason: string;
+      let riskLevel: "bajo" | "moderado" | "alto" | "muy_alto";
+
+      if (health.estadoEstrategico === "sustitucion_recomendada") {
+        type = "venta_parcial"; percentageSuggested = 100; riskLevel = "muy_alto";
+        reason = `Deterioro severo detectado. Salida total recomendada. ${health.reasoning}`;
+      } else if (health.estadoEstrategico === "deterioro") {
+        type = "venta_parcial"; percentageSuggested = 30; riskLevel = "alto";
+        reason = `Activo en deterioro. Reducción del 30% para limitar exposición. ${health.reasoning}`;
+      } else if (health.estadoEstrategico === "vigilancia") {
+        type = "vigilar"; riskLevel = "moderado";
+        reason = `Activo en zona de vigilancia. Monitorear evolución antes de actuar. ${health.reasoning}`;
+      } else if ((phase === "euforia" || phase === "distribucion") && (health.estadoEstrategico === "excelente" || health.estadoEstrategico === "buena")) {
+        type = "recogida_beneficios";
+        percentageSuggested = phase === "euforia" ? 30 : 20;
+        riskLevel = "bajo";
+        reason = `El mercado está en fase de ${phase === "euforia" ? "euforia" : "distribución"}. Considerar recoger beneficios (${percentageSuggested}%) mientras el activo mantiene buen estado.`;
+      } else {
+        type = "mantener"; riskLevel = "bajo";
+        reason = health.estadoEstrategico === "excelente"
+          ? "Activo en excelente estado. Mantener y continuar acumulando según el plan."
+          : "Activo estable. Mantener posición y seguir el plan de inversión.";
+      }
+
+      partialSaleProposals.push(PartialSaleProposalSchema.parse({
+        assetId: assetRow.assetId, type, percentageSuggested, reason, riskLevel, estimatedProceedsEur: null,
+      }));
+    }
+
+    // G4 — Propuestas de recompra
+    const treasury = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance());
+    const freeRebuyLiquidity = treasury.freeRebuyLiquidity;
+    const rebuyProposals = [];
+
+    if (freeRebuyLiquidity >= 10 && assetRows.length > 0) {
+      for (const assetRow of assetRows) {
+        const fraction = assetRow.allocationPercentage !== null ? assetRow.allocationPercentage / 100 : 1 / assetRows.length;
+        const assetLiquidity = freeRebuyLiquidity * fraction;
+        if (assetLiquidity < 5) continue;
+
+        for (const [drop, deployFraction, label] of [[-15, 0.3, "Corrección moderada"], [-25, 0.5, "Corrección fuerte"], [-40, 0.7, "Corrección extrema"]] as const) {
+          const amount = Math.round(assetLiquidity * deployFraction * 100) / 100;
+          if (amount < 5) continue;
+          rebuyProposals.push(RebuyProposalSchema.parse({
+            assetId: assetRow.assetId,
+            triggerDropPercentage: drop,
+            proposedAmountEur: amount,
+            reason: `${label} (${drop}%): desplegar ${Math.round(deployFraction * 100)}% de la liquidez asignada a ${assetRow.assetId} (${assetLiquidity.toFixed(0)} EUR disponibles de ${freeRebuyLiquidity.toFixed(0)} EUR libres totales).`,
+            availableLiquidityEur: Math.round(assetLiquidity * 100) / 100,
+          }));
+        }
+      }
+    }
+
+    // G5/G6 — Resumen de riesgos y sugerencias de adaptación
+    const riskSummary: string[] = [];
+    const adaptationSuggestions: string[] = [];
+    for (const [assetId, health] of healthMap) {
+      if (health.estadoEstrategico === "sustitucion_recomendada") {
+        riskSummary.push(`${assetId}: Sustitución recomendada — ${health.reasoning}`);
+        adaptationSuggestions.push(`Planificar sustitución de ${assetId}. Usar el módulo de sustituciones para documentar el activo de destino y la fecha efectiva.`);
+      } else if (health.estadoEstrategico === "deterioro") {
+        riskSummary.push(`${assetId}: Deterioro detectado — ${health.reasoning}`);
+      }
+    }
+    if (freeRebuyLiquidity === 0 && assetRows.length > 0) {
+      riskSummary.push("Sin liquidez libre para recompras. Considerar liberar parte de la reserva de tesorería si hay una corrección relevante.");
+    }
+
+    return CycleStrategyReportSchema.parse({
+      cycleId: input.cycleId,
+      marketPhase: marketPhaseResult,
+      partialSaleProposals,
+      rebuyProposals,
+      riskSummary,
+      adaptationSuggestions,
+      generatedAt: Date.now(),
+    });
+  }));
+
   // Ping channel: called by the preload every 200 ms to drive uv_run so the
   // Node.js http.Server below can accept TCP connections (Electron event-loop quirk).
   ipcMain.handle("__ping__", () => true);

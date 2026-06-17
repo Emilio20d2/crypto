@@ -93,6 +93,9 @@ beforeEach(() => {
     strategicAlerts: {
       generate: async () => ({ ok: true as const, data: [] }),
     },
+    strategicDecisions: {
+      getCycleReport: async () => ({ ok: true as const, data: { cycleId: "cycle-1", marketPhase: { phase: null, confidence: "baja" as const, indicatorsUsed: [], indicatorsUnavailable: [], reasoning: "mock" }, partialSaleProposals: [], rebuyProposals: [], riskSummary: [], adaptationSuggestions: [], generatedAt: 0 } }),
+    },
   };
 });
 

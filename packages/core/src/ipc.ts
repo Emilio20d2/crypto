@@ -28,6 +28,7 @@ import type {
   CycleMetrics,
   AssetHealthResult,
   StrategicAlert,
+  CycleStrategyReport,
   UpdateInvestmentAssetInput,
   UpdateInvestmentCycleInput,
   UpdateInvestmentPlanInput,
@@ -207,6 +208,9 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
   };
   strategicAlerts: {
     generate: (input: { cycleId: string }) => Promise<Result<StrategicAlert[]>>;
+  };
+  strategicDecisions: {
+    getCycleReport: (input: { cycleId: string }) => Promise<Result<CycleStrategyReport>>;
   };
   treasury: {
     getSummary: () => Promise<Result<TreasurySummary>>;

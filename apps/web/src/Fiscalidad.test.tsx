@@ -183,6 +183,9 @@ describe("Fiscalidad", () => {
       strategicAlerts: {
         generate: async () => ({ ok: true as const, data: [] }),
       },
+      strategicDecisions: {
+        getCycleReport: async () => ({ ok: true as const, data: { cycleId: "mock-cycle", marketPhase: { phase: null, confidence: "baja" as const, indicatorsUsed: [], indicatorsUnavailable: [], reasoning: "mock" }, partialSaleProposals: [], rebuyProposals: [], riskSummary: [], adaptationSuggestions: [], generatedAt: 0 } }),
+      },
       treasury: {
       allocateCashToRebuy: async () => ({ ok: true as const, data: { id: "mock-allocation" } }),
       listCycleLiquidity: async () => ({ ok: true as const, data: [] }),

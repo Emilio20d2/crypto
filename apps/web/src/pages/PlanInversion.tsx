@@ -9,6 +9,7 @@ import type {
   CycleGoal,
   CycleMetrics,
   CycleRisk,
+  CycleStrategyReport,
   InvestmentAsset,
   InvestmentCycle,
   InvestmentPlan,
@@ -168,6 +169,40 @@ const ALERT_SEVERITY_BADGE: Record<string, string> = {
   critica: "badge-danger",
   advertencia: "badge-warning",
   info: "",
+};
+
+const MARKET_PHASE_LABEL: Record<string, string> = {
+  acumulacion: "Acumulación",
+  inicio_alcista: "Alcista temprano",
+  alcista_fuerte: "Alcista avanzado",
+  euforia: "Euforia",
+  distribucion: "Distribución",
+  bajista: "Mercado bajista",
+  capitulacion: "Capitulación",
+};
+
+const MARKET_PHASE_BADGE: Record<string, string> = {
+  acumulacion: "badge-success",
+  inicio_alcista: "badge-success",
+  alcista_fuerte: "badge-success",
+  euforia: "badge-warning",
+  distribucion: "badge-warning",
+  bajista: "badge-danger",
+  capitulacion: "badge-danger",
+};
+
+const SALE_PROPOSAL_LABEL: Record<string, string> = {
+  mantener: "Mantener",
+  vigilar: "Vigilar",
+  venta_parcial: "Venta parcial sugerida",
+  recogida_beneficios: "Recogida de beneficios",
+};
+
+const SALE_PROPOSAL_BADGE: Record<string, string> = {
+  mantener: "badge-success",
+  vigilar: "badge-warning",
+  venta_parcial: "badge-danger",
+  recogida_beneficios: "badge-warning",
 };
 
 const CS_TYPE_LABEL: Record<ContributionSchedule["type"], string> = {
@@ -449,6 +484,13 @@ function CycleEditor({
     staleTime: 10 * 60 * 1000,
   });
   const alerts: StrategicAlert[] = alertsQuery.data ?? [];
+
+  const strategyReportQuery = useQuery({
+    queryKey: ["strategic-decisions", "cycle-report", cycle.id],
+    queryFn: () => unwrap(window.cryptoControl.strategicDecisions.getCycleReport({ cycleId: cycle.id })),
+    staleTime: 10 * 60 * 1000,
+  });
+  const strategyReport: CycleStrategyReport | null = strategyReportQuery.data ?? null;
 
   const [assetId, setAssetId] = useState(assets[0]?.id ?? "");
   const [allocationPercentage, setAllocationPercentage] = useState("");
@@ -865,6 +907,126 @@ function CycleEditor({
                   {metrics.roiPercentage >= 0 ? "+" : ""}{metrics.roiPercentage.toLocaleString("es-ES", { maximumFractionDigits: 2 })}%
                 </strong>
               </article>
+            ) : null}
+          </section>
+        ) : null}
+
+        {strategyReport ? (
+          <section className="investment-section" aria-label="Panel de estrategia">
+            <div className="investment-section-heading">
+              <h3>Estrategia actual</h3>
+              {strategyReport.marketPhase.phase ? (
+                <span className={`badge ${MARKET_PHASE_BADGE[strategyReport.marketPhase.phase] ?? ""}`}>
+                  {MARKET_PHASE_LABEL[strategyReport.marketPhase.phase] ?? strategyReport.marketPhase.phase}
+                </span>
+              ) : (
+                <span className="badge">Fase indeterminada</span>
+              )}
+            </div>
+
+            {/* G1+G2 — Fase de mercado */}
+            <div className="investment-contribution-list">
+              <article className="investment-contribution">
+                <div className="investment-contribution-header">
+                  <div>
+                    <strong>Fase de mercado</strong>
+                    <span>Índice Crypto Control · Confianza: {strategyReport.marketPhase.confidence}</span>
+                  </div>
+                  {strategyReport.marketPhase.phase ? (
+                    <span className={`badge ${MARKET_PHASE_BADGE[strategyReport.marketPhase.phase] ?? ""}`}>
+                      {MARKET_PHASE_LABEL[strategyReport.marketPhase.phase] ?? strategyReport.marketPhase.phase}
+                    </span>
+                  ) : null}
+                </div>
+                <p className="investment-contribution-meta">{strategyReport.marketPhase.reasoning}</p>
+                {strategyReport.marketPhase.indicatorsUsed.length > 0 ? (
+                  <p className="investment-contribution-meta">
+                    Indicadores usados: {strategyReport.marketPhase.indicatorsUsed.join(" · ")}
+                  </p>
+                ) : null}
+                {strategyReport.marketPhase.indicatorsUnavailable.length > 0 ? (
+                  <p className="investment-contribution-meta" style={{ color: "var(--color-muted)" }}>
+                    No disponibles: {strategyReport.marketPhase.indicatorsUnavailable.join(" · ")}
+                  </p>
+                ) : null}
+              </article>
+            </div>
+
+            {/* G3 — Propuestas de venta parcial */}
+            {strategyReport.partialSaleProposals.length > 0 ? (
+              <>
+                <div className="investment-section-heading" style={{ marginTop: "1rem" }}>
+                  <h4>Ventas parciales sugeridas</h4>
+                  <span className="badge">{strategyReport.partialSaleProposals.filter(p => p.type !== "mantener").length} propuestas activas</span>
+                </div>
+                <div className="investment-contribution-list">
+                  {strategyReport.partialSaleProposals.map((p) => (
+                    <article className="investment-contribution" key={p.assetId}>
+                      <div className="investment-contribution-header">
+                        <div>
+                          <strong>{p.assetId}</strong>
+                          {p.percentageSuggested !== null ? <span>{p.percentageSuggested}% sugerido</span> : null}
+                        </div>
+                        <span className={`badge ${SALE_PROPOSAL_BADGE[p.type] ?? ""}`}>{SALE_PROPOSAL_LABEL[p.type] ?? p.type}</span>
+                      </div>
+                      <p className="investment-contribution-meta">{p.reason}</p>
+                    </article>
+                  ))}
+                </div>
+              </>
+            ) : null}
+
+            {/* G4 — Propuestas de recompra */}
+            {strategyReport.rebuyProposals.length > 0 ? (
+              <>
+                <div className="investment-section-heading" style={{ marginTop: "1rem" }}>
+                  <h4>Recompras sugeridas (escenarios hipotéticos)</h4>
+                  <span className="badge">{new Set(strategyReport.rebuyProposals.map(r => r.triggerDropPercentage)).size} niveles de corrección</span>
+                </div>
+                <div className="investment-contribution-list">
+                  {strategyReport.rebuyProposals.map((r, i) => (
+                    <article className="investment-contribution" key={`${r.assetId}-${r.triggerDropPercentage}-${i}`}>
+                      <div className="investment-contribution-header">
+                        <div>
+                          <strong>{r.assetId}</strong>
+                          <span>Corrección {r.triggerDropPercentage}%</span>
+                        </div>
+                        <span className="badge badge-success">{r.proposedAmountEur.toLocaleString("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 })}</span>
+                      </div>
+                      <p className="investment-contribution-meta">{r.reason}</p>
+                    </article>
+                  ))}
+                </div>
+              </>
+            ) : null}
+
+            {/* G5+G6 — Riesgos y adaptación */}
+            {(strategyReport.riskSummary.length > 0 || strategyReport.adaptationSuggestions.length > 0) ? (
+              <>
+                <div className="investment-section-heading" style={{ marginTop: "1rem" }}>
+                  <h4>Riesgos detectados y adaptación de ciclo</h4>
+                </div>
+                <div className="investment-contribution-list">
+                  {strategyReport.riskSummary.map((risk, i) => (
+                    <article className="investment-contribution" key={`risk-${i}`}>
+                      <div className="investment-contribution-header">
+                        <strong>Riesgo detectado</strong>
+                        <span className="badge badge-danger">Atención</span>
+                      </div>
+                      <p className="investment-contribution-meta">{risk}</p>
+                    </article>
+                  ))}
+                  {strategyReport.adaptationSuggestions.map((sug, i) => (
+                    <article className="investment-contribution" key={`adapt-${i}`}>
+                      <div className="investment-contribution-header">
+                        <strong>Sugerencia de adaptación</strong>
+                        <span className="badge badge-warning">Revisar</span>
+                      </div>
+                      <p className="investment-contribution-meta">{sug}</p>
+                    </article>
+                  ))}
+                </div>
+              </>
             ) : null}
           </section>
         ) : null}

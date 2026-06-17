@@ -127,6 +127,9 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
     strategicAlerts: {
       generate: (i: unknown) =>                 ipc("strategicAlerts:generate", i),
     },
+    strategicDecisions: {
+      getCycleReport: (i: unknown) =>           ipc("strategicDecisions:getCycleReport", i),
+    },
     treasury: {
       getSummary:                 () =>                         ipc("treasury:getSummary"),
       listMovements:              () =>                         ipc("treasury:listMovements"),

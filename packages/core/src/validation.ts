@@ -566,16 +566,52 @@ export type StrategicAlertType = z.infer<typeof StrategicAlertTypeEnum>;
 export type StrategicAlertSeverity = z.infer<typeof StrategicAlertSeverityEnum>;
 export type StrategicAlert = z.infer<typeof StrategicAlertSchema>;
 
-// --- PREPARACIÓN FASE G (modelos de datos, sin handlers ni UI todavía) ---
+// --- FASE G — MOTOR DE DECISIÓN ESTRATÉGICA ---
 
 export const MarketPhaseResultSchema = z.object({
-  phase: MarketPhaseEnum,
+  phase: MarketPhaseEnum.nullable(),
   confidence: z.enum(["alta", "media", "baja"]),
-  indicators: z.array(z.string()),
+  indicatorsUsed: z.array(z.string()),
+  indicatorsUnavailable: z.array(z.string()),
   reasoning: z.string(),
-  assessedAt: TimestampSchema,
 });
+export type MarketPhaseResult = z.infer<typeof MarketPhaseResultSchema>;
 
+// G3 — Propuestas de venta parcial
+export const PartialSaleProposalTypeEnum = z.enum(["mantener", "vigilar", "venta_parcial", "recogida_beneficios"]);
+export const PartialSaleProposalSchema = z.object({
+  assetId: z.string(),
+  type: PartialSaleProposalTypeEnum,
+  percentageSuggested: z.number().nullable(),
+  reason: z.string(),
+  riskLevel: z.enum(["bajo", "moderado", "alto", "muy_alto"]),
+  estimatedProceedsEur: z.number().nullable(),
+});
+export type PartialSaleProposal = z.infer<typeof PartialSaleProposalSchema>;
+
+// G4 — Propuestas de recompra
+export const RebuyProposalSchema = z.object({
+  assetId: z.string(),
+  triggerDropPercentage: z.number(),
+  proposedAmountEur: z.number(),
+  reason: z.string(),
+  availableLiquidityEur: z.number(),
+});
+export type RebuyProposal = z.infer<typeof RebuyProposalSchema>;
+
+// G8 — Informe estratégico completo del ciclo
+export const CycleStrategyReportSchema = z.object({
+  cycleId: z.string(),
+  marketPhase: MarketPhaseResultSchema,
+  partialSaleProposals: z.array(PartialSaleProposalSchema),
+  rebuyProposals: z.array(RebuyProposalSchema),
+  riskSummary: z.array(z.string()),
+  adaptationSuggestions: z.array(z.string()),
+  generatedAt: TimestampSchema,
+});
+export type CycleStrategyReport = z.infer<typeof CycleStrategyReportSchema>;
+
+// Modelo preparado para uso futuro
 export const StrategicRecommendationSchema = z.object({
   id: z.string(),
   cycleId: z.string().nullable(),
@@ -586,6 +622,4 @@ export const StrategicRecommendationSchema = z.object({
   generatedAt: TimestampSchema,
   validUntil: TimestampSchema.nullable(),
 });
-
-export type MarketPhaseResult = z.infer<typeof MarketPhaseResultSchema>;
 export type StrategicRecommendation = z.infer<typeof StrategicRecommendationSchema>;

@@ -132,6 +132,9 @@ const cryptoControl: FullCryptoControlAPI = {
   strategicAlerts: {
     generate: (input: { cycleId: string })                         => ipcRenderer.invoke("strategicAlerts:generate", input),
   },
+  strategicDecisions: {
+    getCycleReport: (input: { cycleId: string })                   => ipcRenderer.invoke("strategicDecisions:getCycleReport", input),
+  },
   treasury: {
     getSummary:           ()                                      => ipcRenderer.invoke("treasury:getSummary"),
     listMovements:        ()                                      => ipcRenderer.invoke("treasury:listMovements"),
