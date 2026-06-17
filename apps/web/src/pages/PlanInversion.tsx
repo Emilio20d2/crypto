@@ -2,6 +2,10 @@ import { useMemo, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   Asset,
+  AssetHealthResult,
+  CycleGoal,
+  CycleMetrics,
+  CycleRisk,
   InvestmentAsset,
   InvestmentCycle,
   InvestmentPlan,
@@ -93,6 +97,36 @@ const ASSET_STATUS_LABEL: Record<AssetPlanStatus, string> = {
   active: "Activa",
   paused: "Pausada",
   closed: "Cerrada",
+};
+
+const CYCLE_GOAL_LABEL: Record<CycleGoal, string> = {
+  acumulacion: "Acumulación",
+  crecimiento: "Crecimiento",
+  preservacion: "Preservación",
+  renta: "Renta",
+};
+
+const CYCLE_RISK_LABEL: Record<CycleRisk, string> = {
+  bajo: "Bajo",
+  moderado: "Moderado",
+  alto: "Alto",
+  muy_alto: "Muy alto",
+};
+
+const ASSET_HEALTH_LABEL: Record<AssetHealthResult["status"], string> = {
+  activo: "Activo",
+  observacion: "Observación",
+  riesgo_elevado: "Riesgo elevado",
+  salida_recomendada: "Salida recomendada",
+  retirado: "Retirado",
+};
+
+const ASSET_HEALTH_BADGE: Record<AssetHealthResult["status"], string> = {
+  activo: "badge-success",
+  observacion: "badge-warning",
+  riesgo_elevado: "badge-danger",
+  salida_recomendada: "badge-danger",
+  retirado: "",
 };
 
 function allocationSummary(item: Pick<InvestmentAsset, "allocationPercentage" | "fixedAmountEur" | "allocationType" | "allocationValue">) {
@@ -329,7 +363,16 @@ function CycleEditor({
   const [contributionCurrency, setContributionCurrency] = useState(cycle.contributionCurrency || "EUR");
   const [status, setStatus] = useState<CycleStatus>(cycle.status);
   const [priority, setPriority] = useState(String(cycle.priority));
+  const [objetivo, setObjetivo] = useState<CycleGoal | "">(cycle.objetivo ?? "");
+  const [riesgo, setRiesgo] = useState<CycleRisk | "">(cycle.riesgo ?? "");
+  const [allowExtraContributions, setAllowExtraContributions] = useState(cycle.allowExtraContributions ?? true);
   const [notes, setNotes] = useState(cycle.notes ?? "");
+
+  const metricsQuery = useQuery({
+    queryKey: ["investment-cycles", "metrics", cycle.id],
+    queryFn: () => unwrap(window.cryptoControl.investmentCycles.getMetrics({ cycleId: cycle.id })),
+  });
+  const metrics: CycleMetrics | null = metricsQuery.data ?? null;
 
   const [assetId, setAssetId] = useState(assets[0]?.id ?? "");
   const [allocationPercentage, setAllocationPercentage] = useState("");
@@ -369,6 +412,9 @@ function CycleEditor({
       contributionCurrency,
       status,
       priority: Math.trunc(parseNumber(priority)),
+      objetivo: objetivo || null,
+      riesgo: riesgo || null,
+      allowExtraContributions,
       notes: notes || null,
     });
   }
@@ -461,6 +507,9 @@ function CycleEditor({
         <CardActions>
           <span className={cycle.status === "active" ? "badge badge-success" : "badge"}>{CYCLE_STATUS_LABEL[cycle.status]}</span>
           <span className="badge">Prioridad {cycle.priority}</span>
+          {cycle.objetivo ? <span className="badge">{CYCLE_GOAL_LABEL[cycle.objetivo]}</span> : null}
+          {cycle.riesgo ? <span className="badge">{CYCLE_RISK_LABEL[cycle.riesgo]}</span> : null}
+          {cycle.allowExtraContributions === false ? <span className="badge">Sin extra</span> : null}
           <Button type="button" variant="ghost" size="sm" onClick={() => void onDuplicateCycle(cycle, cycleAssets)}><Copy size={15} /> Duplicar</Button>
         </CardActions>
       </CardHeader>
@@ -477,6 +526,70 @@ function CycleEditor({
             {distribution.warnings.map((warning) => <span key={warning}>{warning}</span>)}
           </div>
         ) : null}
+
+        {metrics ? (
+          <section className="investment-metrics-grid" aria-label="Métricas del ciclo">
+            <article className="investment-summary-tile">
+              <span>Meses transcurridos</span>
+              <strong>{metrics.monthsElapsed}</strong>
+            </article>
+            {metrics.monthsRemaining !== null ? (
+              <article className="investment-summary-tile">
+                <span>Meses restantes</span>
+                <strong>{metrics.monthsRemaining}</strong>
+              </article>
+            ) : null}
+            {metrics.percentComplete !== null ? (
+              <article className="investment-summary-tile">
+                <span>Completado</span>
+                <strong>{metrics.percentComplete.toLocaleString("es-ES", { maximumFractionDigits: 1 })}%</strong>
+              </article>
+            ) : null}
+            <article className="investment-summary-tile">
+              <span>Aportado real</span>
+              <strong>{formatMoney(metrics.actualContribution)}</strong>
+            </article>
+            <article className="investment-summary-tile">
+              <span>Esperado a fecha</span>
+              <strong>{formatMoney(metrics.expectedContributionToDate)}</strong>
+            </article>
+            <article className="investment-summary-tile">
+              <span>Diferencia</span>
+              <strong style={{ color: metrics.contributionDifference >= 0 ? "var(--color-success)" : "var(--color-danger)" }}>
+                {metrics.contributionDifference >= 0 ? "+" : ""}{formatMoney(metrics.contributionDifference)}
+              </strong>
+            </article>
+            {metrics.extraContribution > 0 ? (
+              <article className="investment-summary-tile">
+                <span>Aportaciones extra</span>
+                <strong>{formatMoney(metrics.extraContribution)}</strong>
+              </article>
+            ) : null}
+            <article className="investment-summary-tile">
+              <span>Valor actual</span>
+              <strong>{metrics.hasPendingValuation ? "Pendiente" : formatMoney(metrics.currentValueEur)}</strong>
+            </article>
+            <article className="investment-summary-tile">
+              <span>Coste en cartera</span>
+              <strong>{formatMoney(metrics.heldCostBasisEur)}</strong>
+            </article>
+            <article className="investment-summary-tile">
+              <span>Beneficio</span>
+              <strong style={{ color: metrics.profitEur >= 0 ? "var(--color-success)" : "var(--color-danger)" }}>
+                {metrics.profitEur >= 0 ? "+" : ""}{formatMoney(metrics.profitEur)}
+              </strong>
+            </article>
+            {metrics.roiPercentage !== null ? (
+              <article className="investment-summary-tile">
+                <span>ROI</span>
+                <strong style={{ color: metrics.roiPercentage >= 0 ? "var(--color-success)" : "var(--color-danger)" }}>
+                  {metrics.roiPercentage >= 0 ? "+" : ""}{metrics.roiPercentage.toLocaleString("es-ES", { maximumFractionDigits: 2 })}%
+                </strong>
+              </article>
+            ) : null}
+          </section>
+        ) : null}
+
         <form className="investment-form-grid" onSubmit={(event) => void submitCycle(event)}>
           <label className="form-group">
             <span>Nombre ciclo</span>
@@ -511,6 +624,26 @@ function CycleEditor({
             <span>Prioridad</span>
             <Input inputMode="numeric" value={priority} onChange={(event) => setPriority(event.target.value)} />
           </label>
+          <label className="form-group">
+            <span>Objetivo</span>
+            <select className="ui-select" value={objetivo} onChange={(event) => setObjetivo(event.target.value as CycleGoal | "")}>
+              <option value="">Sin objetivo</option>
+              <option value="acumulacion">Acumulación</option>
+              <option value="crecimiento">Crecimiento</option>
+              <option value="preservacion">Preservación</option>
+              <option value="renta">Renta</option>
+            </select>
+          </label>
+          <label className="form-group">
+            <span>Perfil de riesgo</span>
+            <select className="ui-select" value={riesgo} onChange={(event) => setRiesgo(event.target.value as CycleRisk | "")}>
+              <option value="">Sin definir</option>
+              <option value="bajo">Bajo</option>
+              <option value="moderado">Moderado</option>
+              <option value="alto">Alto</option>
+              <option value="muy_alto">Muy alto</option>
+            </select>
+          </label>
           <label className="form-group investment-wide">
             <span>Notas</span>
             <textarea className="ui-textarea investment-textarea" value={notes} onChange={(event) => setNotes(event.target.value)} />
@@ -518,6 +651,14 @@ function CycleEditor({
           <div className="investment-form-actions">
             <Button type="submit" variant="secondary" size="sm"><Save size={15} /> Guardar ciclo</Button>
             <Button type="button" variant="danger" size="sm" onClick={() => void onDeleteCycle(cycle.id)}><Trash2 size={15} /> Eliminar ciclo</Button>
+            <label className="investment-checkbox-label">
+              <input
+                type="checkbox"
+                checked={allowExtraContributions}
+                onChange={(event) => setAllowExtraContributions(event.target.checked)}
+              />
+              <span>Permitir aportaciones extra</span>
+            </label>
           </div>
         </form>
 
@@ -687,6 +828,13 @@ function InvestmentAssetEditor({
   onDelete: CycleEditorProps["onDeleteAsset"];
 }) {
   const asset = assets.find((entry) => entry.id === item.assetId);
+  const healthQuery = useQuery({
+    queryKey: ["investment-assets", "health", item.assetId],
+    queryFn: () => unwrap(window.cryptoControl.investmentAssets.getHealth({ assetId: item.assetId })),
+    staleTime: 5 * 60 * 1000,
+  });
+  const health: AssetHealthResult | null = healthQuery.data ?? null;
+
   const [assetId, setAssetId] = useState(item.assetId);
   const [allocationPercentage, setAllocationPercentage] = useState(numberInputValue(item.allocationPercentage ?? (item.allocationType === "percentage" ? item.allocationValue : null)));
   const [fixedAmountEur, setFixedAmountEur] = useState(numberInputValue(item.fixedAmountEur ?? (item.allocationType === "amount" ? item.allocationValue : null)));
@@ -718,7 +866,14 @@ function InvestmentAssetEditor({
           <strong>{assetLabel(asset, item.assetId)}</strong>
           <span>{allocationSummary({ allocationPercentage: percentage, fixedAmountEur: fixedAmount, allocationType, allocationValue })} · prioridad {priority}</span>
         </div>
-        <span className={status === "active" ? "badge badge-success" : "badge"}>{ASSET_STATUS_LABEL[status]}</span>
+        <div className="investment-asset-badges">
+          <span className={status === "active" ? "badge badge-success" : "badge"}>{ASSET_STATUS_LABEL[status]}</span>
+          {health ? (
+            <span className={`badge ${ASSET_HEALTH_BADGE[health.status]}`} title={health.reasoning}>
+              {ASSET_HEALTH_LABEL[health.status]}
+            </span>
+          ) : null}
+        </div>
       </div>
       <dl className="investment-asset-summary">
         <div><dt>Inicio</dt><dd>{formatDate(item.startDate)}</dd></div>
@@ -849,6 +1004,9 @@ export function PlanInversion() {
   const [cycleCurrency, setCycleCurrency] = useState("EUR");
   const [cycleStatus, setCycleStatus] = useState<CycleStatus>("planned");
   const [cyclePriority, setCyclePriority] = useState("0");
+  const [cycleObjetivo, setCycleObjetivo] = useState<CycleGoal | "">("");
+  const [cycleRiesgo, setCycleRiesgo] = useState<CycleRisk | "">("");
+  const [cycleAllowExtra, setCycleAllowExtra] = useState(true);
   const [cycleNotes, setCycleNotes] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
   const [renderTimestamp] = useState(() => Date.now());
@@ -944,6 +1102,9 @@ export function PlanInversion() {
       contributionCurrency: string;
       status: CycleStatus;
       priority: number;
+      objetivo?: CycleGoal | null;
+      riesgo?: CycleRisk | null;
+      allowExtraContributions?: boolean;
       notes: string | null;
     }) => unwrap(window.cryptoControl.investmentCycles.create(data)),
     onSuccess: async () => {
@@ -1114,11 +1275,17 @@ export function PlanInversion() {
       contributionCurrency: cycleCurrency,
       status: cycleStatus,
       priority: Math.trunc(parseNumber(cyclePriority)),
+      objetivo: cycleObjetivo || null,
+      riesgo: cycleRiesgo || null,
+      allowExtraContributions: cycleAllowExtra,
       notes: cycleNotes || null,
     });
     setCycleName("Nuevo ciclo");
     setCycleEnd("");
     setCycleStatus("planned");
+    setCycleObjetivo("");
+    setCycleRiesgo("");
+    setCycleAllowExtra(true);
     setCycleNotes("");
   }
 
@@ -1253,12 +1420,40 @@ export function PlanInversion() {
                     <span>Prioridad</span>
                     <Input inputMode="numeric" value={cyclePriority} onChange={(event) => setCyclePriority(event.target.value)} />
                   </label>
+                  <label className="form-group">
+                    <span>Objetivo</span>
+                    <select className="ui-select" value={cycleObjetivo} onChange={(event) => setCycleObjetivo(event.target.value as CycleGoal | "")}>
+                      <option value="">Sin objetivo</option>
+                      <option value="acumulacion">Acumulación</option>
+                      <option value="crecimiento">Crecimiento</option>
+                      <option value="preservacion">Preservación</option>
+                      <option value="renta">Renta</option>
+                    </select>
+                  </label>
+                  <label className="form-group">
+                    <span>Perfil de riesgo</span>
+                    <select className="ui-select" value={cycleRiesgo} onChange={(event) => setCycleRiesgo(event.target.value as CycleRisk | "")}>
+                      <option value="">Sin definir</option>
+                      <option value="bajo">Bajo</option>
+                      <option value="moderado">Moderado</option>
+                      <option value="alto">Alto</option>
+                      <option value="muy_alto">Muy alto</option>
+                    </select>
+                  </label>
                   <label className="form-group investment-wide">
                     <span>Notas</span>
                     <Input value={cycleNotes} onChange={(event) => setCycleNotes(event.target.value)} />
                   </label>
                   <div className="investment-form-actions">
                     <Button type="submit" loading={createCycle.isPending}><Plus size={15} /> Crear ciclo</Button>
+                    <label className="investment-checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={cycleAllowExtra}
+                        onChange={(event) => setCycleAllowExtra(event.target.checked)}
+                      />
+                      <span>Permitir aportaciones extra</span>
+                    </label>
                   </div>
                 </form>
               </CardContent>
