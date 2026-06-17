@@ -682,11 +682,17 @@ function setupIpcHandlers() {
         .orderBy(asc(schema.priceHistory.timestamp))
         .all();
 
-      // Daily data produces exactly 0–1 price points inside a 1h/24h window,
-      // making every grid point resolve to the same stale daily price → flat
-      // chart. Skip the daily fallback for short periods; honest empty/snapshot
-      // is better than a misleading flat line.
-      if (phRows.length > 10 && marketPeriod !== "1h" && marketPeriod !== "24h") {
+      // Daily data (priceHistory, coinbaseCandleCache, 1y API) produces at most
+      // 0–1 price points inside a 1h/24h window: every minute-level grid point
+      // resolves to the same stale daily close → flat line that misrepresents the
+      // period. Return early so Portfolio.tsx handles the empty series honestly
+      // (e.g. snapshot fallback) rather than showing misleading flat data.
+      //
+      // NO modificar esta lógica sin actualizar los tests de regresión de gráficas
+      // de cartera en packages/portfolio/src/value-grid.test.ts.
+      if (marketPeriod === "1h" || marketPeriod === "24h") return;
+
+      if (phRows.length > 10) {
         pricesByAsset[assetId] = phRows.map(r => ({ time: r.timestamp, price: r.price }));
         priceSourceByAsset[assetId] = "priceHistory";
         totalPricePoints += phRows.length;
@@ -694,6 +700,8 @@ function setupIpcHandlers() {
       }
 
       // 2. coinbaseCandleCache (start is Unix seconds → convert to ms)
+      // Only used for broad-period grids (1w/1m/1y/all) — daily candles are
+      // appropriate there but useless for 1h/24h (guarded above).
       const meta = getAssetMetadata(assetId);
       if (meta) {
         const candleRows = db.select({ start: schema.coinbaseCandleCache.start, close: schema.coinbaseCandleCache.close })
@@ -710,10 +718,7 @@ function setupIpcHandlers() {
         }
       }
 
-      // 3. Live API fallback (fetches + caches to priceHistory)
-      // Skip "1y" daily data for short-period grids — same flat-chart problem
-      // as the priceHistory fallback above.
-      if (marketPeriod === "1h" || marketPeriod === "24h") return;
+      // 3. Live API fallback (fetches + caches to priceHistory, broad 1y data)
       try {
         const result = await marketService.getHistoricalPrices(assetId, "1y");
         if (result.points.length > 0) {
@@ -1985,6 +1990,18 @@ function setupIpcHandlers() {
   ipcMain.handle("coinbase:get-portfolio-snapshots", withResult(async (_, portfolioUuid: string) => {
     return await getPortfolioServiceInst().getPortfolioSnapshots(portfolioUuid);
   }));
+
+  // ── contributionSchedule (E2: stubs — full implementation pending) ──────────
+  ipcMain.handle("contributionSchedule:list",    withResult(async () => [] as never[]));
+  ipcMain.handle("contributionSchedule:create",  withResult(async () => ({ id: "" })));
+  ipcMain.handle("contributionSchedule:update",  withResult(async () => null as never));
+  ipcMain.handle("contributionSchedule:execute", withResult(async () => null as never));
+  ipcMain.handle("contributionSchedule:delete",  withResult(async () => null));
+
+  // ── assetSubstitutions (E2: stubs — full implementation pending) ─────────
+  ipcMain.handle("assetSubstitutions:list",   withResult(async () => [] as never[]));
+  ipcMain.handle("assetSubstitutions:create", withResult(async () => ({ id: "" })));
+  ipcMain.handle("assetSubstitutions:delete", withResult(async () => null));
 
   // Ping channel: called by the preload every 200 ms to drive uv_run so the
   // Node.js http.Server below can accept TCP connections (Electron event-loop quirk).
