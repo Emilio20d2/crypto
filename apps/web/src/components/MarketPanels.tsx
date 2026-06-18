@@ -21,6 +21,21 @@ function formatCompactMoney(value: number | null | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? compactEurFormatter.format(value) : "Pendiente";
 }
 
+function globalMetricsSourceLabel(source?: string | null) {
+  if (source === "coingecko") return "CoinGecko";
+  if (source === "coinlore") return "CoinLore";
+  if (source === "coinpaprika") return "CoinPaprika";
+  return source || "No disponible";
+}
+
+function globalMetricsStateLabel(state?: string | null, isCached?: boolean) {
+  if (state === "live") return "Live";
+  if (state === "cached" || isCached) return "Caché";
+  if (state === "fallback") return "Fallback";
+  if (state === "unavailable") return "Sin dato";
+  return "Pendiente";
+}
+
 // "No aplica" only for assets where dominance is structurally meaningless
 // (anything but BTC/ETH). When it does apply but the value is missing
 // (global metrics source down), that must read as "No disponible".
@@ -344,6 +359,14 @@ export function GlobalMetricsCard({
             </dd>
           </div>
         </dl>
+        <div className="global-metrics-meta">
+          <span>Fuente: {globalMetricsSourceLabel(metrics?.source)}</span>
+          <span>Estado: {globalMetricsStateLabel(metrics?.state, metrics?.isCached)}</span>
+          <span>Actualizado: {formatDateTime(metrics?.fetchedAt)}</span>
+        </div>
+        {metrics?.error && (
+          <p className="global-metrics-error">{metrics.error}</p>
+        )}
       </CardContent>
     </Card>
   );

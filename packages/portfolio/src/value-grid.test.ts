@@ -188,12 +188,9 @@ describe("buildPortfolioValueGrid — regresión gráficas de Cartera", () => {
       period: "1h",
       nowSeconds: NOW,
       firstTxSeconds: FAR_PAST_TX,
-      valueAtMs: () => ({ value: 0, hasHolding: false }),
+      valueAtMs: () => ({ value: 0, hasHolding: true, complete: false }),
     });
-    // Con hasHolding=false, buildPortfolioValueGrid no emite el punto
-    // (excepto el último que siempre se emite con value=0)
-    const nonFinal = points.slice(0, -1);
-    expect(nonFinal.every((p) => p.value === 0)).toBe(true);
+    expect(points).toHaveLength(0);
   });
 
   test("granularidad 1h coincide con Mercado: paso de 60 s, ~60 puntos", () => {
@@ -223,7 +220,7 @@ describe("buildPortfolioValueGrid — regresión gráficas de Cartera", () => {
 // ─── FIN REGRESSION GUARD ────────────────────────────────────────────────────
 
 describe("buildPortfolioValueGrid — never fabricates or interpolates data", () => {
-  test("omits points after the first transaction when no asset resolves a price (no zero-fill, no interpolation)", () => {
+  test("omits points after the first transaction when a held asset lacks price (no partial total, no interpolation)", () => {
     let call = 0;
     const points = buildPortfolioValueGrid({
       period: "1h",
@@ -231,8 +228,8 @@ describe("buildPortfolioValueGrid — never fabricates or interpolates data", ()
       firstTxSeconds: FAR_PAST_TX,
       valueAtMs: () => {
         call += 1;
-        // Every third evaluation has no resolvable price at all.
-        if (call % 3 === 0) return { value: 0, hasHolding: false };
+        // Every third evaluation has a held asset without a resolvable price.
+        if (call % 3 === 0) return { value: 0, hasHolding: true, complete: false };
         return { value: 42, hasHolding: true };
       },
     });

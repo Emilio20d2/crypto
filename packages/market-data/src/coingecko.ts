@@ -5,6 +5,23 @@ import { parseRetryAfter } from "./utils";
 
 const COINGECKO_API_URL = "https://api.coingecko.com/api/v3";
 
+function periodWindowMs(period: string): number | null {
+  if (period === "1h") return 60 * 60 * 1000;
+  if (period === "24h") return 24 * 60 * 60 * 1000;
+  if (period === "7d") return 7 * 24 * 60 * 60 * 1000;
+  if (period === "30d") return 30 * 24 * 60 * 60 * 1000;
+  if (period === "1y") return 365 * 24 * 60 * 60 * 1000;
+  return null;
+}
+
+function scopeToPeriod(points: HistoricalPriceData[], period: string): HistoricalPriceData[] {
+  const windowMs = periodWindowMs(period);
+  if (windowMs === null || points.length === 0) return points;
+  const latest = points[points.length - 1].timestamp;
+  const cutoff = latest - windowMs;
+  return points.filter((point) => point.timestamp >= cutoff);
+}
+
 export class CoinGeckoProvider implements MarketDataProvider {
   readonly name = "coingecko";
 
@@ -68,12 +85,13 @@ export class CoinGeckoProvider implements MarketDataProvider {
     );
 
     if (data && Array.isArray(data.prices)) {
-      return data.prices.map((p: [number, number]) => ({
+      const points = data.prices.map((p: [number, number]) => ({
         timestamp: p[0],
         price: p[1],
         source: this.name,
         confidence: 0.9
-      }));
+      })).sort((a: HistoricalPriceData, b: HistoricalPriceData) => a.timestamp - b.timestamp);
+      return scopeToPeriod(points, period);
     }
     
     throw new MarketInvalidResponseError("Invalid historical data from CoinGecko");

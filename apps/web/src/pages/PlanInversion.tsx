@@ -747,7 +747,7 @@ function CycleEditor({
   const contributions: ContributionSchedule[] = contributionScheduleQuery.data ?? [];
 
   const [csType, setCsType] = useState<"periodica" | "extraordinaria">("periodica");
-  const [csDate, setCsDate] = useState(toDateInput(Date.now()));
+  const [csDate, setCsDate] = useState(() => toDateInput(Date.now()));
   const [csAmount, setCsAmount] = useState("");
   const [csCurrency, setCsCurrency] = useState("EUR");
   const [csDestination, setCsDestination] = useState("");
@@ -864,7 +864,7 @@ function CycleEditor({
 
   const [subFromAssetId, setSubFromAssetId] = useState("");
   const [subToAssetId, setSubToAssetId] = useState("");
-  const [subEffectiveDate, setSubEffectiveDate] = useState(toDateInput(Date.now()));
+  const [subEffectiveDate, setSubEffectiveDate] = useState(() => toDateInput(Date.now()));
   const [subReason, setSubReason] = useState("");
   const [subNotes, setSubNotes] = useState("");
 

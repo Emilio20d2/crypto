@@ -116,6 +116,7 @@ function computedFiatValue(amount: number | null, price: number | null): number 
 
 const BALANCE_EPSILON = 1e-12;
 const MARKET_ENRICHMENT_TIMEOUT_MS = 3000;
+const SPARKLINE_24H_GRANULARITY = "FIFTEEN_MINUTE";
 
 function withTimeout<T>(promise: Promise<T>, ms: number, onTimeout: () => T): Promise<T> {
   return new Promise((resolve) => {
@@ -178,7 +179,7 @@ export class CoinbasePortfolioService {
       const isCash = assetId === currency || asset?.type === "fiat";
       const productId = `${assetId}-${currency}`;
       let market = isCash ? null : this.getCachedProduct(productId);
-      let sparkline = isCash ? [] : this.getCachedCandles(productId, "ONE_HOUR");
+      let sparkline = isCash ? [] : this.getCachedSparkline24h(assetId, productId, currency);
 
       if (!isCash && usePublicFallback && (!market || market.price === null || sparkline.length < 2)) {
         try {
@@ -443,7 +444,7 @@ export class CoinbasePortfolioService {
           };
 
           const cachedMarket = this.getCachedProduct(productId);
-          const cachedSparkline = this.getCachedCandles(productId, "ONE_HOUR");
+          const cachedSparkline = this.getCachedSparkline24h(pos.asset, productId, currency);
           const enriched = await withTimeout(
             fetchLiveMarket(),
             MARKET_ENRICHMENT_TIMEOUT_MS,
@@ -581,7 +582,7 @@ export class CoinbasePortfolioService {
 
   async getCandles(productId: string, period: "1h" | "24h" | "7d" | "30d" | "1y" | "all") {
     const client = await this.getClient();
-    if (!client) return this.getCachedCandles(productId, "ONE_HOUR");
+    if (!client) return this.getCachedCandles(productId, this.granularityForPeriod(period));
 
     const now = Math.floor(Date.now() / 1000);
     let start: number;
@@ -589,12 +590,12 @@ export class CoinbasePortfolioService {
 
     switch (period) {
       case "1h":  start = now - 3600;     granularity = "ONE_MINUTE";     break;
-      case "24h": start = now - 86400;    granularity = "FIFTEEN_MINUTE"; break;
+      case "24h": start = now - 86400;    granularity = SPARKLINE_24H_GRANULARITY; break;
       case "7d":  start = now - 604800;   granularity = "ONE_HOUR";       break;
       case "30d": start = now - 2592000;  granularity = "SIX_HOUR";       break;
       case "1y":  start = now - 31536000; granularity = "ONE_DAY";        break;
       case "all": start = 0;              granularity = "ONE_DAY";        break;
-      default:    start = now - 86400;    granularity = "FIFTEEN_MINUTE";
+      default:    start = now - 86400;    granularity = SPARKLINE_24H_GRANULARITY;
     }
 
     try {
@@ -713,6 +714,7 @@ export class CoinbasePortfolioService {
   // --- CACHE FALLBACKS ---
 
   async getCachedPortfolioBreakdown(portfolioUuid: string, currency: string, errorReason: string): Promise<CoinbasePortfolioView> {
+    const quoteCurrency = currency || "EUR";
     const p = this.db.select().from(schema.coinbasePortfolios).where(eq(schema.coinbasePortfolios.uuid, portfolioUuid)).get();
     if (!p) {
       return {
@@ -745,7 +747,7 @@ export class CoinbasePortfolioService {
       if (!pos.isCash && pos.asset !== currency) {
         const productId = `${pos.asset}-${currency}`;
         market = this.getCachedProduct(productId);
-        sparkline = this.getCachedCandles(productId, "ONE_HOUR");
+        sparkline = this.getCachedSparkline24h(pos.asset, productId, currency);
       }
 
       const totalCrypto = pos.totalBalanceCrypto;
@@ -788,20 +790,20 @@ export class CoinbasePortfolioService {
         deleted: p.deleted === 1
       },
       balances: {
-        totalBalance: latestSnap && latestSnap.totalBalance !== null ? { value: latestSnap.totalBalance, currency } : null,
-        totalCryptoBalance: latestSnap && latestSnap.totalCryptoBalance !== null ? { value: latestSnap.totalCryptoBalance, currency } : null,
-        totalCashEquivalentBalance: latestSnap && latestSnap.totalCashEquivalentBalance !== null ? { value: latestSnap.totalCashEquivalentBalance, currency } : null,
+        totalBalance: latestSnap && latestSnap.totalBalance !== null ? { value: latestSnap.totalBalance, currency: quoteCurrency } : null,
+        totalCryptoBalance: latestSnap && latestSnap.totalCryptoBalance !== null ? { value: latestSnap.totalCryptoBalance, currency: quoteCurrency } : null,
+        totalCashEquivalentBalance: latestSnap && latestSnap.totalCashEquivalentBalance !== null ? { value: latestSnap.totalCashEquivalentBalance, currency: quoteCurrency } : null,
         totalFuturesBalance: null,
         futuresUnrealizedPnl: null,
         perpUnrealizedPnl: null
       },
       positions,
       capturedAt: latestSnap ? latestSnap.capturedAt : p.capturedAt,
-      currency: "EUR",
+      currency: quoteCurrency,
       source: "coinbase",
       state: "cached",
       reason: errorReason
-    }), currency, false);
+    }), quoteCurrency, false);
   }
 
   private getCachedProduct(productId: string) {
@@ -844,5 +846,48 @@ export class CoinbasePortfolioService {
       close: c.close,
       volume: c.volume
     }));
+  }
+
+  private getCachedSparkline24h(assetId: string, productId: string, currency: string) {
+    const coinbaseCandles = this.getCachedCandles(productId, SPARKLINE_24H_GRANULARITY);
+    if (coinbaseCandles.length >= 2) return coinbaseCandles;
+    return this.getCachedPublicHistoryCandles(assetId, currency, "24h");
+  }
+
+  private getCachedPublicHistoryCandles(assetId: string, currency: string, interval: string) {
+    const rows = this.db.select()
+      .from(schema.priceHistory)
+      .where(
+        and(
+          eq(schema.priceHistory.assetId, assetId),
+          eq(schema.priceHistory.quoteCurrency, currency),
+          eq(schema.priceHistory.interval, interval)
+        )
+      )
+      .orderBy(schema.priceHistory.timestamp)
+      .all();
+
+    return rows.map((row: any) => CoinbaseCandlePointSchema.parse({
+      time: Math.floor(row.timestamp / 1000),
+      open: row.price,
+      high: row.price,
+      low: row.price,
+      close: row.price,
+      volume: 0,
+    }));
+  }
+
+  private granularityForPeriod(period: "1h" | "24h" | "7d" | "30d" | "1y" | "all") {
+    switch (period) {
+      case "1h": return "ONE_MINUTE";
+      case "24h": return SPARKLINE_24H_GRANULARITY;
+      case "7d": return "ONE_HOUR";
+      case "30d": return "SIX_HOUR";
+      case "1y":
+      case "all":
+        return "ONE_DAY";
+      default:
+        return SPARKLINE_24H_GRANULARITY;
+    }
   }
 }

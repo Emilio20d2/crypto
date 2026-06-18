@@ -49,6 +49,7 @@ function sourceLabelFor(provider?: string | null, isCached?: boolean, cacheStatu
   if (!provider || provider === "coinbase" || provider === "local") return undefined;
   const prefix = isCached || cacheStatus === "stale" ? "Último dato válido" : "Datos";
   if (provider === "coingecko") return `${prefix} vía CoinGecko`;
+  if (provider === "cryptocompare") return `${prefix} vía CryptoCompare`;
   if (provider === "cache") return "Último dato válido";
   return isCached || cacheStatus === "stale" ? "Último dato válido de fuente alternativa" : "Fuente alternativa";
 }

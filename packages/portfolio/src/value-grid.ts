@@ -37,15 +37,17 @@ export interface BuildValueGridInput {
   // Evaluates qty × historical price summed across every held asset at a
   // given millisecond timestamp. Returns hasHolding=false when no asset had
   // a non-zero balance, distinguishing "didn't exist yet" from "exists but
-  // is worth nothing".
-  valueAtMs: (ts: number) => { value: number; hasHolding: boolean };
+  // is worth nothing". complete=false means at least one held asset lacked a
+  // resolvable price, so the total would be partial and must not be drawn.
+  valueAtMs: (ts: number) => { value: number; hasHolding: boolean; complete?: boolean };
 }
 
 // Builds a regular timestamp grid for `period` — same step Mercado uses —
 // evaluating portfolio value at each point. Points before the cartera's
 // first transaction are explicit zeros (never omitted, never interpolated).
-// Points after that are omitted only when no asset resolves to a price at
-// all (never zero-filled, never reused from another period/timeframe).
+// Points after that are omitted when the portfolio total would be partial
+// because a held asset has no resolvable price (never zero-filled, never
+// reused from another period/timeframe).
 export function buildPortfolioValueGrid(input: BuildValueGridInput): ValueGridPoint[] {
   const { period, nowSeconds, firstTxSeconds, valueAtMs } = input;
   const step = GRID_STEP_SECONDS[period];
@@ -58,12 +60,16 @@ export function buildPortfolioValueGrid(input: BuildValueGridInput): ValueGridPo
       points.push({ time: t, value: 0 });
       continue;
     }
-    const { value, hasHolding } = valueAtMs(t * 1000);
-    if (hasHolding && value > 0) points.push({ time: t, value });
+    const { value, hasHolding, complete = true } = valueAtMs(t * 1000);
+    if (complete && (!hasHolding || value >= 0)) {
+      points.push({ time: t, value: hasHolding ? value : 0 });
+    }
   }
 
-  const { value: nowValue, hasHolding: nowHasHolding } = valueAtMs(nowSeconds * 1000);
-  points.push({ time: nowSeconds, value: nowHasHolding ? nowValue : 0 });
+  const { value: nowValue, hasHolding: nowHasHolding, complete: nowComplete = true } = valueAtMs(nowSeconds * 1000);
+  if (nowComplete) {
+    points.push({ time: nowSeconds, value: nowHasHolding ? nowValue : 0 });
+  }
 
   return points;
 }

@@ -18,15 +18,6 @@ import type { ChartPoint } from "../components/MarketChart";
 import type { Period } from "../components/PeriodSelector";
 import { formatDateTime } from "../lib/format";
 
-const PERIOD_WINDOW_MS: Record<Period, number | null> = {
-  "1h": 60 * 60 * 1000,
-  "24h": 24 * 60 * 60 * 1000,
-  "1w": 7 * 24 * 60 * 60 * 1000,
-  "1m": 30 * 24 * 60 * 60 * 1000,
-  "1y": 365 * 24 * 60 * 60 * 1000,
-  "all": null,
-};
-
 // The backend (portfolio:get-historical-series, given a period) already
 // returns the exact grid for that period — same granularity Mercado's own
 // candles use, generated from "now" backwards, with explicit zeros before
@@ -36,25 +27,6 @@ function toChartPoints(points: { time: number; value: number }[]): ChartPoint[] 
   return points
     .filter((point) => Number.isFinite(point.value) && point.value >= 0)
     .map((point) => ({ time: point.time as import("lightweight-charts").Time, value: point.value }))
-    .sort((a, b) => (a.time as number) - (b.time as number));
-}
-
-// Fallback only: Coinbase's own sparse point-in-time snapshots, used when
-// the reconstruction above doesn't have enough price history yet.
-function snapshotChartData(snapshots: any[], period: Period): ChartPoint[] {
-  const windowMs = PERIOD_WINDOW_MS[period];
-  const now = Date.now();
-
-  return snapshots
-    .filter((snapshot) => {
-      if (!windowMs) return true;
-      return now - snapshot.capturedAt <= windowMs;
-    })
-    .map((snapshot) => ({
-      time: Math.floor(snapshot.capturedAt / 1000) as import("lightweight-charts").Time,
-      value: snapshot.totalBalance,
-    }))
-    .filter((point) => Number.isFinite(point.value) && point.value > 0)
     .sort((a, b) => (a.time as number) - (b.time as number));
 }
 
@@ -186,14 +158,6 @@ export function Portfolio() {
   const backgroundSyncRunning = useRef(false);
   const [manualPortfolioId, setManualPortfolioId] = useState<string | null>(null);
   const [period, setPeriod] = useState<Period>("24h");
-  // Date.now() can't be called during render (impure) — track "now" via an
-  // effect instead, just for anchoring the chart's last point to the live
-  // total below.
-  const [liveNowSeconds, setLiveNowSeconds] = useState<number>(() => Math.floor(Date.now() / 1000));
-  useEffect(() => {
-    const id = window.setInterval(() => setLiveNowSeconds(Math.floor(Date.now() / 1000)), 30_000);
-    return () => window.clearInterval(id);
-  }, []);
 
   const { data: statusRes, isLoading: loadingStatus } = useQuery({
     queryKey: ["coinbase", "status"],
@@ -216,13 +180,6 @@ export function Portfolio() {
   const { data: breakdownRes, isLoading: loadingBreakdown } = useQuery({
     queryKey: ["coinbase", "breakdown", selectedPortfolioId],
     queryFn: () => window.cryptoControl.coinbase.getPortfolioBreakdown(selectedPortfolioId!, "EUR"),
-    enabled: !!selectedPortfolioId,
-    refetchInterval: 60_000,
-  });
-
-  const { data: snapshotsRes } = useQuery({
-    queryKey: ["coinbase", "snapshots", selectedPortfolioId],
-    queryFn: () => window.cryptoControl.coinbase.getPortfolioSnapshots(selectedPortfolioId!),
     enabled: !!selectedPortfolioId,
     refetchInterval: 60_000,
   });
@@ -277,7 +234,6 @@ export function Portfolio() {
     };
   }, [connected, queryClient]);
 
-  const snapshots = useMemo(() => (snapshotsRes?.ok ? snapshotsRes.data : []), [snapshotsRes]);
   // The backend already generates the exact grid for `period` (same
   // granularity Mercado uses, zero-padded before the first transaction) —
   // no client-side windowing/downsampling needed, just shape it for the chart.
@@ -291,8 +247,8 @@ export function Portfolio() {
   );
   const chartData = useMemo((): ChartPoint[] => {
     const reconstructed = toChartPoints(reconstructedSeries);
-    return reconstructed.length >= 2 ? reconstructed : snapshotChartData(snapshots, period);
-  }, [reconstructedSeries, snapshots, period]);
+    return reconstructed.length >= 2 ? reconstructed : [];
+  }, [reconstructedSeries]);
 
   const localPositionMap = useMemo((): Record<string, number> => {
     const rawPositions = localPositionsRes?.ok ? (localPositionsRes.data as any)?.positions : null;
@@ -397,24 +353,9 @@ export function Portfolio() {
 
   const performance = pnlValues.length > 0 ? pnlValues.reduce((sum, value) => sum + value, 0) : null;
   const totalBalance = fallbackTotalBalance(breakdown.balances) ?? positionsTotalBalance(positions);
-  // The reconstruction's last point can lag behind "now" by however stale
-  // price_history's broad-interval rows are (hours to a couple of days) —
-  // anchor it to the live total already shown in the metrics above so the
-  // chart's final value never disagrees with the real current value.
-  const chartDataAnchoredToLiveTotal: ChartPoint[] = (() => {
-    if (typeof totalBalance !== "number" || !Number.isFinite(totalBalance) || totalBalance <= 0) {
-      return chartData;
-    }
-    const nowSeconds = liveNowSeconds as import("lightweight-charts").Time;
-    const livePoint: ChartPoint = { time: nowSeconds, value: totalBalance };
-    if (chartData.length === 0) return [livePoint];
-    const last = chartData[chartData.length - 1];
-    return last.time === nowSeconds ? [...chartData.slice(0, -1), livePoint] : [...chartData, livePoint];
-  })();
   const variationFromPositions = portfolio24hVariation(positions);
   const reconstructed24h = toChartPoints(series24h);
-  const chart24h = reconstructed24h.length >= 2 ? reconstructed24h : snapshotChartData(snapshots, "24h");
-  const variationFromChart = chartVariation(chart24h);
+  const variationFromChart = chartVariation(reconstructed24h);
   const variation24h = variationFromPositions.value !== null ? variationFromPositions : variationFromChart;
   return (
     <section className="page-stack portfolio-page">
@@ -451,7 +392,7 @@ export function Portfolio() {
         </Card>
       )}
 
-      <PortfolioChart data={chartDataAnchoredToLiveTotal} period={period} onPeriodChange={setPeriod} />
+      <PortfolioChart data={chartData} period={period} onPeriodChange={setPeriod} />
 
       <PositionList positions={positions} assets={assets} onSelect={(assetId) => navigate(`/activo/${assetId}`)} localCostByAsset={localPositionMap} />
     </section>

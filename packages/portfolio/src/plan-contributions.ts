@@ -28,6 +28,24 @@ export interface ContributionCycleInput {
   monthlyAmountEur: number;
 }
 
+export interface OperationContributionLeg {
+  assetId: string;
+  amount: number;
+  legType: "source" | "destination" | "fee" | string;
+  valuationEur?: number | null;
+  acquisitionValueEur?: number | null;
+}
+
+export interface OperationContributionTransaction {
+  id: string;
+  type: string;
+  date: number;
+  externalId?: string | null;
+  cycleId?: string | null;
+  notes?: string | null;
+  legs: OperationContributionLeg[];
+}
+
 export interface ContributionMonthlySummary {
   yearMonth: string;        // "YYYY-MM"
   year: number;
@@ -61,6 +79,61 @@ export interface CycleContributionAggregates {
 function toYearMonth(ts: number): string {
   const d = new Date(ts);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function effectiveCycleMatch(cycle: ContributionCycleInput, tx: OperationContributionTransaction): boolean {
+  if (tx.cycleId && tx.cycleId !== cycle.id) return false;
+  if (tx.cycleId === cycle.id) return true;
+  if (tx.date < cycle.startDate) return false;
+  return cycle.endDate === null || tx.date <= cycle.endDate;
+}
+
+function finitePositive(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function legEuroValue(leg: OperationContributionLeg): number | null {
+  return finitePositive(leg.valuationEur) ?? finitePositive(leg.acquisitionValueEur);
+}
+
+function fiatLegAmountEur(
+  leg: OperationContributionLeg,
+  isFiatAsset: (assetId: string) => boolean,
+): number {
+  if (!isFiatAsset(leg.assetId)) return 0;
+  const absoluteAmount = Math.abs(leg.amount);
+  return absoluteAmount > 0 ? absoluteAmount : legEuroValue(leg) ?? 0;
+}
+
+function buyAmountFromFiatOrValuation(
+  tx: OperationContributionTransaction,
+  isFiatAsset: (assetId: string) => boolean,
+): number {
+  const sourceLegs = tx.legs.filter((leg) => leg.legType === "source" && leg.amount < 0);
+  const fiatSource = sourceLegs.reduce((sum, leg) => sum + fiatLegAmountEur(leg, isFiatAsset), 0);
+  if (fiatSource > 0) return fiatSource;
+  if (sourceLegs.length > 0) return 0;
+
+  return tx.legs
+    .filter((leg) => leg.legType === "destination" && leg.amount > 0)
+    .reduce((sum, leg) => sum + (legEuroValue(leg) ?? 0), 0);
+}
+
+function operationEntry(
+  tx: OperationContributionTransaction,
+  amountEur: number,
+  source: "deposit" | "buy",
+): ContributionEntry {
+  return {
+    id: `coinbase-operation:${tx.externalId ?? tx.id}:${source}`,
+    cycleId: tx.cycleId ?? "",
+    type: "periodica",
+    plannedDate: tx.date,
+    amountEur,
+    status: "ejecutada",
+    executedAt: tx.date,
+    notes: `Sincronizada desde Operaciones/Coinbase (${source === "deposit" ? "depósito fiat" : "compra EUR"})`,
+  };
 }
 
 function parseYearMonth(ym: string): { year: number; month: number } {
@@ -166,6 +239,50 @@ export function buildContributionHistory(
 ): ContributionMonthlySummary[] {
   const months = buildMonthRange(cycle, now);
   return months.map(ym => classifyMonth(ym, entries, cycle.monthlyAmountEur, cycle.id, now));
+}
+
+export function deriveContributionEntriesFromOperations(
+  cycle: ContributionCycleInput,
+  transactions: OperationContributionTransaction[],
+  isFiatAsset: (assetId: string) => boolean = (assetId) => assetId === "EUR",
+): ContributionEntry[] {
+  const grouped = new Map<string, { deposits: ContributionEntry[]; buys: ContributionEntry[] }>();
+
+  for (const tx of transactions) {
+    if (!effectiveCycleMatch(cycle, tx)) continue;
+    const yearMonth = toYearMonth(tx.date);
+    const group = grouped.get(yearMonth) ?? { deposits: [], buys: [] };
+
+    if (tx.type === "transfer_in") {
+      const amount = tx.legs
+        .filter((leg) => leg.legType === "destination" && leg.amount > 0)
+        .reduce((sum, leg) => sum + fiatLegAmountEur(leg, isFiatAsset), 0);
+      if (amount > 0) group.deposits.push(operationEntry({ ...tx, cycleId: cycle.id }, amount, "deposit"));
+    } else if (tx.type === "buy") {
+      const amount = buyAmountFromFiatOrValuation(tx, isFiatAsset);
+      if (amount > 0) group.buys.push(operationEntry({ ...tx, cycleId: cycle.id }, amount, "buy"));
+    }
+
+    if (group.deposits.length > 0 || group.buys.length > 0) grouped.set(yearMonth, group);
+  }
+
+  return [...grouped.values()]
+    .flatMap((group) => group.deposits.length > 0 ? group.deposits : group.buys)
+    .sort((a, b) => a.plannedDate - b.plannedDate);
+}
+
+export function mergeManualAndOperationContributions(
+  manualEntries: ContributionEntry[],
+  operationEntries: ContributionEntry[],
+): ContributionEntry[] {
+  const operationMonths = new Set(operationEntries.map((entry) => toYearMonth(effectiveDate(entry))));
+  return [
+    ...manualEntries.filter((entry) =>
+      entry.status !== "ejecutada" ||
+      !operationMonths.has(toYearMonth(effectiveDate(entry)))
+    ),
+    ...operationEntries,
+  ].sort((a, b) => effectiveDate(a) - effectiveDate(b));
 }
 
 // Compute cycle-level aggregates from monthly summaries

@@ -71,13 +71,13 @@ export class CoinbaseProvider implements MarketDataProvider {
       granularity = 60; // 1 minute
       start.setHours(start.getHours() - 1);
     } else if (period === "24h") {
-      granularity = 3600; // 1 hour
+      granularity = 900; // 15 minutes
       start.setDate(start.getDate() - 1);
     } else if (period === "7d") {
-      granularity = 21600; // 6 hours
+      granularity = 3600; // 1 hour
       start.setDate(start.getDate() - 7);
     } else if (period === "30d") {
-      granularity = 86400; // 1 day
+      granularity = 21600; // 6 hours
       start.setDate(start.getDate() - 30);
     } else if (period === "1y") {
       granularity = 86400;

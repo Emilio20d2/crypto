@@ -6,6 +6,8 @@ import {
   classifyContributionOrigin,
   isCapitalNuevo,
   detectDuplicateContribution,
+  deriveContributionEntriesFromOperations,
+  mergeManualAndOperationContributions,
   type ContributionEntry,
   type ContributionCycleInput,
 } from "./plan-contributions";
@@ -155,6 +157,107 @@ describe("buildContributionHistory", () => {
     const history = buildContributionHistory(cycle, entries, makeDate("2026-03-01"));
     expect(history[0].actualAmountEur).toBeCloseTo(80);
     expect(history[1].actualAmountEur).toBeCloseTo(100);
+  });
+});
+
+// ── deriveContributionEntriesFromOperations ──────────────────────────────────
+
+describe("deriveContributionEntriesFromOperations", () => {
+  test("usa depósitos EUR de Operaciones como aportación real y no duplica compras del mismo mes", () => {
+    const cycle = makeCycle({ startDate: makeDate("2026-01-01") });
+    const entries = deriveContributionEntriesFromOperations(cycle, [
+      {
+        id: "deposit-1",
+        type: "transfer_in",
+        date: makeDate("2026-01-05"),
+        externalId: "cb-deposit-1",
+        legs: [{ assetId: "EUR", amount: 100, legType: "destination" }],
+      },
+      {
+        id: "buy-1",
+        type: "buy",
+        date: makeDate("2026-01-06"),
+        externalId: "cb-buy-1",
+        legs: [
+          { assetId: "EUR", amount: -100, legType: "source", valuationEur: 100 },
+          { assetId: "BTC", amount: 0.001, legType: "destination", valuationEur: 100 },
+        ],
+      },
+    ]);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0].amountEur).toBeCloseTo(100);
+    expect(entries[0].notes).toMatch(/depósito fiat/);
+  });
+
+  test("si no hay depósito EUR, usa compras EUR de Operaciones como aportación", () => {
+    const cycle = makeCycle({ startDate: makeDate("2026-01-01") });
+    const entries = deriveContributionEntriesFromOperations(cycle, [
+      {
+        id: "buy-1",
+        type: "buy",
+        date: makeDate("2026-02-06"),
+        externalId: "cb-buy-1",
+        legs: [
+          { assetId: "EUR", amount: -40, legType: "source", valuationEur: 40 },
+          { assetId: "ADA", amount: 100, legType: "destination", valuationEur: 40 },
+        ],
+      },
+      {
+        id: "buy-2",
+        type: "buy",
+        date: makeDate("2026-02-20"),
+        externalId: "cb-buy-2",
+        legs: [
+          { assetId: "EUR", amount: -60, legType: "source", valuationEur: 60 },
+          { assetId: "BTC", amount: 0.001, legType: "destination", valuationEur: 60 },
+        ],
+      },
+    ]);
+
+    expect(entries).toHaveLength(2);
+    expect(entries.reduce((sum, entry) => sum + entry.amountEur, 0)).toBeCloseTo(100);
+    expect(entries.every((entry) => entry.notes?.includes("compra EUR"))).toBe(true);
+  });
+
+  test("ignora conversiones y compras financiadas con EURC", () => {
+    const cycle = makeCycle({ startDate: makeDate("2026-01-01") });
+    const entries = deriveContributionEntriesFromOperations(cycle, [
+      {
+        id: "convert-1",
+        type: "convert",
+        date: makeDate("2026-03-10"),
+        legs: [
+          { assetId: "ADA", amount: -10, legType: "source" },
+          { assetId: "BTC", amount: 0.0001, legType: "destination" },
+        ],
+      },
+      {
+        id: "buy-eurc",
+        type: "buy",
+        date: makeDate("2026-03-11"),
+        legs: [
+          { assetId: "EURC", amount: -50, legType: "source", valuationEur: 50 },
+          { assetId: "BTC", amount: 0.0005, legType: "destination" },
+        ],
+      },
+    ], (assetId) => assetId === "EUR");
+
+    expect(entries).toHaveLength(0);
+  });
+
+  test("el resumen prefiere Operaciones/Coinbase frente a manuales ejecutadas del mismo mes", () => {
+    const manual = [
+      makeEntry({ id: "manual-jan", plannedDate: makeDate("2026-01-10"), executedAt: makeDate("2026-01-10"), amountEur: 100 }),
+      makeEntry({ id: "manual-feb", plannedDate: makeDate("2026-02-10"), executedAt: makeDate("2026-02-10"), amountEur: 100 }),
+    ];
+    const operation = [
+      makeEntry({ id: "coinbase-operation:jan", plannedDate: makeDate("2026-01-05"), executedAt: makeDate("2026-01-05"), amountEur: 100 }),
+    ];
+
+    const merged = mergeManualAndOperationContributions(manual, operation);
+
+    expect(merged.map((entry) => entry.id)).toEqual(["coinbase-operation:jan", "manual-feb"]);
   });
 });
 

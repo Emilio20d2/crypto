@@ -1,6 +1,7 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { CoinbaseProvider } from "./coinbase";
 import { CoinGeckoProvider } from "./coingecko";
+import { CryptoCompareProvider } from "./cryptocompare";
 import { MarketNotFoundError } from "./errors";
 import type { MarketCacheRepository } from "./interfaces";
 import { MarketService } from "./index";
@@ -75,6 +76,26 @@ describe("Market Providers y Resiliencia", () => {
     expect(result).toMatchObject({ price: null, state: "unavailable", reason: "Rate limit 429 CoinGecko" });
   }, 10000);
 
+  test("MarketService - usa CryptoCompare si Coinbase y CoinGecko fallan", async () => {
+    process.env.CRYPTOCOMPARE_API_KEY = "test-key";
+    marketService = new MarketService();
+    vi.mocked(mapping.getAssetMetadata).mockReturnValue({
+      ...mockMeta,
+      supportedProviders: ["coinbase", "coingecko", "cryptocompare"],
+    });
+    const cb = (marketService as unknown as { coinbase: { getCurrentPrice: unknown } }).coinbase;
+    const cg = (marketService as unknown as { coingecko: { getCurrentPrice: unknown } }).coingecko;
+    const cc = (marketService as unknown as { cryptocompare: { getCurrentPrice: unknown } }).cryptocompare;
+    vi.spyOn(cb, "getCurrentPrice").mockRejectedValue(new Error("Coinbase sin par"));
+    vi.spyOn(cg, "getCurrentPrice").mockRejectedValue(new Error("CoinGecko rate limit"));
+    vi.spyOn(cc, "getCurrentPrice").mockResolvedValue(47_500);
+
+    const result = await marketService.getCurrentPrice("BTC");
+
+    expect(result).toMatchObject({ price: 47_500, state: "live", provider: "cryptocompare" });
+    delete process.env.CRYPTOCOMPARE_API_KEY;
+  }, 15000);
+
   test("CoinGecko - Historical Prices filtra 1h correctamente", async () => {
     const now = Date.now();
     global.fetch = vi.fn().mockResolvedValue({
@@ -89,8 +110,26 @@ describe("Market Providers y Resiliencia", () => {
     });
     const cg = new CoinGeckoProvider();
     const history = await cg.getHistoricalPrices(mockMeta, "1h");
-    expect(history.length).toBe(3); // 1h param translates to 1 day on CoinGecko
-    expect(history[0].price).toBe(40000);
+    expect(history.length).toBe(2);
+    expect(history[0].price).toBe(41000);
+    expect(history.every((point) => point.timestamp >= now - 60 * 60 * 1000)).toBe(true);
+  });
+
+  test("Coinbase - Historical Prices usa la resolución real de cada timeframe", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    });
+    const cb = new CoinbaseProvider();
+
+    await cb.getHistoricalPrices(mockMeta, "24h");
+    expect(global.fetch).toHaveBeenLastCalledWith(expect.stringContaining("granularity=900"), expect.anything());
+
+    await cb.getHistoricalPrices(mockMeta, "7d");
+    expect(global.fetch).toHaveBeenLastCalledWith(expect.stringContaining("granularity=3600"), expect.anything());
+
+    await cb.getHistoricalPrices(mockMeta, "30d");
+    expect(global.fetch).toHaveBeenLastCalledWith(expect.stringContaining("granularity=21600"), expect.anything());
   });
 
   test("CoinGecko - Historical Prices periodos mapean bien (7d)", async () => {
@@ -101,6 +140,37 @@ describe("Market Providers y Resiliencia", () => {
     const cg = new CoinGeckoProvider();
     await cg.getHistoricalPrices(mockMeta, "7d");
     expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("days=7"), expect.anything());
+  });
+
+  test("CryptoCompare - current price y fuente trazable", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ EUR: 47500 }),
+    });
+    const provider = new CryptoCompareProvider("test-key");
+    const price = await provider.getCurrentPrice(mockMeta);
+    expect(price).toBe(47500);
+    expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("/data/price?"), expect.anything());
+  });
+
+  test("CryptoCompare - historical 24h usa minutos agregados de 15m", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        Data: {
+          Data: [
+            { time: 1_000, close: 100 },
+            { time: 2_000, close: 105 },
+          ],
+        },
+      }),
+    });
+    const provider = new CryptoCompareProvider("test-key");
+    const history = await provider.getHistoricalPrices(mockMeta, "24h");
+    expect(history).toHaveLength(2);
+    expect(history[0]).toMatchObject({ timestamp: 1_000_000, price: 100, source: "cryptocompare", confidence: 0.85 });
+    expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("/data/v2/histominute?"), expect.anything());
+    expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("aggregate=15"), expect.anything());
   });
 
   test("Respuesta inválida / Activo inexistente", async () => {
@@ -203,6 +273,30 @@ describe("Market Providers y Resiliencia", () => {
     expect(result.cacheStatus).toBe("stale");
     expect(result.isCached).toBe(true);
     expect(result.points).toEqual(stalePoints);
+  });
+
+  test("MarketService - recorta caché histórica a la ventana solicitada", async () => {
+    const now = Date.now();
+    const cachedPoints = [
+      { timestamp: now - 2 * 60 * 60 * 1000, price: 100, source: "coingecko", confidence: 0.9 },
+      { timestamp: now - 30 * 60 * 1000, price: 101, source: "coingecko", confidence: 0.9 },
+      { timestamp: now, price: 102, source: "coingecko", confidence: 0.9 },
+    ];
+    const cache: MarketCacheRepository = {
+      getCurrentPrice: vi.fn(),
+      saveCurrentPrice: vi.fn(),
+      getHistoricalPrices: vi.fn().mockResolvedValue(cachedPoints),
+      saveHistoricalPrices: vi.fn(),
+    };
+    marketService = new MarketService(cache);
+    vi.mocked(mapping.getAssetMetadata).mockReturnValue(mockMeta);
+
+    const result = await marketService.getHistoricalPrices("BTC", "1h");
+
+    expect(result.isCached).toBe(true);
+    expect(result.points).toHaveLength(2);
+    expect(result.points[0].price).toBe(101);
+    expect(result.points.every((point) => point.timestamp >= now - 60 * 60 * 1000)).toBe(true);
   });
 
   test("MarketService - deduplica llamadas paralelas al mismo precio", async () => {

@@ -131,7 +131,7 @@ function NuevaAportacionForm({
         onClick={() => setOpen(true)}
       >
         <PlusCircle size={14} />
-        Registrar aportación
+        Registrar ajuste manual
       </button>
     );
   }
@@ -139,7 +139,7 @@ function NuevaAportacionForm({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Registrar aportación de capital</CardTitle>
+        <CardTitle>Registrar ajuste manual de capital</CardTitle>
       </CardHeader>
       <CardContent>
         <form className="investment-form-grid compact" onSubmit={(e) => void handleSubmit(e)}>
@@ -185,7 +185,7 @@ function NuevaAportacionForm({
           </label>
 
           <p className="plan-note" style={{ gridColumn: "1 / -1", fontSize: "0.8rem", color: "var(--color-text-muted)" }}>
-            Solo registrar capital nuevo real (fiat externo). No registrar recompras, EURC, reinversiones ni conversiones.
+            Las aportaciones reales se sincronizan desde Operaciones/Coinbase. Usa este ajuste solo si falta un movimiento externo.
           </p>
 
           <div style={{ display: "flex", gap: 8, gridColumn: "1 / -1" }}>
@@ -307,6 +307,7 @@ export function PlanAportaciones() {
       {/* ── Resumen del mes actual ── */}
       <section className="plan-section">
         <h2 className="plan-section-title">Mes actual</h2>
+        <p className="panel-caption">Aportaciones reales sincronizadas desde Operaciones/Coinbase.</p>
         {currentSummary ? (
           <div className="plan-metrics-grid">
             <MetricCard

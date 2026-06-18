@@ -112,6 +112,10 @@ export const GlobalMetricsResultSchema = z.object({
   marketCapChangePercentage24h: z.number().nullable(),
   fetchedAt: z.number(),
   isCached: z.boolean(),
+  source: z.string().optional(),
+  state: z.enum(["live", "cached", "fallback", "unavailable"]).optional(),
+  error: z.string().optional(),
+  providersTried: z.array(z.string()).optional(),
 });
 export type GlobalMetricsResult = z.infer<typeof GlobalMetricsResultSchema>;
 

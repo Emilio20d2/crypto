@@ -177,7 +177,7 @@ function setupDatabase() {
 }
 
 function setupIpcHandlers() {
-  const { MarketService, MarketSentimentService, FearGreedService } = require("@crypto-control/market-data") as typeof import("@crypto-control/market-data");
+  const { MarketService, MarketSentimentService, FearGreedService, GlobalMetricsService } = require("@crypto-control/market-data") as typeof import("@crypto-control/market-data");
   const { DatabasePortfolioRepository, DatabaseMarketCacheRepository, DatabaseMarketSentimentRepository, DatabaseTreasuryRepository } = require("@crypto-control/database") as typeof import("@crypto-control/database");
 
   const db = getDb();
@@ -196,6 +196,18 @@ function setupIpcHandlers() {
     timeoutMs: 6000,
     fetchImpl: fetch,
     logger: fearGreedLogger,
+  });
+  const globalMetricsLogger = app.isPackaged
+    ? undefined
+    : {
+        debug: (...args: unknown[]) => console.log("[Global Metrics]", ...args),
+        warn: (...args: unknown[]) => console.warn("[Global Metrics]", ...args),
+      };
+  const globalMetricsService = new GlobalMetricsService({
+    ttlMs: 60 * 60 * 1000,
+    timeoutMs: 8000,
+    fetchImpl: fetch,
+    logger: globalMetricsLogger,
   });
 
   // --- Permission settings helpers (no live API calls) ---
@@ -604,11 +616,19 @@ function setupIpcHandlers() {
     const repo = new DatabasePortfolioRepository(db);
     const txs = await repo.getTransactions();
 
-    // Collect all unique assets from legs
+    const assetRows = db.select({ id: schema.assets.id, type: schema.assets.type }).from(schema.assets).all();
+    const assetTypeById = new Map(assetRows.map((asset) => [asset.id, asset.type]));
+    const isPortfolioChartAsset = (assetId: string) =>
+      assetId !== "EUR" &&
+      assetId !== "EURC" &&
+      assetTypeById.get(assetId) !== "fiat";
+
+    // Collect all unique crypto assets from legs. EUR/EURC are liquidity and
+    // are excluded from the portfolio price curve; they live in Tesorería.
     const heldAssets = new Set<string>();
     for (const tx of txs) {
       for (const leg of tx.legs) {
-        if (leg.amount !== 0) heldAssets.add(leg.assetId);
+        if (leg.amount !== 0 && isPortfolioChartAsset(leg.assetId)) heldAssets.add(leg.assetId);
       }
     }
 
@@ -670,8 +690,34 @@ function setupIpcHandlers() {
     const marketPointCountByAsset: Record<string, number> = {};
     let totalPricePoints = 0;
 
+    function loadCachedPricesForAsset(assetId: string, interval: string): { time: number; price: number; source: string }[] {
+      return db.select({
+        timestamp: schema.priceHistory.timestamp,
+        price: schema.priceHistory.price,
+        provider: schema.priceHistory.provider,
+      })
+        .from(schema.priceHistory)
+        .where(and(
+          eq(schema.priceHistory.assetId, assetId),
+          eq(schema.priceHistory.quoteCurrency, "EUR"),
+          eq(schema.priceHistory.interval, interval),
+        ))
+        .orderBy(asc(schema.priceHistory.timestamp))
+        .all()
+        .map((row) => ({ time: row.timestamp, price: row.price, source: row.provider }));
+    }
+
     async function loadPricesForAsset(assetId: string): Promise<void> {
       if (marketPeriod) {
+        const cachedExact = loadCachedPricesForAsset(assetId, marketPeriod);
+        if (cachedExact.length > 1) {
+          pricesByAsset[assetId] = cachedExact.map((point) => ({ time: point.time, price: point.price }));
+          priceSourceByAsset[assetId] = `${cachedExact[0].source}(cache:${marketPeriod})`;
+          marketPointCountByAsset[assetId] = cachedExact.length;
+          totalPricePoints += cachedExact.length;
+          return;
+        }
+
         try {
           const result = await marketService.getHistoricalPrices(assetId, marketPeriod);
           if (result.points.length > 1) {
@@ -779,18 +825,27 @@ function setupIpcHandlers() {
 
     await Promise.all([...heldAssets].map(loadPricesForAsset));
 
-    const valueAtMs = (ts: number): { value: number; hasHolding: boolean } => {
+    const valueAtMs = (ts: number): { value: number; hasHolding: boolean; complete: boolean } => {
       let totalValue = 0;
       let hasHolding = false;
-      for (const [assetId, prices] of Object.entries(pricesByAsset)) {
+      let complete = true;
+      for (const assetId of heldAssets) {
         const qty = getQtyAt(assetEvents[assetId] ?? [], ts);
         if (qty <= 0) continue;
-        const price = priceAtOrBefore(prices, ts);
-        if (price === null || price <= 0) continue;
-        totalValue += qty * price;
         hasHolding = true;
+        const prices = pricesByAsset[assetId];
+        if (!prices || prices.length === 0) {
+          complete = false;
+          continue;
+        }
+        const price = priceAtOrBefore(prices, ts);
+        if (price === null || price <= 0) {
+          complete = false;
+          continue;
+        }
+        totalValue += qty * price;
       }
-      return { value: totalValue, hasHolding };
+      return { value: totalValue, hasHolding, complete };
     };
 
     const period = input?.period as ValueGridPeriod | undefined;
@@ -1017,64 +1072,14 @@ function setupIpcHandlers() {
     });
   }));
 
-  // In-memory caches for external market signals (reset on app restart, acceptable)
-  let globalMetricsCache: {
-    btcDominance: number | null;
-    ethDominance: number | null;
-    totalMarketCapUsd: number | null;
-    totalVolumeUsd: number | null;
-    marketCapChangePercentage24h: number | null;
-    fetchedAt: number;
-  } | null = null;
   const GLOBAL_METRICS_TTL_MS = 60 * 60 * 1000;
 
   ipcMain.handle("market:get-fear-greed", withResult(async () => {
     return FearGreedResultSchema.parse(await fearGreedService.get());
   }));
 
-  async function fetchGlobalMetrics(): Promise<{ btcDominance: number | null; ethDominance: number | null; totalMarketCapUsd: number | null; totalVolumeUsd: number | null; marketCapChangePercentage24h: number | null; fetchedAt: number; isCached: boolean }> {
-    if (globalMetricsCache && Date.now() - globalMetricsCache.fetchedAt < GLOBAL_METRICS_TTL_MS) {
-      return { ...globalMetricsCache, isCached: true };
-    }
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-    try {
-      const resp = await fetch("https://api.coingecko.com/api/v3/global", {
-        signal: controller.signal,
-        headers: { Accept: "application/json" },
-      });
-      const json = await resp.json() as {
-        data?: {
-          market_cap_percentage?: Record<string, number>;
-          total_market_cap?: Record<string, number>;
-          total_volume?: Record<string, number>;
-          market_cap_change_percentage_24h_usd?: number;
-        };
-      };
-      const data = json?.data;
-      globalMetricsCache = {
-        btcDominance: data?.market_cap_percentage?.btc ?? null,
-        ethDominance: data?.market_cap_percentage?.eth ?? null,
-        totalMarketCapUsd: data?.total_market_cap?.usd ?? null,
-        totalVolumeUsd: data?.total_volume?.usd ?? null,
-        marketCapChangePercentage24h: data?.market_cap_change_percentage_24h_usd ?? null,
-        fetchedAt: Date.now(),
-      };
-      return { ...globalMetricsCache, isCached: false };
-    } catch {
-      if (globalMetricsCache) return { ...globalMetricsCache, isCached: true };
-      return {
-        btcDominance: null,
-        ethDominance: null,
-        totalMarketCapUsd: null,
-        totalVolumeUsd: null,
-        marketCapChangePercentage24h: null,
-        fetchedAt: Date.now(),
-        isCached: false,
-      };
-    } finally {
-      clearTimeout(timeout);
-    }
+  async function fetchGlobalMetrics() {
+    return globalMetricsService.get();
   }
 
   ipcMain.handle("market:get-global-metrics", withResult(async () => {
@@ -1098,7 +1103,7 @@ function setupIpcHandlers() {
   }
 
   function getCachedBtcDominance(): number | null {
-    return globalMetricsCache && Date.now() - globalMetricsCache.fetchedAt < GLOBAL_METRICS_TTL_MS * 2 ? globalMetricsCache.btcDominance : null;
+    return globalMetricsService.getLastValid(GLOBAL_METRICS_TTL_MS * 2)?.btcDominance ?? null;
   }
 
   ipcMain.handle("sentiment:get-asset", withResult(async (_, input: { assetId: string; timeframe: string }) => {
@@ -2104,16 +2109,17 @@ function setupIpcHandlers() {
     return await getPortfolioServiceInst().listPortfolios();
   }));
 
-  ipcMain.handle("coinbase:get-portfolio-breakdown", withResult(async (_, portfolioUuid: string, currency: string) => {
+  ipcMain.handle("coinbase:get-portfolio-breakdown", withResult(async (_, portfolioUuid: string, currency: string = "EUR") => {
+    const quoteCurrency = currency || "EUR";
     const service = getPortfolioServiceInst();
-    const liveBreakdown = service.getPortfolioBreakdown(portfolioUuid, currency);
+    const liveBreakdown = service.getPortfolioBreakdown(portfolioUuid, quoteCurrency);
     liveBreakdown.catch((error) => {
       console.warn("[Coinbase] Portfolio live breakdown did not complete before fallback:", error instanceof Error ? error.message : String(error));
     });
 
     const cachedBreakdown = new Promise((resolve) => {
       setTimeout(() => {
-        const cached = service.getCachedPortfolioBreakdown(portfolioUuid, currency, "Coinbase tardó demasiado; mostrando cache local.");
+        const cached = service.getCachedPortfolioBreakdown(portfolioUuid, quoteCurrency, "Coinbase tardó demasiado; mostrando cache local.");
         void Promise.resolve(cached).then(resolve);
       }, 8000);
     });
@@ -2454,7 +2460,12 @@ function setupIpcHandlers() {
   // Resumen mensual de aportaciones para un ciclo
   ipcMain.handle("contributionSchedule:getMonthlySummary", withResult(async (_, input: { cycleId: string }) => {
     const db = getDb();
-    const { buildContributionHistory, calculateCycleContributionAggregates } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    const {
+      buildContributionHistory,
+      calculateCycleContributionAggregates,
+      deriveContributionEntriesFromOperations,
+      mergeManualAndOperationContributions,
+    } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
 
     const cycleRow = db.select().from(schema.investmentCycles).where(eq(schema.investmentCycles.id, input.cycleId)).get();
     if (!cycleRow) throw new Error(`Ciclo ${input.cycleId} no encontrado.`);
@@ -2482,9 +2493,20 @@ function setupIpcHandlers() {
       notes: e.notes ?? null,
     }));
 
+    const txRepo = new DatabasePortfolioRepository(db);
+    const transactions = await txRepo.getTransactions();
+    const assetRows = db.select({ id: schema.assets.id, type: schema.assets.type }).from(schema.assets).all();
+    const assetTypeById = new Map(assetRows.map((asset) => [asset.id, asset.type]));
+    const operationEntries = deriveContributionEntriesFromOperations(
+      cycle,
+      transactions,
+      (assetId: string) => assetId === "EUR" || assetTypeById.get(assetId) === "fiat",
+    );
+    const mergedEntries = mergeManualAndOperationContributions(entries, operationEntries);
+
     const now = Date.now();
-    const summaries = buildContributionHistory(cycle, entries, now);
-    const aggregates = calculateCycleContributionAggregates(cycle, summaries, entries, now);
+    const summaries = buildContributionHistory(cycle, mergedEntries, now);
+    const aggregates = calculateCycleContributionAggregates(cycle, summaries, mergedEntries, now);
 
     const validatedSummaries = summaries.map(s => ContributionMonthlySummarySchema.parse(s));
     const validatedAggregates = CycleContributionAggregatesSchema.parse(aggregates);
@@ -3550,7 +3572,14 @@ function setupIpcHandlers() {
 
   ipcMain.handle("planMonitoring:getSummary", withResult(async (_, input: { cycleId: string }) => {
     const db = getDb();
-    const { buildAssetPlanStatus, buildPlanAlerts, buildContributionHistory, calculateCycleContributionAggregates } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    const {
+      buildAssetPlanStatus,
+      buildPlanAlerts,
+      buildContributionHistory,
+      calculateCycleContributionAggregates,
+      deriveContributionEntriesFromOperations,
+      mergeManualAndOperationContributions,
+    } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
 
     const cycle = db.select().from(schema.investmentCycles).where(eq(schema.investmentCycles.id, input.cycleId)).get();
     if (!cycle) throw new Error("Etapa no encontrada");
@@ -3586,8 +3615,18 @@ function setupIpcHandlers() {
     }));
 
     const cycleMeta = { id: cycle.id, startDate: cycle.startDate, endDate: cycle.endDate ?? null, monthlyAmountEur: cycle.monthlyAmountEur };
-    const history = buildContributionHistory(cycleMeta, contributions, now);
-    const agg = calculateCycleContributionAggregates(cycleMeta, history, contributions, now);
+    const txRepo = new DatabasePortfolioRepository(db);
+    const transactions = await txRepo.getTransactions();
+    const catalogAssetRows = db.select({ id: schema.assets.id, type: schema.assets.type }).from(schema.assets).all();
+    const assetTypeById = new Map(catalogAssetRows.map((asset) => [asset.id, asset.type]));
+    const operationContributions = deriveContributionEntriesFromOperations(
+      cycleMeta,
+      transactions,
+      (assetId: string) => assetId === "EUR" || assetTypeById.get(assetId) === "fiat",
+    );
+    const mergedContributions = mergeManualAndOperationContributions(contributions, operationContributions);
+    const history = buildContributionHistory(cycleMeta, mergedContributions, now);
+    const agg = calculateCycleContributionAggregates(cycleMeta, history, mergedContributions, now);
     const deficitEur = agg.totalDeficitEur;
 
     const allocations = await getPortfolioService().getAllocation();

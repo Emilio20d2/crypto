@@ -1,6 +1,7 @@
 import { MarketDataProvider, HistoricalPriceData, MarketCacheRepository } from "./interfaces";
 import { CoinbaseProvider } from "./coinbase";
 import { CoinGeckoProvider } from "./coingecko";
+import { CryptoCompareProvider } from "./cryptocompare";
 import { getAssetMetadata } from "./mapping";
 import { MarketInvalidResponseError, MarketNotFoundError } from "./errors";
 import { retryWithBackoff } from "./utils";
@@ -8,11 +9,13 @@ import { retryWithBackoff } from "./utils";
 export * from "./interfaces";
 export * from "./coinbase";
 export * from "./coingecko";
+export * from "./cryptocompare";
 export * from "./mapping";
 export * from "./errors";
 export * from "./utils";
 export * from "./sentiment";
 export * from "./fear-greed";
+export * from "./global-metrics";
 export * from "./market-phase";
 export * from "./asset-health";
 
@@ -38,15 +41,35 @@ type HistoricalPricesResult = {
 const CURRENT_PRICE_CACHE_MS = 60_000;
 const MIN_HISTORICAL_POINTS = 2;
 
+function historicalWindowMs(period: string): number | null {
+  if (period === "1h") return 60 * 60 * 1000;
+  if (period === "24h") return 24 * 60 * 60 * 1000;
+  if (period === "7d") return 7 * 24 * 60 * 60 * 1000;
+  if (period === "30d") return 30 * 24 * 60 * 60 * 1000;
+  if (period === "1y") return 365 * 24 * 60 * 60 * 1000;
+  return null;
+}
+
+function maxExpectedGapMs(period: string): number | null {
+  if (period === "1h") return 5 * 60 * 1000;
+  if (period === "24h") return 30 * 60 * 1000;
+  if (period === "7d") return 3 * 60 * 60 * 1000;
+  if (period === "30d") return 12 * 60 * 60 * 1000;
+  if (period === "1y") return 3 * 24 * 60 * 60 * 1000;
+  return null;
+}
+
 function confidenceForProvider(provider: string): number {
   if (provider === "coinbase") return 1;
   if (provider === "coingecko") return 0.9;
+  if (provider === "cryptocompare") return 0.85;
   return 0.6;
 }
 
 export class MarketService {
   private coinbase = new CoinbaseProvider();
   private coingecko = new CoinGeckoProvider();
+  private cryptocompare = new CryptoCompareProvider();
   private currentPriceRequests = new Map<string, Promise<CurrentPriceResult>>();
   private historicalRequests = new Map<string, Promise<HistoricalPricesResult>>();
 
@@ -106,6 +129,19 @@ export class MarketService {
       }
     }
 
+    if (meta.supportedProviders.includes("cryptocompare") && this.cryptocompare.isConfigured()) {
+      try {
+        const price = await retryWithBackoff(() => this.cryptocompare.getCurrentPrice(meta, signal), 2, 750, signal);
+        if (this.cache) await this.cache.saveCurrentPrice(assetId, meta.quoteCurrency, price, "cryptocompare");
+        return { price, state: "live", provider: "cryptocompare", fetchedAt: Date.now() };
+      } catch (e: unknown) {
+        if (e instanceof DOMException && e.name === "AbortError") throw e;
+        if (e instanceof Error && e.name === "AbortError") throw e;
+        lastError = e instanceof Error ? e.message : String(e);
+        console.warn(`CryptoCompare getCurrentPrice failed for ${assetId}:`, lastError);
+      }
+    }
+
     if (!cached && this.cache) {
       cached = await this.cache.getCurrentPrice(assetId, meta.quoteCurrency, { allowStale: true });
     }
@@ -149,11 +185,12 @@ export class MarketService {
 
     if (this.cache) {
       const cached = await this.cache.getHistoricalPrices(assetId, meta.quoteCurrency, period);
-      if (cached && this.hasUsableHistoricalData(cached)) {
-        const provider = this.providerFromPoints(cached);
+      const scopedCached = cached ? this.prepareHistoricalData(cached, this.providerFromPoints(cached), period) : null;
+      if (scopedCached && this.hasUsableHistoricalData(scopedCached) && this.hasExpectedResolution(scopedCached, period)) {
+        const provider = this.providerFromPoints(scopedCached);
         return {
           provider,
-          points: cached,
+          points: scopedCached,
           requestedPeriod: period,
           actualInterval: "auto",
           fetchedAt: Date.now(),
@@ -167,9 +204,10 @@ export class MarketService {
 
     if (meta.supportedProviders.includes("coinbase")) {
       try {
-        const data = this.normalizeHistoricalData(
+        const data = this.prepareHistoricalData(
           await retryWithBackoff(() => this.coinbase.getHistoricalPrices(meta, period, signal), 3, 1000, signal),
-          "coinbase"
+          "coinbase",
+          period
         );
         if (!this.hasUsableHistoricalData(data)) {
           throw new MarketInvalidResponseError(`Coinbase returned insufficient historical data for ${assetId}`);
@@ -194,9 +232,10 @@ export class MarketService {
 
     if (meta.supportedProviders.includes("coingecko")) {
       try {
-        const data = this.normalizeHistoricalData(
+        const data = this.prepareHistoricalData(
           await retryWithBackoff(() => this.coingecko.getHistoricalPrices(meta, period, signal), 3, 1000, signal),
-          "coingecko"
+          "coingecko",
+          period
         );
         if (!this.hasUsableHistoricalData(data)) {
           throw new MarketInvalidResponseError(`CoinGecko returned insufficient historical data for ${assetId}`);
@@ -219,14 +258,43 @@ export class MarketService {
       }
     }
 
+    if (meta.supportedProviders.includes("cryptocompare") && this.cryptocompare.isConfigured()) {
+      try {
+        const data = this.prepareHistoricalData(
+          await retryWithBackoff(() => this.cryptocompare.getHistoricalPrices(meta, period, signal), 2, 750, signal),
+          "cryptocompare",
+          period
+        );
+        if (!this.hasUsableHistoricalData(data)) {
+          throw new MarketInvalidResponseError(`CryptoCompare returned insufficient historical data for ${assetId}`);
+        }
+        if (this.cache) await this.cache.saveHistoricalPrices(assetId, meta.quoteCurrency, period, data, "cryptocompare");
+        return {
+          provider: "cryptocompare",
+          points: data,
+          requestedPeriod: period,
+          actualInterval: "auto",
+          fetchedAt: Date.now(),
+          isCached: false,
+          cacheStatus: "miss"
+        };
+      } catch (e: unknown) {
+        if (e instanceof DOMException && e.name === "AbortError") throw e;
+        if (e instanceof Error && e.name === "AbortError") throw e;
+        lastError = e instanceof Error ? e.message : String(e);
+        console.warn(`CryptoCompare getHistoricalPrices failed for ${assetId}:`, lastError);
+      }
+    }
+
     if (this.cache) {
       const stale = await this.cache.getHistoricalPrices(assetId, meta.quoteCurrency, period, { allowStale: true });
-      if (stale && this.hasUsableHistoricalData(stale)) {
-        const provider = this.providerFromPoints(stale);
+      const scopedStale = stale ? this.prepareHistoricalData(stale, this.providerFromPoints(stale), period) : null;
+      if (scopedStale && this.hasUsableHistoricalData(scopedStale)) {
+        const provider = this.providerFromPoints(scopedStale);
         console.info(`[MarketService] getHistoricalPrices ${assetId} ${period}: using stale cache from ${provider}`);
         return {
           provider,
-          points: stale,
+          points: scopedStale,
           requestedPeriod: period,
           actualInterval: "auto",
           fetchedAt: Date.now(),
@@ -257,8 +325,31 @@ export class MarketService {
       .sort((a, b) => a.timestamp - b.timestamp);
   }
 
+  private prepareHistoricalData(data: HistoricalPriceData[], provider: string, period: string): HistoricalPriceData[] {
+    const normalized = this.normalizeHistoricalData(data, provider);
+    const windowMs = historicalWindowMs(period);
+    if (windowMs === null || normalized.length === 0) return normalized;
+    const latest = normalized[normalized.length - 1].timestamp;
+    const cutoff = latest - windowMs;
+    return normalized.filter((point) => point.timestamp >= cutoff);
+  }
+
   private hasUsableHistoricalData(data: HistoricalPriceData[]): boolean {
     return this.normalizeHistoricalData(data, data[0]?.source ?? "cache").length >= MIN_HISTORICAL_POINTS;
+  }
+
+  private hasExpectedResolution(data: HistoricalPriceData[], period: string): boolean {
+    const maxGap = maxExpectedGapMs(period);
+    if (maxGap === null || data.length < 3) return true;
+    const gaps: number[] = [];
+    for (let i = 1; i < data.length; i += 1) {
+      const gap = data[i].timestamp - data[i - 1].timestamp;
+      if (Number.isFinite(gap) && gap > 0) gaps.push(gap);
+    }
+    if (gaps.length === 0) return false;
+    gaps.sort((a, b) => a - b);
+    const medianGap = gaps[Math.floor(gaps.length / 2)];
+    return medianGap <= maxGap;
   }
 
   private providerFromPoints(points: HistoricalPriceData[]): string {

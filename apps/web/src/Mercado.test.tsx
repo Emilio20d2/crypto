@@ -13,7 +13,7 @@ function renderWithQuery(ui: React.ReactElement) {
   );
 }
 
-function setupMock(opts: { assets?: any[]; fearGreedOk?: boolean; fearGreedFallback?: boolean; overviewChange24h?: number | null; historyProvider?: string; overviewProvider?: string } = {}) {
+function setupMock(opts: { assets?: any[]; fearGreedOk?: boolean; fearGreedFallback?: boolean; overviewChange24h?: number | null; historyProvider?: string; overviewProvider?: string; globalMetricsSource?: string; globalMetricsState?: "live" | "cached" | "fallback" | "unavailable"; globalMetricsError?: string } = {}) {
   const assets = opts.assets ?? [
     { id: "BTC", symbol: "BTC", name: "Bitcoin", type: "crypto" as const, createdAt: 0, updatedAt: 0, logoUrl: null },
     { id: "ETH", symbol: "ETH", name: "Ethereum", type: "crypto" as const, createdAt: 0, updatedAt: 0, logoUrl: null },
@@ -44,7 +44,7 @@ function setupMock(opts: { assets?: any[]; fearGreedOk?: boolean; fearGreedFallb
         : opts.fearGreedFallback
           ? async () => ({ ok: true as const, data: { value: 20, label: "Extreme Fear", timestamp: Date.now() - 86_400_000, fetchedAt: Date.now() - 10_000, isCached: true, source: "alternative.me", state: "fallback" as const, error: "Network timeout" } })
           : async () => ({ ok: true as const, data: { value: 45, label: "Fear", timestamp: Date.now(), fetchedAt: Date.now(), isCached: false, source: "alternative.me", state: "live" as const } }),
-      getGlobalMetrics: async () => ({ ok: true as const, data: { btcDominance: 52.1, ethDominance: 17.4, totalMarketCapUsd: 2.5e12, totalVolumeUsd: 9e10, marketCapChangePercentage24h: -0.8, fetchedAt: Date.now(), isCached: false } }),
+      getGlobalMetrics: async () => ({ ok: true as const, data: { btcDominance: 52.1, ethDominance: 17.4, totalMarketCapUsd: 2.5e12, totalVolumeUsd: 9e10, marketCapChangePercentage24h: -0.8, fetchedAt: Date.now(), isCached: false, source: opts.globalMetricsSource ?? "coingecko", state: opts.globalMetricsState ?? "live", error: opts.globalMetricsError } }),
       getCryptoControlIndex: async () => ({ ok: true as const, data: { phase: null, confidence: "baja" as const, indicatorsUsed: [], indicatorsUnavailable: [], reasoning: "mock", calculatedAt: Date.now() } }),
     },
     portfolio: {
@@ -235,7 +235,7 @@ describe("Mercado", () => {
     });
     expect(screen.getByText("Fear")).toBeInTheDocument();
     expect(screen.getByText(/Fuente: alternative\.me/i)).toBeInTheDocument();
-    expect(screen.getByText(/Estado: Live/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Estado: Live/i).length).toBeGreaterThanOrEqual(1);
   });
 
   test("Fear & Greed muestra fallback con último valor válido", async () => {
@@ -268,6 +268,16 @@ describe("Mercado", () => {
     });
   });
 
+  test("métricas globales muestran fuente y estado para diagnosticar fallos", async () => {
+    setupMock({ globalMetricsSource: "coinlore", globalMetricsState: "fallback", globalMetricsError: "CoinGecko rate limit" });
+    renderWithQuery(<Mercado />);
+    await waitFor(() => {
+      expect(screen.getByText(/Fuente: CoinLore/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Estado: Fallback/i)).toBeInTheDocument();
+    expect(screen.getByText(/CoinGecko rate limit/i)).toBeInTheDocument();
+  });
+
   test("sentimiento colapsado por defecto", async () => {
     renderWithQuery(<Mercado />);
     // Wait for full page load (not just loading state)
@@ -283,6 +293,15 @@ describe("Mercado", () => {
 
     await waitFor(() => {
       expect(screen.getAllByText(/Datos vía CoinGecko/i).length).toBeGreaterThan(0);
+    });
+  });
+
+  test("muestra fuente alternativa cuando el histórico llega de CryptoCompare", async () => {
+    setupMock({ historyProvider: "cryptocompare", overviewProvider: "cryptocompare" });
+    renderWithQuery(<Mercado />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/Datos vía CryptoCompare/i).length).toBeGreaterThan(0);
     });
   });
 });

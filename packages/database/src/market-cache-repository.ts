@@ -1,11 +1,12 @@
 import { MarketCacheRepository, HistoricalPriceData } from "@crypto-control/market-data";
 import { getDb } from "./db";
 import { priceHistory } from "./schema";
-import { and, eq, gte, desc, asc, sql } from "drizzle-orm";
+import { and, eq, desc, asc, sql } from "drizzle-orm";
 
 function confidenceForProvider(provider: string): number {
   if (provider === "coinbase") return 1;
   if (provider === "coingecko") return 0.9;
+  if (provider === "cryptocompare") return 0.85;
   return 0.6;
 }
 
@@ -58,6 +59,16 @@ export class DatabaseMarketCacheRepository implements MarketCacheRepository {
     
     // Delete existing cache for this period to avoid duplicates/stale gaps, or just upsert.
     // Upsert is supported in Drizzle SQLite using onConflictDoUpdate
+    await this.db.delete(priceHistory)
+      .where(
+        and(
+          eq(priceHistory.assetId, assetId),
+          eq(priceHistory.quoteCurrency, quoteCurrency),
+          eq(priceHistory.interval, period)
+        )
+      )
+      .run();
+
     const values = data.map(d => ({
       assetId,
       quoteCurrency,
