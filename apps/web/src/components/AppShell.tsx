@@ -10,20 +10,9 @@ export type NavigationItem = {
   end?: boolean;
 };
 
-export function WindowToolbar() {
-  return (
-    <div className="window-toolbar" aria-hidden="true">
-      <span />
-      <span />
-      <span />
-    </div>
-  );
-}
-
 function SidebarContents({ items, onNavigate }: { items: NavigationItem[]; onNavigate?: () => void }) {
   return (
     <>
-      <WindowToolbar />
       <div className="sidebar-brand">
         <img src={logoUrl} alt="Crypto Control" />
         <strong>Crypto Control</strong>
