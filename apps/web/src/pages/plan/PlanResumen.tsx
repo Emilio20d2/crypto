@@ -562,7 +562,7 @@ function PlanSetupWizard() {
       );
       planId = plan.id;
 
-      // 2. Crear ciclo/etapa
+      // 2. Crear ciclo/etapa en estado "planned" para poder añadir activos primero
       const cycle = await unwrap(
         window.cryptoControl.investmentCycles.create({
           planId: plan.id,
@@ -571,7 +571,7 @@ function PlanSetupWizard() {
           endDate: endTs,
           monthlyAmountEur: monthly,
           contributionCurrency: "EUR",
-          status: "active",
+          status: "planned",
           priority: 0,
           objetivo: null,
           riesgo: null,
@@ -580,7 +580,7 @@ function PlanSetupWizard() {
         })
       );
 
-      // 3. Crear activos
+      // 3. Crear activos (el ciclo aún está en "planned", sin validación de distribución)
       await Promise.all(
         data.selectedAssetIds.map((assetId) => {
           const pct = parseFloat(data.allocations[assetId] ?? "0") || 0;
@@ -605,6 +605,11 @@ function PlanSetupWizard() {
             })
           );
         })
+      );
+
+      // 4. Activar el ciclo ahora que sus activos existen (validación completa en backend)
+      await unwrap(
+        window.cryptoControl.investmentCycles.update(cycle.id, { status: "active" })
       );
 
       // Éxito: invalidar todas las queries del módulo
