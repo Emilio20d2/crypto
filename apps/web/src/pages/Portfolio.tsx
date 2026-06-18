@@ -9,7 +9,6 @@ import { ErrorState } from "../components/ErrorState";
 import { LoadingState } from "../components/LoadingState";
 import { PageToolbar } from "../components/PageToolbar";
 import {
-  AllocationPanel,
   DataStatus,
   PortfolioChart,
   PortfolioMetrics,
@@ -452,10 +451,7 @@ export function Portfolio() {
         </Card>
       )}
 
-      <div className="portfolio-layout-grid">
-        <PortfolioChart data={chartDataAnchoredToLiveTotal} period={period} onPeriodChange={setPeriod} />
-        <AllocationPanel positions={positions} localCostByAsset={localPositionMap} />
-      </div>
+      <PortfolioChart data={chartDataAnchoredToLiveTotal} period={period} onPeriodChange={setPeriod} />
 
       <PositionList positions={positions} assets={assets} onSelect={(assetId) => navigate(`/activo/${assetId}`)} localCostByAsset={localPositionMap} />
     </section>

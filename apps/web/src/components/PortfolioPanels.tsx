@@ -5,7 +5,7 @@ import { LocalAssetLogo } from "./LocalAssetLogo";
 import { MarketChart, type ChartPoint } from "./MarketChart";
 import { PeriodSelector, type Period } from "./PeriodSelector";
 import { Sparkline } from "./Sparkline";
-import { formatAllocation, formatCrypto, formatMoney } from "../lib/format";
+import { compactEurFormatter, formatAllocation, formatCrypto, formatMoney } from "../lib/format";
 
 type AllocationStyle = CSSProperties & {
   "--allocation-width"?: string;
@@ -53,6 +53,10 @@ function positionAverageCost(position: any, localCostByAsset: Record<string, num
   return invested !== null && quantity !== null && quantity > 0 ? invested / quantity : null;
 }
 
+function formatMoneyCompact(value: number | null | undefined, fallback = "En cálculo") {
+  return typeof value === "number" && Number.isFinite(value) ? compactEurFormatter.format(value) : fallback;
+}
+
 function formatPercentPoints(value: number | null | undefined, fallback = "Pendiente") {
   return typeof value === "number" && Number.isFinite(value)
     ? `${value >= 0 ? "+" : ""}${value.toLocaleString("es-ES", { maximumFractionDigits: 2 })}%`
@@ -94,25 +98,25 @@ export function PortfolioMetrics({
 }) {
   const variationLabel =
     variation24h !== null && variation24h !== undefined
-      ? `${formatMoney(variation24h, "0,00 €")} · ${formatPercentPoints(variation24hPercent, "0,00%")}`
+      ? `${formatMoneyCompact(variation24h)} · ${formatPercentPoints(variation24hPercent, "0,00%")}`
       : "En cálculo";
   const metrics = [
-    { label: "Valor total", value: formatMoney(totalBalance, "En cálculo"), icon: Wallet },
-    { label: "Beneficio / Pérdida", value: formatMoney(performance, "En cálculo"), tone: performance && performance < 0 ? "negative" : "positive", icon: TrendingUp },
+    { label: "Valor total", value: formatMoney(totalBalance, "En cálculo"), icon: Wallet, hero: true },
+    { label: "Beneficio / Pérdida", value: formatMoneyCompact(performance), tone: performance && performance < 0 ? "negative" : "positive", icon: TrendingUp },
     {
       label: "Variación 24 h",
       value: variationLabel,
       tone: variation24h && variation24h < 0 ? "negative" : "positive",
       icon: TrendingUp,
     },
-    { label: "Total invertido", value: formatMoney(totalInvested, "En cálculo"), icon: Database },
+    { label: "Total invertido", value: formatMoneyCompact(totalInvested), icon: Database },
     { label: "Activos", value: positionsCount.toLocaleString("es-ES"), icon: ShieldCheck },
   ];
 
   return (
     <section className="portfolio-metrics" aria-label="Resumen patrimonial">
-      {metrics.map(({ label, value, tone, icon: Icon }) => (
-        <div className="portfolio-metric" key={label}>
+      {metrics.map(({ label, value, tone, icon: Icon, hero }) => (
+        <div className={hero ? "portfolio-metric portfolio-metric--hero" : "portfolio-metric"} key={label}>
           <Icon size={15} />
           <span>{label}</span>
           <strong className={tone ? `text-${tone}` : ""}>{value}</strong>
@@ -301,13 +305,34 @@ export function PositionList({
   onSelect: (assetId: string) => void;
   localCostByAsset?: Record<string, number>;
 }) {
+  const allocated = positions.flatMap((position, index) => {
+    const percent = formatAllocation(position.allocation);
+    if (percent === null || percent <= 0) return [];
+    return [{
+      position,
+      percent,
+      color: position.assetColor || ALLOCATION_COLORS[index % ALLOCATION_COLORS.length],
+    }];
+  });
+
   return (
     <Card className="position-list-panel">
       <CardHeader>
-        <CardTitle>Posiciones</CardTitle>
-        <p className="panel-caption">Tarjetas por activo con datos reales sincronizados desde Coinbase</p>
+        <CardTitle>Mis posiciones</CardTitle>
+        <p className="panel-caption">Activos sincronizados desde Coinbase con métricas en tiempo real</p>
       </CardHeader>
       <CardContent>
+        {allocated.length > 0 && (
+          <div className="allocation-bar mis-posiciones-bar" aria-label="Distribución de cartera">
+            {allocated.map(({ position, percent, color }) => {
+              const style: AllocationStyle = {
+                "--allocation-width": `${percent}%`,
+                "--allocation-color": color,
+              };
+              return <span key={position.accountUuid || position.asset} style={style} title={`${position.asset} ${percent.toFixed(2)}%`} />;
+            })}
+          </div>
+        )}
         <div className="position-card-grid">
           {positions.map((position) => {
             const asset = assets.find((item) => item.symbol === position.asset || item.id === position.asset);

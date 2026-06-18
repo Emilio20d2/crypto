@@ -30,7 +30,7 @@
 
   /* ── Surfaces & background ── */
   --bg-app: #edf0f8;
-  --bg-sidebar: #1a1f2e;
+  --bg-sidebar: #1e2840;
   --bg-surface: #ffffff;
   --bg-surface-muted: #f7f9fc;
   --bg-surface-raised: #ffffff;
@@ -987,9 +987,8 @@ dd {
   color: var(--text-secondary);
   font-size: 11.5px;
   font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
   letter-spacing: 0.01em;
 }
 
@@ -998,9 +997,12 @@ dd {
   font-size: 18px;
   font-weight: 700;
   letter-spacing: -0.02em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.portfolio-metric--hero {
+  grid-column: 1 / -1;
 }
 
 .portfolio-layout-grid {
@@ -1019,6 +1021,10 @@ dd {
   border-radius: 999px;
   background: #eef2f7;
   overflow: clip;
+}
+
+.mis-posiciones-bar {
+  margin-bottom: var(--panel-gap);
 }
 
 .allocation-bar span {
@@ -3519,6 +3525,18 @@ dd {
     grid-template-columns: 1fr 1fr;
   }
 
+  .portfolio-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .portfolio-metric--hero {
+    padding: 20px;
+  }
+
+  .portfolio-metric--hero strong {
+    font-size: 24px;
+  }
+
   .portfolio-chart-panel {
     min-height: auto;
   }
@@ -3638,6 +3656,15 @@ dd {
     padding: 14px;
   }
 
+  .portfolio-metric--hero {
+    min-height: auto;
+    padding: 18px;
+  }
+
+  .portfolio-metric--hero strong {
+    font-size: 20px;
+  }
+
   /* 2 columns get too narrow for labels like "Dominancia BTC" below 430px —
      one column per stat reads cleanly instead of wrapping mid-word. */
   .global-metrics-card .stats-list {
@@ -3660,8 +3687,13 @@ dd {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  /* stack Fear & Greed + Global Metrics + Top Assets to 1 column on phones */
   .market-macro-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
+  }
+
+  .market-macro-grid > *:last-child {
+    grid-column: auto;
   }
 
   .market-price-block strong,

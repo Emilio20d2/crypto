@@ -375,7 +375,7 @@ describe("Cartera Coinbase", () => {
     renderWithQuery(<Portfolio />);
 
     await waitFor(() => {
-      expect(screen.getByText("Posiciones")).toBeInTheDocument();
+      expect(screen.getByText("Mis posiciones")).toBeInTheDocument();
     });
     expect(screen.queryByText("EURC")).not.toBeInTheDocument();
   });

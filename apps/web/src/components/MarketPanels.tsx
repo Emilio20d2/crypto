@@ -337,7 +337,7 @@ export function GlobalMetricsCard({
           </div>
           <div>
             <dt>Tendencia 24h</dt>
-            <dd className={metrics?.marketCapChangePercentage24h != null && metrics.marketCapChangePercentage24h < 0 ? "text-negative" : "text-positive"}>
+            <dd className={metrics?.marketCapChangePercentage24h != null ? (metrics.marketCapChangePercentage24h < 0 ? "text-negative" : "text-positive") : ""}>
               {loading ? "Cargando..." : metrics?.marketCapChangePercentage24h != null
                 ? `${metrics.marketCapChangePercentage24h >= 0 ? "+" : ""}${metrics.marketCapChangePercentage24h.toFixed(2)}%`
                 : "No disponible"}
