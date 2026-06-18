@@ -1005,6 +1005,21 @@ dd {
   grid-column: 1 / -1;
 }
 
+.portfolio-metric--hero strong {
+  font-size: 28px;
+  letter-spacing: -0.03em;
+}
+
+/* Sub-line inside hero card (e.g. variation 24h below the balance) */
+.portfolio-metric-sub {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  margin-top: -2px;
+}
+
 .portfolio-layout-grid {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(280px, 0.85fr);
@@ -1078,7 +1093,7 @@ dd {
 .allocation-pnl {
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
 }
 
 .allocation-item em {
@@ -1108,7 +1123,7 @@ dd {
 
 .position-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
   gap: var(--panel-gap);
 }
 
@@ -1147,11 +1162,13 @@ dd {
   display: grid;
   gap: 2px;
   text-align: right;
-  white-space: nowrap;
+  min-width: 0;
 }
 
 .position-card-value strong {
   font-size: 17px;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .position-card-value small,
@@ -1429,12 +1446,15 @@ dd {
 .sync-grid dt {
   color: var(--text-secondary);
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .stats-list dd,
 .sync-grid dd {
   text-align: right;
   font-weight: 650;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 .market-workbench {
@@ -1633,9 +1653,8 @@ dd {
 .market-price-block strong,
 .asset-detail-price strong {
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
   font-size: clamp(22px, 2vw, 26px);
 }
 
@@ -3534,7 +3553,7 @@ dd {
   }
 
   .portfolio-metric--hero strong {
-    font-size: 24px;
+    font-size: 22px;
   }
 
   .portfolio-chart-panel {

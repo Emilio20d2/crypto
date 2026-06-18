@@ -96,17 +96,22 @@ export function PortfolioMetrics({
   variation24hPercent?: number | null;
   positionsCount: number;
 }) {
-  const variationLabel =
-    variation24h !== null && variation24h !== undefined
-      ? `${formatMoneyCompact(variation24h)} · ${formatPercentPoints(variation24hPercent, "0,00%")}`
-      : "En cálculo";
-  const metrics = [
-    { label: "Valor total", value: formatMoney(totalBalance, "En cálculo"), icon: Wallet, hero: true },
-    { label: "Beneficio / Pérdida", value: formatMoneyCompact(performance), tone: performance && performance < 0 ? "negative" : "positive", icon: TrendingUp },
+  const variationTone = variation24h != null && variation24h < 0 ? "text-negative" : "text-positive";
+  const variationSub = variation24h != null
+    ? `${formatMoneyCompact(variation24h)} · ${formatPercentPoints(variation24hPercent, "—")} (24 h)`
+    : null;
+
+  const secondaryMetrics = [
+    {
+      label: "Beneficio / Pérdida",
+      value: formatMoneyCompact(performance),
+      tone: performance != null && performance < 0 ? "negative" : "positive",
+      icon: TrendingUp,
+    },
     {
       label: "Variación 24 h",
-      value: variationLabel,
-      tone: variation24h && variation24h < 0 ? "negative" : "positive",
+      value: formatPercentPoints(variation24hPercent, "En cálculo"),
+      tone: variation24h != null && variation24h < 0 ? "negative" : "positive",
       icon: TrendingUp,
     },
     { label: "Total invertido", value: formatMoneyCompact(totalInvested), icon: Database },
@@ -115,8 +120,19 @@ export function PortfolioMetrics({
 
   return (
     <section className="portfolio-metrics" aria-label="Resumen patrimonial">
-      {metrics.map(({ label, value, tone, icon: Icon, hero }) => (
-        <div className={hero ? "portfolio-metric portfolio-metric--hero" : "portfolio-metric"} key={label}>
+      {/* Hero card — full-width, unabridged balance */}
+      <div className="portfolio-metric portfolio-metric--hero">
+        <Wallet size={15} />
+        <span>Valor total</span>
+        <strong>{formatMoney(totalBalance, "En cálculo")}</strong>
+        {variationSub !== null && (
+          <small className={`portfolio-metric-sub ${variationTone}`}>{variationSub}</small>
+        )}
+      </div>
+
+      {/* Secondary metrics — 2-col grid, compact format */}
+      {secondaryMetrics.map(({ label, value, tone, icon: Icon }) => (
+        <div className="portfolio-metric" key={label}>
           <Icon size={15} />
           <span>{label}</span>
           <strong className={tone ? `text-${tone}` : ""}>{value}</strong>
