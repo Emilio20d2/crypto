@@ -153,7 +153,8 @@ export const UpdateInvestmentCycleSchema = z.object({
 });
 
 export const InvestmentAssetAllocationTypeSchema = z.enum(["percentage", "amount"]);
-export const InvestmentAssetStatusSchema = z.enum(["active", "paused", "closed"]);
+export const InvestmentAssetStatusSchema = z.enum(["active", "paused", "closed", "goal_reached"]);
+export const GoalTypeSchema = z.enum(["quantity", "value", "portfolio_percentage"]);
 
 export const InvestmentAssetSchema = z.object({
   id: z.string().min(1),
@@ -172,6 +173,9 @@ export const InvestmentAssetSchema = z.object({
   status: InvestmentAssetStatusSchema,
   isActive: z.boolean(),
   notes: z.string().nullable().optional(),
+  goalReachedAt: TimestampSchema.nullable().optional(),
+  goalReachedValue: z.number().nullable().optional(),
+  goalReachedType: GoalTypeSchema.nullable().optional(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema
 });
@@ -215,6 +219,17 @@ export const UpdateInvestmentAssetSchema = z.object({
 export const InvestmentAssetStateChangeSchema = z.object({
   effectiveDate: TimestampSchema.optional(),
   notes: OptionalTextSchema
+});
+
+export const MarkGoalReachedInputSchema = z.object({
+  effectiveDate: TimestampSchema,
+  observedValue: z.number(),
+  goalType: GoalTypeSchema,
+  redistribution: z.array(z.object({
+    investmentAssetId: z.string().min(1),
+    newAllocationValue: z.number().nonnegative(),
+    newAllocationPercentage: z.number().nonnegative().max(100).nullable(),
+  })).optional(),
 });
 
 export const StrategyRevisionSchema = z.object({
@@ -428,6 +443,8 @@ export type CreateInvestmentAssetInput = z.infer<typeof CreateInvestmentAssetSch
 export type UpdateInvestmentAssetInput = z.infer<typeof UpdateInvestmentAssetSchema>;
 export type InvestmentAssetStateChangeInput = z.infer<typeof InvestmentAssetStateChangeSchema>;
 export type InvestmentAssetStatus = z.infer<typeof InvestmentAssetStatusSchema>;
+export type GoalType = z.infer<typeof GoalTypeSchema>;
+export type MarkGoalReachedInput = z.infer<typeof MarkGoalReachedInputSchema>;
 export type StrategyRevision = z.infer<typeof StrategyRevisionSchema>;
 export type CreateStrategyRevisionInput = z.infer<typeof CreateStrategyRevisionSchema>;
 export type TreasuryAccountType = z.infer<typeof TreasuryAccountTypeSchema>;
@@ -488,13 +505,53 @@ export const UpdateContributionScheduleSchema = z.object({
   notes: OptionalTextSchema
 });
 
+export const ContributionMonthlyStatusEnum = z.enum([
+  "prevista", "pendiente", "parcial", "cumplida", "superada", "omitida", "cancelada"
+]);
+
+export const ContributionMonthlySummarySchema = z.object({
+  yearMonth: z.string(),
+  year: z.number().int(),
+  month: z.number().int().min(1).max(12),
+  cycleId: z.string(),
+  plannedAmountEur: z.number(),
+  actualAmountEur: z.number(),
+  scheduledPortionEur: z.number(),
+  extraordinaryAmountEur: z.number(),
+  deficitAmountEur: z.number(),
+  status: ContributionMonthlyStatusEnum,
+  entryCount: z.number().int(),
+});
+
+export const CycleContributionAggregatesSchema = z.object({
+  cycleId: z.string(),
+  totalPlannedEur: z.number(),
+  totalActualEur: z.number(),
+  totalScheduledPortionEur: z.number(),
+  totalExtraordinaryEur: z.number(),
+  totalDeficitEur: z.number(),
+  compliancePercentage: z.number().nullable(),
+  monthsCumplida: z.number().int(),
+  monthsParcial: z.number().int(),
+  monthsOmitida: z.number().int(),
+  monthsSuperada: z.number().int(),
+  lastContributionDate: TimestampSchema.nullable(),
+  nextScheduledDate: TimestampSchema.nullable(),
+});
+
 export type ContributionType = z.infer<typeof ContributionTypeEnum>;
 export type ContributionStatus = z.infer<typeof ContributionStatusEnum>;
+export type ContributionMonthlyStatus = z.infer<typeof ContributionMonthlyStatusEnum>;
+export type ContributionMonthlySummary = z.infer<typeof ContributionMonthlySummarySchema>;
+export type CycleContributionAggregates = z.infer<typeof CycleContributionAggregatesSchema>;
 export type ContributionSchedule = z.infer<typeof ContributionScheduleSchema>;
 export type CreateContributionScheduleInput = z.infer<typeof CreateContributionScheduleSchema>;
 export type UpdateContributionScheduleInput = z.infer<typeof UpdateContributionScheduleSchema>;
 
 // --- ASSET SUBSTITUTIONS ---
+
+export const SubstitutionStatusEnum = z.enum(["borrador", "programada", "aplicada", "cancelada"]);
+export const AllocationTransferModeEnum = z.enum(["full", "custom", "pending"]);
 
 export const AssetSubstitutionSchema = z.object({
   id: z.string().min(1),
@@ -504,6 +561,12 @@ export const AssetSubstitutionSchema = z.object({
   fromInvestmentAssetId: z.string().nullable(),
   toInvestmentAssetId: z.string().nullable(),
   effectiveDate: TimestampSchema,
+  status: SubstitutionStatusEnum,
+  allocationTransferMode: AllocationTransferModeEnum.nullable(),
+  allocationTransferPercentage: z.number().nullable(),
+  allocationTransferAmount: z.number().nullable(),
+  appliedAt: TimestampSchema.nullable(),
+  revisionId: z.string().nullable(),
   reason: z.string().min(1),
   notes: z.string().nullable().optional(),
   createdAt: TimestampSchema
@@ -515,12 +578,30 @@ export const CreateAssetSubstitutionSchema = z.object({
   toAssetId: z.string().nullable().optional(),
   fromInvestmentAssetId: z.string().nullable().optional(),
   effectiveDate: TimestampSchema,
+  status: SubstitutionStatusEnum.optional(),
+  allocationTransferMode: AllocationTransferModeEnum.nullable().optional(),
+  allocationTransferPercentage: z.number().nonnegative().max(100).nullable().optional(),
+  allocationTransferAmount: z.number().nonnegative().nullable().optional(),
   reason: z.string().min(1),
   notes: OptionalTextSchema
 });
 
+export const UpdateAssetSubstitutionSchema = z.object({
+  toAssetId: z.string().nullable().optional(),
+  effectiveDate: TimestampSchema.optional(),
+  status: SubstitutionStatusEnum.optional(),
+  allocationTransferMode: AllocationTransferModeEnum.nullable().optional(),
+  allocationTransferPercentage: z.number().nonnegative().max(100).nullable().optional(),
+  allocationTransferAmount: z.number().nonnegative().nullable().optional(),
+  reason: z.string().min(1).optional(),
+  notes: OptionalTextSchema
+});
+
+export type SubstitutionStatus = z.infer<typeof SubstitutionStatusEnum>;
+export type AllocationTransferMode = z.infer<typeof AllocationTransferModeEnum>;
 export type AssetSubstitution = z.infer<typeof AssetSubstitutionSchema>;
 export type CreateAssetSubstitutionInput = z.infer<typeof CreateAssetSubstitutionSchema>;
+export type UpdateAssetSubstitutionInput = z.infer<typeof UpdateAssetSubstitutionSchema>;
 export type CycleGoal = z.infer<typeof CycleGoalEnum>;
 export type CycleRisk = z.infer<typeof CycleRiskEnum>;
 
@@ -701,9 +782,184 @@ export type SmartBuyRecommendation = z.infer<typeof SmartBuyRecommendationSchema
 export const CycleRebuyTierSchema = z.object({
   id: z.string(),
   cycleId: z.string(),
+  assetId: z.string().nullable(),
+  name: z.string().nullable(),
   drawdownPercentage: z.number(),
   usagePercentage: z.number(),
+  priority: z.number().int().nullable(),
+  status: z.string().nullable(),
+  effectiveDate: TimestampSchema.nullable(),
+  notes: z.string().nullable(),
+  referenceType: z.string().nullable(),
+  referenceValue: z.number().nullable(),
+  referenceDate: TimestampSchema.nullable(),
+  lastTriggeredAt: TimestampSchema.nullable(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 });
 export type CycleRebuyTier = z.infer<typeof CycleRebuyTierSchema>;
+
+// --- G-B2 — REGLAS DE VENTA PARCIAL ---
+
+export const PartialSaleConditionTypeEnum = z.enum([
+  "price_target",
+  "cost_multiple",
+  "gain_percentage",
+  "market_phase",
+  "euphoria",
+  "combined",
+]);
+export type PartialSaleConditionType = z.infer<typeof PartialSaleConditionTypeEnum>;
+
+export const PartialSaleRuleStatusEnum = z.enum([
+  "borrador", "activa", "activada", "preparada", "ejecutada", "pausada", "cancelada"
+]);
+export type PartialSaleRuleStatus = z.infer<typeof PartialSaleRuleStatusEnum>;
+
+export const PartialSaleRuleSchema = z.object({
+  id: z.string(),
+  planId: z.string().nullable(),
+  cycleId: z.string(),
+  investmentAssetId: z.string().nullable(),
+  assetId: z.string(),
+  name: z.string(),
+  conditionType: PartialSaleConditionTypeEnum,
+  conditionValue: z.number().nullable(),
+  conditionValue2: z.number().nullable(),
+  sellPercentage: z.number().min(0.01).max(100),
+  priority: z.number().int(),
+  status: PartialSaleRuleStatusEnum,
+  effectiveDate: TimestampSchema.nullable(),
+  notes: z.string().nullable(),
+  lastTriggeredAt: TimestampSchema.nullable(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+});
+export type PartialSaleRule = z.infer<typeof PartialSaleRuleSchema>;
+
+export const CreatePartialSaleRuleSchema = z.object({
+  planId: z.string().nullable().optional(),
+  cycleId: z.string(),
+  investmentAssetId: z.string().nullable().optional(),
+  assetId: z.string(),
+  name: z.string().min(1),
+  conditionType: PartialSaleConditionTypeEnum,
+  conditionValue: z.number().nullable().optional(),
+  conditionValue2: z.number().nullable().optional(),
+  sellPercentage: z.number().min(0.01).max(100),
+  priority: z.number().int().min(0).optional(),
+  status: PartialSaleRuleStatusEnum.optional(),
+  effectiveDate: TimestampSchema.nullable().optional(),
+  notes: z.string().nullable().optional(),
+});
+export type CreatePartialSaleRuleInput = z.infer<typeof CreatePartialSaleRuleSchema>;
+
+export const UpdatePartialSaleRuleSchema = CreatePartialSaleRuleSchema.partial().omit({ cycleId: true, assetId: true });
+export type UpdatePartialSaleRuleInput = z.infer<typeof UpdatePartialSaleRuleSchema>;
+
+// G-B2 — EVALUACIÓN DE REGLAS
+
+export const PartialSaleEvaluationSchema = z.object({
+  rule: PartialSaleRuleSchema,
+  isTriggered: z.boolean(),
+  triggeredReason: z.string().nullable(),
+  notTriggeredReason: z.string().nullable(),
+  preview: z.object({
+    quantityToSell: z.number(),
+    percentageOfPosition: z.number(),
+    referencePrice: z.number(),
+    grossProceedsEur: z.number(),
+    costBasisProportion: z.number(),
+    estimatedGainEur: z.number(),
+    estimatedTaxEur: z.number(),
+    fiscalReserveEur: z.number(),
+    netEurcEur: z.number(),
+    remainingBalance: z.number(),
+    remainingValueEur: z.number(),
+  }).nullable(),
+});
+export type PartialSaleEvaluation = z.infer<typeof PartialSaleEvaluationSchema>;
+
+// G-B2 — MONITOREO DEL PLAN
+
+export const PlanAssetStatusEnum = z.enum([
+  "excelente", "buena", "neutral", "vigilancia", "deterioro", "critica", "candidato_sustitucion"
+]);
+export type PlanAssetStatus = z.infer<typeof PlanAssetStatusEnum>;
+
+export const PlanAlertTypeEnum = z.enum([
+  "aportacion_pendiente",
+  "deficit",
+  "objetivo_proximo",
+  "objetivo_alcanzado",
+  "activo_infraponderado",
+  "activo_sobreponderado",
+  "venta_parcial_activada",
+  "compra_caida_activada",
+  "sustitucion_pendiente",
+  "etapa_proxima_fin",
+  "activo_vigilancia",
+  "recomendacion_compra_inteligente",
+]);
+export type PlanAlertType = z.infer<typeof PlanAlertTypeEnum>;
+
+export const PlanAlertPriorityEnum = z.enum(["informativa", "baja", "media", "alta", "critica"]);
+export type PlanAlertPriority = z.infer<typeof PlanAlertPriorityEnum>;
+
+export const PlanAlertSchema = z.object({
+  id: z.string(),
+  type: PlanAlertTypeEnum,
+  priority: PlanAlertPriorityEnum,
+  assetId: z.string().nullable(),
+  cycleId: z.string(),
+  title: z.string(),
+  message: z.string(),
+  dataUsed: z.record(z.unknown()),
+  actionAvailable: z.string().nullable(),
+  generatedAt: TimestampSchema,
+});
+export type PlanAlert = z.infer<typeof PlanAlertSchema>;
+
+export const AssetPlanStatusSchema = z.object({
+  assetId: z.string(),
+  cycleId: z.string(),
+  investmentAssetId: z.string().nullable(),
+  targetAllocationPct: z.number().nullable(),
+  currentValueEur: z.number().nullable(),
+  targetValueEur: z.number().nullable(),
+  deviationEur: z.number().nullable(),
+  deviationPct: z.number().nullable(),
+  isUnderweight: z.boolean().nullable(),
+  goalProgress: z.number().nullable(),
+  healthStatus: PlanAssetStatusEnum,
+  healthReason: z.string(),
+  activeRules: z.number().int(),
+  triggeredRules: z.number().int(),
+  lastReviewDate: TimestampSchema.nullable(),
+  nextAction: z.string().nullable(),
+});
+export type AssetPlanStatus = z.infer<typeof AssetPlanStatusSchema>;
+
+export const PlanMonitoringSummarySchema = z.object({
+  cycleId: z.string(),
+  planId: z.string().nullable(),
+  activeAssets: z.number().int(),
+  goalsReached: z.number().int(),
+  goalsNearby: z.number().int(),
+  triggeredSaleRules: z.number().int(),
+  triggeredRebuyRules: z.number().int(),
+  pendingSubstitutions: z.number().int(),
+  compliancePercentage: z.number().nullable(),
+  deficitEur: z.number(),
+  eurcAvailable: z.number(),
+  fiscalReserve: z.number(),
+  alerts: z.array(PlanAlertSchema),
+  assetStatuses: z.array(AssetPlanStatusSchema),
+  generatedAt: TimestampSchema,
+});
+export type PlanMonitoringSummary = z.infer<typeof PlanMonitoringSummarySchema>;
+
+// G-B2 — MODO COMPRA INTELIGENTE
+
+export const SmartBuyModeEnum = z.enum(["plan", "equilibrar", "oportunidad", "mixto"]);
+export type SmartBuyMode = z.infer<typeof SmartBuyModeEnum>;

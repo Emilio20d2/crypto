@@ -1,0 +1,139 @@
+import { computeTaxOnGain } from "./tax-simulator";
+import type { SnapshotSaleRule, ProjectionEvent, ProjectionLot, FiscalConfig } from "./types";
+
+export interface SaleSimulationResult {
+  ruleId: string;
+  assetId: string;
+  triggered: boolean;
+  quantitySold: number;
+  grossEur: number;
+  gainEur: number;
+  taxEur: number;
+  fiscalReserveEur: number;
+  netEurcEur: number;
+  event: ProjectionEvent | null;
+  lotsConsumed: Array<{ lotId: string; quantity: number; costPerUnitEur: number }>;
+}
+
+// Evaluate a sale rule against current price and position.
+// Returns whether the rule would trigger at this price.
+function ruleConditionMet(
+  rule: SnapshotSaleRule,
+  currentPriceEur: number,
+  avgCostEur: number | null,
+): boolean {
+  switch (rule.conditionType) {
+    case "price_target":
+      return rule.conditionValue != null && currentPriceEur >= rule.conditionValue;
+    case "cost_multiple":
+      return (
+        rule.conditionValue != null &&
+        avgCostEur != null &&
+        avgCostEur > 0 &&
+        currentPriceEur >= avgCostEur * rule.conditionValue
+      );
+    case "gain_percentage":
+      return (
+        rule.conditionValue != null &&
+        avgCostEur != null &&
+        avgCostEur > 0 &&
+        ((currentPriceEur - avgCostEur) / avgCostEur) * 100 >= rule.conditionValue
+      );
+    case "euphoria":
+      return false; // Not evaluable without live market data
+    default:
+      return false;
+  }
+}
+
+export function simulateSaleRules(
+  cycleId: string,
+  periodDate: number,
+  rules: SnapshotSaleRule[],
+  balances: Record<string, number>,
+  avgCosts: Record<string, number | null>,
+  prices: Record<string, number | null>,
+  fifoLots: ProjectionLot[],
+  fiscalConfig: FiscalConfig,
+  triggeredRuleIds: Set<string>,
+): SaleSimulationResult[] {
+  const results: SaleSimulationResult[] = [];
+
+  const activeRules = rules
+    .filter(r => r.status === "activa" && r.cycleId === cycleId)
+    .filter(r => !triggeredRuleIds.has(r.id))
+    .sort((a, b) => b.priority - a.priority);
+
+  for (const rule of activeRules) {
+    const balance = balances[rule.assetId] ?? 0;
+    const price = prices[rule.assetId] ?? null;
+    const avgCost = avgCosts[rule.assetId] ?? null;
+
+    if (balance <= 0 || price == null || price <= 0) {
+      results.push({ ruleId: rule.id, assetId: rule.assetId, triggered: false, quantitySold: 0, grossEur: 0, gainEur: 0, taxEur: 0, fiscalReserveEur: 0, netEurcEur: 0, event: null, lotsConsumed: [] });
+      continue;
+    }
+
+    if (!ruleConditionMet(rule, price, avgCost)) {
+      results.push({ ruleId: rule.id, assetId: rule.assetId, triggered: false, quantitySold: 0, grossEur: 0, gainEur: 0, taxEur: 0, fiscalReserveEur: 0, netEurcEur: 0, event: null, lotsConsumed: [] });
+      continue;
+    }
+
+    const sellPct = Math.min(100, Math.max(0, rule.sellPercentage)) / 100;
+    const quantitySold = balance * sellPct;
+    const grossEur = quantitySold * price;
+
+    // FIFO: consume lots in order for this asset
+    const assetLots = fifoLots
+      .filter(l => l.assetId === rule.assetId && l.remaining > 0)
+      .sort((a, b) => a.acquiredAt - b.acquiredAt);
+
+    let toSell = quantitySold;
+    let costBasis = 0;
+    const lotsConsumed: Array<{ lotId: string; quantity: number; costPerUnitEur: number }> = [];
+
+    for (const lot of assetLots) {
+      if (toSell <= 0) break;
+      const fromLot = Math.min(toSell, lot.remaining);
+      costBasis += fromLot * lot.costPerUnitEur;
+      lotsConsumed.push({ lotId: lot.lotId, quantity: fromLot, costPerUnitEur: lot.costPerUnitEur });
+      toSell -= fromLot;
+    }
+
+    // If no FIFO lots (historical position), fall back to avgCost
+    if (lotsConsumed.length === 0 && avgCost != null) {
+      costBasis = quantitySold * avgCost;
+    }
+
+    const gainEur = Math.max(0, grossEur - costBasis);
+    const taxEur = computeTaxOnGain(gainEur, fiscalConfig);
+    const netEurcEur = Math.max(0, grossEur - taxEur);
+
+    results.push({
+      ruleId: rule.id,
+      assetId: rule.assetId,
+      triggered: true,
+      quantitySold,
+      grossEur: Math.round(grossEur * 100) / 100,
+      gainEur: Math.round(gainEur * 100) / 100,
+      taxEur: Math.round(taxEur * 100) / 100,
+      fiscalReserveEur: Math.round(taxEur * 100) / 100,
+      netEurcEur: Math.round(netEurcEur * 100) / 100,
+      lotsConsumed,
+      event: {
+        date: periodDate,
+        type: "partial_sale",
+        cycleId,
+        assetId: rule.assetId,
+        amountEur: grossEur,
+        quantity: quantitySold,
+        priceEur: price,
+        gainEur,
+        taxEur,
+        description: `Venta parcial ${rule.sellPercentage}% de ${rule.assetId} — ${rule.name}`,
+      },
+    });
+  }
+
+  return results;
+}

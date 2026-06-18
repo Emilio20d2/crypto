@@ -3857,4 +3857,623 @@ dd {
   }
 }
 
+/* ─── Plan — Configurar (lista de etapas) ─── */
+
+.plan-etapas {
+  display: flex;
+  flex-direction: column;
+  gap: var(--panel-gap);
+}
+
+.plan-etapas-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.plan-etapas-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 2px;
+}
+
+.cycle-summary-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cycle-summary-card {
+  padding: 14px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.cycle-summary-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.cycle-summary-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.cycle-summary-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.cycle-summary-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.cycle-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.cycle-summary-grid dt {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin: 0 0 2px;
+}
+
+.cycle-summary-grid dd {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.cycle-summary-warning {
+  font-size: 12px;
+  color: var(--color-warning);
+  margin: 8px 0 0;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  background: #fef9ec;
+}
+
+/* ─── Plan — Detalle de etapa ─── */
+
+.plan-etapa-detalle {
+  display: flex;
+  flex-direction: column;
+  gap: var(--panel-gap);
+}
+
+.plan-etapa-detalle-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-bottom: 4px;
+}
+
+.plan-etapa-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: none;
+}
+
+.plan-etapa-back:hover {
+  color: var(--text-primary);
+}
+
+.plan-etapa-detalle-header h2 {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+@media (max-width: 834px) {
+  .cycle-summary-header {
+    flex-direction: column;
+  }
+
+  .cycle-summary-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .cycle-summary-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ─── Plan — Monedas de la etapa ─── */
+
+.asset-add-form {
+  padding: 14px;
+  margin-bottom: 12px;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.asset-add-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 10px;
+}
+
+.asset-plan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.asset-plan-card {
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.asset-plan-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.asset-plan-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.asset-plan-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.asset-plan-meta {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 1px;
+}
+
+.asset-plan-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.asset-plan-details {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 0 0 4px;
+}
+
+.asset-plan-details dt {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin: 0 0 1px;
+}
+
+.asset-plan-details dd {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.asset-plan-target-row {
+  flex-basis: 100%;
+}
+
+.asset-edit-form {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+/* ─── Plan — Goal progress ─── */
+
+.asset-goal-progress {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: var(--color-info-soft, #f0f9ff);
+  border-radius: 6px;
+  border: 1px solid #c4e9fb;
+}
+
+.asset-goal-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.asset-goal-bar-track {
+  flex: 0 0 80px;
+  height: 6px;
+  background: #d0e8f5;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.asset-goal-bar-fill {
+  height: 100%;
+  background: #0284c7;
+  border-radius: 3px;
+  transition: width 0.3s;
+}
+
+.asset-goal-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.asset-goal-label.asset-goal-reached {
+  color: #116b34;
+  font-weight: 600;
+}
+
+.asset-goal-released {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: #116b34;
+}
+
+.asset-goal-reached-section {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #eaf8ee;
+  border: 1px solid #bdecc8;
+  border-radius: 6px;
+}
+
+.asset-goal-reached-msg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #116b34;
+}
+
+.asset-goal-released-msg {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* ─── Plan — Reparto mensual ─── */
+
+.reparto-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.reparto-row {
+  display: grid;
+  grid-template-columns: 6ch 1fr auto 1fr;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.reparto-symbol {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.reparto-alloc {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.reparto-arrow {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.reparto-monthly {
+  font-weight: 500;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.reparto-total {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-color);
+}
+
+.reparto-total.reparto-ok .reparto-alloc {
+  color: var(--color-success);
+  font-weight: 600;
+}
+
+.reparto-total.reparto-over .reparto-alloc {
+  color: var(--color-warning);
+  font-weight: 600;
+}
+
+.reparto-libre {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* ─── Plan — Cambios del plan ─── */
+
+.revision-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.revision-item {
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+}
+
+.revision-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.revision-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.revision-date {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.revision-notes {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 4px 0 0;
+  line-height: 1.5;
+}
+
+/* ─── Responsive — Monedas y Reparto ─── */
+
+@media (max-width: 834px) {
+  .asset-plan-header {
+    flex-direction: column;
+  }
+
+  .asset-plan-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .reparto-row {
+    grid-template-columns: 6ch 1fr auto 1fr;
+    gap: 4px;
+    font-size: 12px;
+  }
+}
+
+/* ─── PlanAportaciones ─── */
+
+.plan-aportaciones {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.plan-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.plan-section-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.plan-section-loading {
+  padding: 24px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.plan-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.plan-metric-card {
+  background: var(--bg-surface-muted);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.plan-metric-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.plan-metric-value {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.plan-metric-sub {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+/* ── Contribution history table ── */
+
+.contribution-history {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.contribution-month-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1fr;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-color);
+  align-items: center;
+  font-size: 0.875rem;
+}
+
+.contribution-month-row:last-child {
+  border-bottom: none;
+}
+
+.contribution-month-header {
+  background: var(--bg-surface-muted);
+  font-weight: 600;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.contribution-month-row:not(.contribution-month-header):hover {
+  background: var(--bg-row-hover);
+}
+
+.contribution-month-name {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+/* ── Responsive ── */
+
+@media (max-width: 600px) {
+  .plan-metrics-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .contribution-month-row {
+    grid-template-columns: 1fr 1fr 1fr;
+    font-size: 0.8rem;
+  }
+
+  .contribution-month-col:nth-child(4),
+  .contribution-month-col:nth-child(5) {
+    display: none;
+  }
+}
+
+/* ─── Sustituciones ─── */
+
+.substitution-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.substitution-card {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  background: var(--bg-surface-muted);
+}
+
+.substitution-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.substitution-assets {
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.substitution-meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin: 0 0 4px;
+}
+
+.substitution-reason {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin: 0 0 4px;
+}
+
+.substitution-notes {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.substitution-applied {
+  font-size: 0.78rem;
+  color: var(--color-success-text);
+  margin: 4px 0 0;
+}
+
+/* ─── End Sustituciones ─── */
+
+/* ─── End PlanAportaciones ─── */
+
 /* ─── End Plan Module ─── */

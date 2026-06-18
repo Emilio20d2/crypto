@@ -37,10 +37,13 @@ import {
   CreateContributionScheduleSchema,
   UpdateContributionScheduleSchema,
   CreateAssetSubstitutionSchema,
+  UpdateAssetSubstitutionSchema,
+  ContributionMonthlySummarySchema,
+  CycleContributionAggregatesSchema,
   StrategicAlertSchema,
 } from "@crypto-control/core";
 import crypto from "crypto";
-import { eq, and, or, asc, desc, isNull } from "drizzle-orm";
+import { eq, and, or, asc, desc, isNull, inArray } from "drizzle-orm";
 import * as fs from "fs";
 import * as http from "http";
 
@@ -330,9 +333,12 @@ function setupIpcHandlers() {
     targetPortfolioPercentage: row.targetPortfolioPercentage,
     startDate: row.startDate,
     endDate: row.endDate,
-    status: row.status as "active" | "paused" | "closed",
+    status: row.status as "active" | "paused" | "closed" | "goal_reached",
     isActive: row.isActive === 1,
     notes: row.notes,
+    goalReachedAt: row.goalReachedAt ?? null,
+    goalReachedValue: row.goalReachedValue ?? null,
+    goalReachedType: (row.goalReachedType ?? null) as "quantity" | "value" | "portfolio_percentage" | null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   });
@@ -370,6 +376,12 @@ function setupIpcHandlers() {
     fromInvestmentAssetId: row.fromInvestmentAssetId ?? null,
     toInvestmentAssetId: row.toInvestmentAssetId ?? null,
     effectiveDate: row.effectiveDate,
+    status: (row.status ?? "aplicada") as "borrador" | "programada" | "aplicada" | "cancelada",
+    allocationTransferMode: (row.allocationTransferMode ?? null) as "full" | "custom" | "pending" | null,
+    allocationTransferPercentage: row.allocationTransferPercentage ?? null,
+    allocationTransferAmount: row.allocationTransferAmount ?? null,
+    appliedAt: row.appliedAt ?? null,
+    revisionId: row.revisionId ?? null,
     reason: row.reason,
     notes: row.notes ?? null,
     createdAt: row.createdAt,
@@ -1470,6 +1482,96 @@ function setupIpcHandlers() {
     return updateInvestmentAssetState(id, payload, "closed");
   }));
 
+  ipcMain.handle("investmentAssets:markGoalReached", withResult(async (_, id: string, payload: unknown) => {
+    const { MarkGoalReachedInputSchema } = await import("@crypto-control/core") as typeof import("@crypto-control/core");
+    const parsed = MarkGoalReachedInputSchema.safeParse(payload);
+    if (!parsed.success) throw new Error("Datos inválidos: " + parsed.error.message);
+    const data = parsed.data;
+
+    const db = getDb();
+    const assetRow = db.select().from(schema.investmentAssets).where(eq(schema.investmentAssets.id, id)).get();
+    if (!assetRow) throw new Error("Activo no encontrado");
+
+    const asset = mapInvestmentAsset(assetRow);
+    if (asset.targetAmount === null && asset.targetValueEur === null && asset.targetPortfolioPercentage === null) {
+      throw new Error("Este activo no tiene un objetivo configurado");
+    }
+
+    const cycleRow = db.select().from(schema.investmentCycles).where(eq(schema.investmentCycles.id, asset.cycleId)).get();
+    if (!cycleRow) throw new Error("Etapa no encontrada");
+
+    const now = Date.now();
+
+    db.update(schema.investmentAssets).set({
+      status: "goal_reached",
+      isActive: 0,
+      endDate: data.effectiveDate,
+      goalReachedAt: data.effectiveDate,
+      goalReachedValue: data.observedValue,
+      goalReachedType: data.goalType,
+      updatedAt: now,
+    }).where(eq(schema.investmentAssets.id, id)).run();
+
+    if (data.redistribution && data.redistribution.length > 0) {
+      for (const r of data.redistribution) {
+        db.update(schema.investmentAssets).set({
+          allocationValue: r.newAllocationValue,
+          allocationPercentage: r.newAllocationPercentage,
+          updatedAt: now,
+        }).where(eq(schema.investmentAssets.id, r.investmentAssetId)).run();
+      }
+    }
+
+    const { calculateReleasedAllocation, buildGoalReachedRevisionInput } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    const releasedAmountEur = calculateReleasedAllocation(asset, cycleRow.monthlyAmountEur);
+    const redistributions = (data.redistribution ?? []).map((r: { investmentAssetId: string; newAllocationValue: number; newAllocationPercentage: number | null }) => ({
+      investmentAssetId: r.investmentAssetId,
+      previousAllocationValue: 0,
+      previousAllocationPercentage: null,
+      newAllocationValue: r.newAllocationValue,
+      newAllocationPercentage: r.newAllocationPercentage,
+    }));
+    const revisionInput = buildGoalReachedRevisionInput(
+      asset,
+      data.goalType,
+      data.observedValue,
+      releasedAmountEur,
+      redistributions,
+      data.effectiveDate,
+    );
+
+    db.insert(schema.strategyRevisions).values({
+      id: crypto.randomUUID(),
+      cycleId: revisionInput.cycleId,
+      effectiveDate: revisionInput.effectiveDate,
+      title: revisionInput.title,
+      notes: revisionInput.notes,
+      changesJson: revisionInput.changesJson,
+      createdAt: now,
+    }).run();
+
+    const updated = db.select().from(schema.investmentAssets).where(eq(schema.investmentAssets.id, id)).get();
+    if (!updated) throw new Error("Error al recuperar el activo actualizado");
+    return mapInvestmentAsset(updated);
+  }));
+
+  ipcMain.handle("investmentAssets:reactivate", withResult(async (_, id: string) => {
+    const db = getDb();
+    const now = Date.now();
+    db.update(schema.investmentAssets).set({
+      status: "active",
+      isActive: 1,
+      endDate: null,
+      goalReachedAt: null,
+      goalReachedValue: null,
+      goalReachedType: null,
+      updatedAt: now,
+    }).where(eq(schema.investmentAssets.id, id)).run();
+    const updated = db.select().from(schema.investmentAssets).where(eq(schema.investmentAssets.id, id)).get();
+    if (!updated) throw new Error("Activo no encontrado");
+    return mapInvestmentAsset(updated);
+  }));
+
   ipcMain.handle("investmentAssets:delete", withResult(async (_, id: string) => {
     const db = getDb();
     db.delete(schema.investmentAssets).where(eq(schema.investmentAssets.id, id)).run();
@@ -2092,12 +2194,13 @@ function setupIpcHandlers() {
   }));
 
   // ── assetSubstitutions ───────────────────────────────────────────────────────
-  ipcMain.handle("assetSubstitutions:list", withResult(async (_, input?: { cycleId?: string; fromAssetId?: string }) => {
+  ipcMain.handle("assetSubstitutions:list", withResult(async (_, input?: { cycleId?: string; fromAssetId?: string; status?: string }) => {
     const db = getDb();
     let query = db.select().from(schema.assetSubstitutions).orderBy(asc(schema.assetSubstitutions.effectiveDate));
     const conditions = [];
     if (input?.cycleId)     conditions.push(eq(schema.assetSubstitutions.cycleId, input.cycleId));
     if (input?.fromAssetId) conditions.push(eq(schema.assetSubstitutions.fromAssetId, input.fromAssetId));
+    if (input?.status)      conditions.push(eq(schema.assetSubstitutions.status, input.status));
     const rows = conditions.length > 0
       ? query.where(and(...conditions)).all()
       : query.all();
@@ -2115,11 +2218,50 @@ function setupIpcHandlers() {
       fromInvestmentAssetId: data.fromInvestmentAssetId ?? null,
       toInvestmentAssetId: null,
       effectiveDate: data.effectiveDate,
+      status: data.status ?? "borrador",
+      allocationTransferMode: data.allocationTransferMode ?? null,
+      allocationTransferPercentage: data.allocationTransferPercentage ?? null,
+      allocationTransferAmount: data.allocationTransferAmount ?? null,
+      appliedAt: null,
+      revisionId: null,
       reason: data.reason,
       notes: data.notes ?? null,
       createdAt: Date.now(),
     }).run();
     return { id };
+  }));
+
+  ipcMain.handle("assetSubstitutions:update", withResult(async (_, id: string, payload) => {
+    const db = getDb();
+    const data = UpdateAssetSubstitutionSchema.parse(payload);
+    const row = db.select().from(schema.assetSubstitutions).where(eq(schema.assetSubstitutions.id, id)).get();
+    if (!row) throw new Error(`Sustitución ${id} no encontrada.`);
+    if (row.status === "aplicada" || row.status === "cancelada") {
+      throw new Error("No se puede editar una sustitución ya aplicada o cancelada.");
+    }
+    const update: Partial<typeof schema.assetSubstitutions.$inferInsert> = {};
+    if (data.toAssetId !== undefined)                   update.toAssetId = data.toAssetId ?? null;
+    if (data.effectiveDate !== undefined)               update.effectiveDate = data.effectiveDate;
+    if (data.status !== undefined)                      update.status = data.status;
+    if (data.allocationTransferMode !== undefined)      update.allocationTransferMode = data.allocationTransferMode ?? null;
+    if (data.allocationTransferPercentage !== undefined) update.allocationTransferPercentage = data.allocationTransferPercentage ?? null;
+    if (data.allocationTransferAmount !== undefined)    update.allocationTransferAmount = data.allocationTransferAmount ?? null;
+    if (data.reason !== undefined)                      update.reason = data.reason;
+    if (data.notes !== undefined)                       update.notes = data.notes ?? null;
+    db.update(schema.assetSubstitutions).set(update).where(eq(schema.assetSubstitutions.id, id)).run();
+    const updated = db.select().from(schema.assetSubstitutions).where(eq(schema.assetSubstitutions.id, id)).get()!;
+    return mapAssetSubstitution(updated);
+  }));
+
+  ipcMain.handle("assetSubstitutions:cancel", withResult(async (_, id: string) => {
+    const db = getDb();
+    const row = db.select().from(schema.assetSubstitutions).where(eq(schema.assetSubstitutions.id, id)).get();
+    if (!row) throw new Error(`Sustitución ${id} no encontrada.`);
+    if (row.status === "aplicada") throw new Error("No se puede cancelar una sustitución ya aplicada.");
+    if (row.status === "cancelada") throw new Error("La sustitución ya está cancelada.");
+    db.update(schema.assetSubstitutions).set({ status: "cancelada" }).where(eq(schema.assetSubstitutions.id, id)).run();
+    const updated = db.select().from(schema.assetSubstitutions).where(eq(schema.assetSubstitutions.id, id)).get()!;
+    return mapAssetSubstitution(updated);
   }));
 
   ipcMain.handle("assetSubstitutions:delete", withResult(async (_, id: string) => {
@@ -2190,6 +2332,164 @@ function setupIpcHandlers() {
     });
 
     return { fromInvestmentAssetId, toInvestmentAssetId };
+  }));
+
+  // Apply (nueva versión de execute con status tracking y revisión estratégica)
+  ipcMain.handle("assetSubstitutions:apply", withResult(async (_, id: string) => {
+    const db = getDb();
+    const sub = db.select().from(schema.assetSubstitutions).where(eq(schema.assetSubstitutions.id, id)).get();
+    if (!sub) throw new Error(`Sustitución ${id} no encontrada.`);
+    if (sub.status === "aplicada") throw new Error("La sustitución ya ha sido aplicada.");
+    if (sub.status === "cancelada") throw new Error("No se puede aplicar una sustitución cancelada.");
+
+    const fromAsset = db.select().from(schema.investmentAssets)
+      .where(and(
+        eq(schema.investmentAssets.cycleId, sub.cycleId),
+        eq(schema.investmentAssets.assetId, sub.fromAssetId),
+        eq(schema.investmentAssets.status, "active"),
+      ))
+      .orderBy(desc(schema.investmentAssets.startDate))
+      .limit(1)
+      .get();
+
+    const fromInvestmentAssetId = fromAsset?.id ?? null;
+    let toInvestmentAssetId: string | null = null;
+    const now = Date.now();
+    const revisionId = crypto.randomUUID();
+    const cycleRow = db.select().from(schema.investmentCycles).where(eq(schema.investmentCycles.id, sub.cycleId)).get();
+    const monthlyEur = cycleRow?.monthlyAmountEur ?? 0;
+
+    // Compute allocation to transfer
+    let transferredValue = fromAsset?.allocationValue ?? 0;
+    let transferredPct = fromAsset?.allocationPercentage ?? null;
+    let transferredFixed = fromAsset?.fixedAmountEur ?? null;
+
+    if (sub.allocationTransferMode === "custom") {
+      if (fromAsset?.allocationType === "percentage" && sub.allocationTransferPercentage !== null) {
+        transferredPct = sub.allocationTransferPercentage;
+        transferredValue = sub.allocationTransferPercentage;
+      } else if (fromAsset?.allocationType === "amount" && sub.allocationTransferAmount !== null) {
+        transferredFixed = sub.allocationTransferAmount;
+        transferredValue = sub.allocationTransferAmount;
+        transferredPct = monthlyEur > 0 ? (sub.allocationTransferAmount / monthlyEur) * 100 : null;
+      }
+    } else if (sub.allocationTransferMode === "pending") {
+      transferredValue = 0;
+      transferredPct = null;
+      transferredFixed = null;
+    }
+
+    const changesJson = JSON.stringify({
+      type: "asset_substitution",
+      substitutionId: sub.id,
+      fromAssetId: sub.fromAssetId,
+      toAssetId: sub.toAssetId,
+      effectiveDate: sub.effectiveDate,
+      allocationTransferMode: sub.allocationTransferMode ?? "full",
+      previousAllocationValue: fromAsset?.allocationValue ?? 0,
+      newAllocationValue: transferredValue,
+      reason: sub.reason,
+    });
+
+    db.transaction((tx) => {
+      if (fromAsset) {
+        tx.update(schema.investmentAssets)
+          .set({ status: "closed", isActive: 0, endDate: sub.effectiveDate, updatedAt: now })
+          .where(eq(schema.investmentAssets.id, fromAsset.id))
+          .run();
+      }
+
+      if (sub.toAssetId) {
+        const newId = crypto.randomUUID();
+        toInvestmentAssetId = newId;
+        tx.insert(schema.investmentAssets).values({
+          id: newId,
+          cycleId: sub.cycleId,
+          assetId: sub.toAssetId,
+          allocationType: fromAsset?.allocationType ?? "percentage",
+          allocationValue: transferredValue,
+          allocationPercentage: transferredPct,
+          fixedAmountEur: transferredFixed,
+          priority: fromAsset?.priority ?? 0,
+          targetAmount: null,
+          targetValueEur: null,
+          targetPortfolioPercentage: null,
+          startDate: sub.effectiveDate,
+          endDate: null,
+          status: "active",
+          isActive: 1,
+          notes: `Sustitución desde ${sub.fromAssetId}. ${sub.reason}`,
+          createdAt: now,
+          updatedAt: now,
+        }).run();
+      }
+
+      tx.insert(schema.strategyRevisions).values({
+        id: revisionId,
+        cycleId: sub.cycleId,
+        effectiveDate: sub.effectiveDate,
+        title: sub.toAssetId
+          ? `Sustitución: ${sub.fromAssetId} → ${sub.toAssetId}`
+          : `Retirada de activo: ${sub.fromAssetId}`,
+        notes: sub.notes ?? null,
+        changesJson,
+        createdAt: now,
+      }).run();
+
+      tx.update(schema.assetSubstitutions)
+        .set({
+          fromInvestmentAssetId: fromInvestmentAssetId ?? undefined,
+          toInvestmentAssetId: toInvestmentAssetId ?? undefined,
+          status: "aplicada",
+          appliedAt: now,
+          revisionId,
+        })
+        .where(eq(schema.assetSubstitutions.id, id))
+        .run();
+    });
+
+    return { fromInvestmentAssetId, toInvestmentAssetId };
+  }));
+
+  // Resumen mensual de aportaciones para un ciclo
+  ipcMain.handle("contributionSchedule:getMonthlySummary", withResult(async (_, input: { cycleId: string }) => {
+    const db = getDb();
+    const { buildContributionHistory, calculateCycleContributionAggregates } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+
+    const cycleRow = db.select().from(schema.investmentCycles).where(eq(schema.investmentCycles.id, input.cycleId)).get();
+    if (!cycleRow) throw new Error(`Ciclo ${input.cycleId} no encontrado.`);
+
+    const cycle = {
+      id: cycleRow.id,
+      startDate: cycleRow.startDate,
+      endDate: cycleRow.endDate ?? null,
+      monthlyAmountEur: cycleRow.monthlyAmountEur,
+    };
+
+    const rawEntries = db.select().from(schema.contributionSchedule)
+      .where(eq(schema.contributionSchedule.cycleId, input.cycleId))
+      .orderBy(asc(schema.contributionSchedule.plannedDate))
+      .all();
+
+    const entries = rawEntries.map(e => ({
+      id: e.id,
+      cycleId: e.cycleId,
+      type: e.type as "periodica" | "extraordinaria",
+      plannedDate: e.plannedDate,
+      amountEur: e.amountEur,
+      status: e.status as "pendiente" | "ejecutada" | "cancelada",
+      executedAt: e.executedAt ?? null,
+      notes: e.notes ?? null,
+    }));
+
+    const now = Date.now();
+    const summaries = buildContributionHistory(cycle, entries, now);
+    const aggregates = calculateCycleContributionAggregates(cycle, summaries, entries, now);
+
+    const validatedSummaries = summaries.map(s => ContributionMonthlySummarySchema.parse(s));
+    const validatedAggregates = CycleContributionAggregatesSchema.parse(aggregates);
+
+    return { summaries: validatedSummaries, aggregates: validatedAggregates };
   }));
 
   // Alertas estratégicas calculadas por demanda para un ciclo concreto.
@@ -2453,6 +2753,467 @@ function setupIpcHandlers() {
     return null;
   }));
 
+  // --- PERSPECTIVAS: snapshot consolidado para el motor de proyección ---
+  // Solo lee datos; no ejecuta compras, ventas ni conversiones.
+
+  ipcMain.handle("perspectives:getConsolidatedSnapshot", withResult(async () => {
+    const db = getDb();
+    const now = Date.now();
+
+    // Plan activo
+    const planRow = db.select().from(schema.investmentPlans)
+      .where(eq(schema.investmentPlans.status, "active"))
+      .orderBy(asc(schema.investmentPlans.createdAt))
+      .get();
+    if (!planRow) throw new Error("No hay un plan de inversión activo.");
+
+    // Ciclos del plan con sus activos
+    const cycleRows = db.select().from(schema.investmentCycles)
+      .where(eq(schema.investmentCycles.planId, planRow.id))
+      .orderBy(asc(schema.investmentCycles.startDate))
+      .all();
+
+    const allAssetRows = db.select().from(schema.investmentAssets)
+      .where(inArray(schema.investmentAssets.cycleId, cycleRows.map(c => c.id)))
+      .all();
+
+    const cycles: import("@crypto-control/portfolio").SnapshotCycle[] = cycleRows.map(c => ({
+      id: c.id,
+      planId: c.planId,
+      name: c.name,
+      startDate: c.startDate,
+      endDate: c.endDate ?? null,
+      monthlyAmountEur: c.monthlyAmountEur,
+      status: c.status,
+      assets: allAssetRows
+        .filter(a => a.cycleId === c.id)
+        .map(a => ({
+          id: a.id,
+          assetId: a.assetId,
+          cycleId: a.cycleId,
+          status: a.status,
+          allocationPercentage: a.allocationPercentage ?? null,
+          allocationValue: a.allocationValue ?? null,
+          allocationType: a.allocationType ?? "porcentaje",
+          priority: a.priority,
+          targetAmount: a.targetAmount ?? null,
+          targetValueEur: a.targetValueEur ?? null,
+          targetPortfolioPercentage: a.targetPortfolioPercentage ?? null,
+          goalReachedAt: a.goalReachedAt ?? null,
+          startDate: a.startDate ?? c.startDate,
+          endDate: a.endDate ?? null,
+        })),
+    }));
+
+    // Posiciones actuales con precios
+    const portfolioPositions = (await getPortfolioService().getPositions()).positions as Record<string, {
+      balance: number;
+      averagePriceEur: number | null;
+      totalInvestedEur: number;
+    }>;
+    const allocations = (await getPortfolioService().getAllocation()) as { assetId: string; valueEur: number }[];
+
+    const positionAssetIds = Object.keys(portfolioPositions);
+    const prices: Record<string, number | null> = {};
+    for (const assetId of positionAssetIds) {
+      const alloc = allocations.find(a => a.assetId === assetId);
+      const pos = portfolioPositions[assetId];
+      prices[assetId] = (pos.balance > 0 && alloc) ? alloc.valueEur / pos.balance : null;
+    }
+
+    const positions: Record<string, import("@crypto-control/portfolio").SnapshotPosition> = {};
+    for (const [assetId, pos] of Object.entries(portfolioPositions)) {
+      const alloc = allocations.find(a => a.assetId === assetId);
+      positions[assetId] = {
+        assetId,
+        balance: pos.balance,
+        avgCostEur: pos.averagePriceEur,
+        currentValueEur: alloc?.valueEur ?? null,
+        currentPriceEur: prices[assetId] ?? null,
+      };
+    }
+
+    // Capital histórico (total invertido hasta hoy)
+    const historicalCapitalEur = allocations.reduce((s, a) => {
+      const pos = portfolioPositions[a.assetId];
+      return s + (pos?.totalInvestedEur ?? 0);
+    }, 0);
+
+    // Ventas históricas (ventas parciales ejecutadas registradas)
+    const historicalSaleRows = db.select().from(schema.cyclePartialSales).all();
+    const historicalSalesEur = historicalSaleRows.reduce((s, r) => s + r.proceedsEur, 0);
+
+    // Recompras históricas (aproximación vía movimientos de tesorería)
+    const historicalRebuysEur = 0; // no hay tabla de recompras ejecutadas
+
+    // Aportaciones futuras (pendientes y fecha futura)
+    const contribRows = db.select().from(schema.contributionSchedule)
+      .where(inArray(schema.contributionSchedule.cycleId, cycleRows.map(c => c.id)))
+      .all();
+    const futureContributions: import("@crypto-control/portfolio").SnapshotContribution[] = contribRows
+      .filter(r => r.status === "pendiente" && r.plannedDate > now)
+      .map(r => ({
+        id: r.id,
+        cycleId: r.cycleId,
+        type: r.type as "periodica" | "extraordinaria",
+        plannedDate: r.plannedDate,
+        amountEur: r.amountEur,
+        status: r.status as "pendiente" | "ejecutada" | "saltada",
+        executedAt: r.executedAt ?? null,
+      }));
+
+    // Reglas de venta parcial
+    const saleRuleRows2 = db.select().from(schema.partialSaleRules)
+      .where(inArray(schema.partialSaleRules.cycleId, cycleRows.map(c => c.id)))
+      .all();
+    const saleRules: import("@crypto-control/portfolio").SnapshotSaleRule[] = saleRuleRows2.map(r => ({
+      id: r.id,
+      cycleId: r.cycleId,
+      assetId: r.assetId,
+      name: r.name,
+      conditionType: r.conditionType,
+      conditionValue: r.conditionValue ?? null,
+      conditionValue2: r.conditionValue2 ?? null,
+      sellPercentage: r.sellPercentage,
+      priority: r.priority,
+      status: r.status,
+    }));
+
+    // Tiers de recompra
+    const rebuyTierRows2 = db.select().from(schema.cycleRebuyTiers)
+      .where(inArray(schema.cycleRebuyTiers.cycleId, cycleRows.map(c => c.id)))
+      .all();
+    const rebuyTiers: import("@crypto-control/portfolio").SnapshotRebuyTier[] = rebuyTierRows2.map(r => ({
+      id: r.id,
+      cycleId: r.cycleId,
+      assetId: r.assetId ?? null,
+      drawdownPercentage: r.drawdownPercentage,
+      usagePercentage: r.usagePercentage,
+      priority: r.priority ?? 0,
+      status: r.status ?? "activa",
+      referenceType: r.referenceType ?? null,
+      referenceValue: r.referenceValue ?? null,
+      lastTriggeredAt: r.lastTriggeredAt ?? null,
+    }));
+
+    // Sustituciones programadas (futuro)
+    const substitutionRows = db.select().from(schema.assetSubstitutions)
+      .where(inArray(schema.assetSubstitutions.cycleId, cycleRows.map(c => c.id)))
+      .all();
+    const substitutions: import("@crypto-control/portfolio").SnapshotSubstitution[] = substitutionRows
+      .filter(r => r.status === "programada" && r.effectiveDate > now)
+      .map(r => ({
+        id: r.id,
+        cycleId: r.cycleId,
+        fromAssetId: r.fromAssetId,
+        toAssetId: r.toAssetId ?? null,
+        effectiveDate: r.effectiveDate,
+        status: r.status,
+        transferMode: r.allocationTransferMode ?? "full",
+      }));
+
+    // Tesorería
+    const treasurySummary = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance());
+    const eurcEur = treasurySummary?.eurcBalance ?? 0;
+    const fiscalReserveEur = treasurySummary?.fiscalReserveBalance ?? 0;
+    const cashEur = treasurySummary?.cashBalance ?? 0;
+    const eurcAvailableEur = Math.max(0, eurcEur - fiscalReserveEur);
+    const treasury: import("@crypto-control/portfolio").SnapshotTreasury = {
+      cashEur,
+      eurcEur,
+      eurcAvailableEur,
+      fiscalReserveEur,
+      totalLiquidityEur: cashEur + eurcEur,
+    };
+
+    // Calidad de datos
+    const missingPrices = positionAssetIds.filter(id => prices[id] == null);
+    const missingCosts = Object.entries(portfolioPositions)
+      .filter(([, p]) => p.averagePriceEur == null || p.averagePriceEur <= 0)
+      .map(([id]) => id);
+    const totalAssets = positionAssetIds.length || 1;
+    const overallScore = Math.max(0, 1 - (missingPrices.length + missingCosts.length) / (2 * totalAssets));
+
+    const dataQuality: import("@crypto-control/portfolio").DataQualityInfo = {
+      overallScore,
+      missingPrices,
+      missingCosts,
+      staleData: [],
+      notes: [],
+    };
+
+    // strategyVersion basado en la última revisión del plan o timestamp
+    const lastRevision = db.select().from(schema.strategyRevisions)
+      .orderBy(desc(schema.strategyRevisions.createdAt))
+      .get();
+    const strategyVersion = lastRevision
+      ? `rev-${lastRevision.id.slice(0, 8)}`
+      : `plan-${planRow.id.slice(0, 8)}`;
+
+    const snapshot: import("@crypto-control/portfolio").PlanConsolidatedSnapshot = {
+      snapshotId: `snap-${now}`,
+      generatedAt: now,
+      projectionStartDate: now,
+      planId: planRow.id,
+      planName: planRow.name,
+      cycles,
+      positions,
+      historicalCapitalEur,
+      historicalSalesEur,
+      historicalRebuysEur,
+      futureContributions,
+      saleRules,
+      rebuyTiers,
+      substitutions,
+      treasury,
+      prices,
+      dataQuality,
+      fiscalVersion: "es-2024",
+      strategyVersion,
+    };
+
+    return snapshot;
+  }));
+
+  ipcMain.handle("perspectives:getProjection", withResult(async (_, input?: { horizonYears?: number; complianceRate?: number }) => {
+    const { runAllScenarios, compareScenarios } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    const db = getDb();
+    const now = Date.now();
+    const horizonYears = Math.min(Math.max(input?.horizonYears ?? 10, 1), 30);
+    const horizonDate = now + horizonYears * 365.25 * 24 * 3600 * 1000;
+    const complianceRate = Math.min(Math.max(input?.complianceRate ?? 1.0, 0), 1);
+
+    // Build snapshot (same logic as getConsolidatedSnapshot)
+    const planRow = db.select().from(schema.investmentPlans)
+      .where(eq(schema.investmentPlans.status, "active"))
+      .orderBy(asc(schema.investmentPlans.createdAt))
+      .get();
+    if (!planRow) throw new Error("No hay un plan de inversión activo.");
+
+    const cycleRows = db.select().from(schema.investmentCycles)
+      .where(eq(schema.investmentCycles.planId, planRow.id))
+      .orderBy(asc(schema.investmentCycles.startDate))
+      .all();
+
+    const allAssetRows = cycleRows.length > 0
+      ? db.select().from(schema.investmentAssets)
+        .where(inArray(schema.investmentAssets.cycleId, cycleRows.map(c => c.id)))
+        .all()
+      : [];
+
+    const cycles: import("@crypto-control/portfolio").SnapshotCycle[] = cycleRows.map(c => ({
+      id: c.id, planId: c.planId, name: c.name,
+      startDate: c.startDate, endDate: c.endDate ?? null,
+      monthlyAmountEur: c.monthlyAmountEur, status: c.status,
+      assets: allAssetRows.filter(a => a.cycleId === c.id).map(a => ({
+        id: a.id, assetId: a.assetId, cycleId: a.cycleId, status: a.status,
+        allocationPercentage: a.allocationPercentage ?? null,
+        allocationValue: a.allocationValue ?? null,
+        allocationType: a.allocationType ?? "porcentaje",
+        priority: a.priority,
+        targetAmount: a.targetAmount ?? null,
+        targetValueEur: a.targetValueEur ?? null,
+        targetPortfolioPercentage: a.targetPortfolioPercentage ?? null,
+        goalReachedAt: a.goalReachedAt ?? null,
+        startDate: a.startDate ?? c.startDate,
+        endDate: a.endDate ?? null,
+      })),
+    }));
+
+    const portfolioPositions = (await getPortfolioService().getPositions()).positions as Record<string, {
+      balance: number; averagePriceEur: number | null; totalInvestedEur: number;
+    }>;
+    const allocations = (await getPortfolioService().getAllocation()) as { assetId: string; valueEur: number }[];
+    const positionAssetIds = Object.keys(portfolioPositions);
+
+    const prices: Record<string, number | null> = {};
+    for (const assetId of positionAssetIds) {
+      const alloc = allocations.find(a => a.assetId === assetId);
+      const pos = portfolioPositions[assetId];
+      prices[assetId] = (pos.balance > 0 && alloc) ? alloc.valueEur / pos.balance : null;
+    }
+
+    const positions: Record<string, import("@crypto-control/portfolio").SnapshotPosition> = {};
+    for (const [assetId, pos] of Object.entries(portfolioPositions)) {
+      const alloc = allocations.find(a => a.assetId === assetId);
+      positions[assetId] = {
+        assetId, balance: pos.balance, avgCostEur: pos.averagePriceEur,
+        currentValueEur: alloc?.valueEur ?? null, currentPriceEur: prices[assetId] ?? null,
+      };
+    }
+
+    const historicalCapitalEur = allocations.reduce((s, a) => {
+      const pos = portfolioPositions[a.assetId];
+      return s + (pos?.totalInvestedEur ?? 0);
+    }, 0);
+
+    const historicalSaleRows = db.select().from(schema.cyclePartialSales).all();
+    const historicalSalesEur = historicalSaleRows.reduce((s, r) => s + r.proceedsEur, 0);
+
+    const contribRows = cycleRows.length > 0
+      ? db.select().from(schema.contributionSchedule)
+        .where(inArray(schema.contributionSchedule.cycleId, cycleRows.map(c => c.id)))
+        .all()
+      : [];
+    const futureContributions: import("@crypto-control/portfolio").SnapshotContribution[] = contribRows
+      .filter(r => r.status === "pendiente" && r.plannedDate > now)
+      .map(r => ({
+        id: r.id, cycleId: r.cycleId,
+        type: r.type as "periodica" | "extraordinaria",
+        plannedDate: r.plannedDate, amountEur: r.amountEur,
+        status: r.status as "pendiente" | "ejecutada" | "saltada",
+        executedAt: r.executedAt ?? null,
+      }));
+
+    const saleRuleRows2 = cycleRows.length > 0
+      ? db.select().from(schema.partialSaleRules)
+        .where(inArray(schema.partialSaleRules.cycleId, cycleRows.map(c => c.id)))
+        .all()
+      : [];
+    const saleRules: import("@crypto-control/portfolio").SnapshotSaleRule[] = saleRuleRows2.map(r => ({
+      id: r.id, cycleId: r.cycleId, assetId: r.assetId, name: r.name,
+      conditionType: r.conditionType, conditionValue: r.conditionValue ?? null,
+      conditionValue2: r.conditionValue2 ?? null,
+      sellPercentage: r.sellPercentage, priority: r.priority, status: r.status,
+    }));
+
+    const rebuyTierRows2 = cycleRows.length > 0
+      ? db.select().from(schema.cycleRebuyTiers)
+        .where(inArray(schema.cycleRebuyTiers.cycleId, cycleRows.map(c => c.id)))
+        .all()
+      : [];
+    const rebuyTiers: import("@crypto-control/portfolio").SnapshotRebuyTier[] = rebuyTierRows2.map(r => ({
+      id: r.id, cycleId: r.cycleId, assetId: r.assetId ?? null,
+      drawdownPercentage: r.drawdownPercentage, usagePercentage: r.usagePercentage,
+      priority: r.priority ?? 0, status: r.status ?? "activa",
+      referenceType: r.referenceType ?? null, referenceValue: r.referenceValue ?? null,
+      lastTriggeredAt: r.lastTriggeredAt ?? null,
+    }));
+
+    const substitutionRows = cycleRows.length > 0
+      ? db.select().from(schema.assetSubstitutions)
+        .where(inArray(schema.assetSubstitutions.cycleId, cycleRows.map(c => c.id)))
+        .all()
+      : [];
+    const substitutions: import("@crypto-control/portfolio").SnapshotSubstitution[] = substitutionRows
+      .filter(r => r.status === "programada" && r.effectiveDate > now)
+      .map(r => ({
+        id: r.id, cycleId: r.cycleId, fromAssetId: r.fromAssetId,
+        toAssetId: r.toAssetId ?? null, effectiveDate: r.effectiveDate,
+        status: r.status, transferMode: r.allocationTransferMode ?? "full",
+      }));
+
+    const treasurySummary = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance());
+    const eurcEur = treasurySummary?.eurcBalance ?? 0;
+    const fiscalReserveEur = treasurySummary?.fiscalReserveBalance ?? 0;
+    const cashEur = treasurySummary?.cashBalance ?? 0;
+    const eurcAvailableEur = Math.max(0, eurcEur - fiscalReserveEur);
+
+    const missingPrices = positionAssetIds.filter(id => prices[id] == null);
+    const missingCosts = Object.entries(portfolioPositions)
+      .filter(([, p]) => p.averagePriceEur == null || p.averagePriceEur <= 0)
+      .map(([id]) => id);
+    const totalAssets = positionAssetIds.length || 1;
+
+    const lastRevision = db.select().from(schema.strategyRevisions)
+      .orderBy(desc(schema.strategyRevisions.createdAt)).get();
+    const strategyVersion = lastRevision
+      ? `rev-${lastRevision.id.slice(0, 8)}`
+      : `plan-${planRow.id.slice(0, 8)}`;
+
+    const snapshot: import("@crypto-control/portfolio").PlanConsolidatedSnapshot = {
+      snapshotId: `snap-${now}`,
+      generatedAt: now,
+      projectionStartDate: now,
+      planId: planRow.id,
+      planName: planRow.name,
+      cycles,
+      positions,
+      historicalCapitalEur,
+      historicalSalesEur,
+      historicalRebuysEur: 0,
+      futureContributions,
+      saleRules,
+      rebuyTiers,
+      substitutions,
+      treasury: { cashEur, eurcEur, eurcAvailableEur, fiscalReserveEur, totalLiquidityEur: cashEur + eurcEur },
+      prices,
+      dataQuality: {
+        overallScore: Math.max(0, 1 - (missingPrices.length + missingCosts.length) / (2 * totalAssets)),
+        missingPrices, missingCosts, staleData: [], notes: [],
+      },
+      fiscalVersion: "es-2024",
+      strategyVersion,
+    };
+
+    // Run all 4 scenarios
+    const scenarioSet = runAllScenarios(snapshot, horizonDate, { complianceRate }, undefined, now);
+    const comparison = compareScenarios(scenarioSet);
+
+    // Serialize simplified output for the UI (avoid large nested objects)
+    const LABELS: Record<string, string> = {
+      conservador: "Conservador", base: "Base", optimista: "Optimista", dinamico: "Dinámico",
+    };
+
+    const scenarios = (["conservador", "base", "optimista", "dinamico"] as const).map(s => {
+      const out = scenarioSet[s];
+      return {
+        scenario: s,
+        label: LABELS[s],
+        probability: out.summary.probability,
+        confidence: out.summary.confidence,
+        summary: {
+          initialGrossWealthEur: out.summary.initialGrossWealthEur,
+          finalGrossWealthEur: out.summary.finalGrossWealthEur,
+          finalNetWealthEur: out.summary.finalNetWealthEur,
+          totalCapitalEur: out.summary.totalCapitalEur,
+          totalRealizedGainEur: out.summary.totalRealizedGainEur,
+          totalUnrealizedGainEur: out.summary.totalUnrealizedGainEur,
+          totalTaxGeneratedEur: out.summary.totalTaxGeneratedEur,
+          finalEurcAvailableEur: out.summary.finalEurcAvailableEur,
+          finalCashEur: out.summary.finalCashEur,
+          finalFiscalReserveEur: out.summary.finalFiscalReserveEur,
+        },
+        chartPoints: out.periods.map(p => ({
+          date: p.date,
+          grossWealthEur: p.grossWealthEur,
+          netWealthEur: p.netWealthEur,
+          portfolioValueEur: p.portfolioValueEur,
+          cashEur: p.cashEur,
+          eurcAvailableEur: p.eurcAvailableEur,
+        })),
+        assetResults: out.assetResults.map(a => ({
+          assetId: a.assetId,
+          finalBalance: a.finalBalance,
+          finalValueEur: a.finalValueEur,
+          realizedGainEur: a.realizedGainEur,
+          goalReachedProjectedAt: a.goalReachedProjectedAt,
+        })),
+      };
+    });
+
+    return {
+      snapshot: {
+        snapshotId: snapshot.snapshotId,
+        generatedAt: snapshot.generatedAt,
+        planId: snapshot.planId,
+        planName: snapshot.planName,
+        historicalCapitalEur: snapshot.historicalCapitalEur,
+        historicalSalesEur: snapshot.historicalSalesEur,
+        positionCount: Object.keys(snapshot.positions).length,
+        treasury: snapshot.treasury,
+        dataQuality: snapshot.dataQuality,
+        positions: snapshot.positions,
+        fiscalVersion: snapshot.fiscalVersion,
+        strategyVersion: snapshot.strategyVersion,
+      },
+      scenarios,
+      comparison,
+      horizonYears,
+      generatedAt: now,
+    };
+  }));
+
   // --- COMPRA INTELIGENTE: rebalanceo proporcional sin ejecución automática ---
 
   ipcMain.handle("smartBuy:getRecommendation", withResult(async (_, input: { cycleId: string; amount: number }) => {
@@ -2554,31 +3315,72 @@ function setupIpcHandlers() {
 
   // --- REGLAS DE RECOMPRA: CRUD sobre cycleRebuyTiers ---
 
+  function mapRebuyTier(r: typeof schema.cycleRebuyTiers.$inferSelect) {
+    return {
+      id: r.id,
+      cycleId: r.cycleId,
+      assetId: r.assetId ?? null,
+      name: r.name ?? null,
+      drawdownPercentage: r.drawdownPercentage,
+      usagePercentage: r.usagePercentage,
+      priority: r.priority ?? 0,
+      status: r.status ?? "activa",
+      effectiveDate: r.effectiveDate ?? null,
+      notes: r.notes ?? null,
+      referenceType: r.referenceType ?? null,
+      referenceValue: r.referenceValue ?? null,
+      referenceDate: r.referenceDate ?? null,
+      lastTriggeredAt: r.lastTriggeredAt ?? null,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    };
+  }
+
   ipcMain.handle("rebuyTiers:list", withResult(async (_, input: { cycleId: string }) => {
     const db = getDb();
     const rows = db.select().from(schema.cycleRebuyTiers)
       .where(eq(schema.cycleRebuyTiers.cycleId, input.cycleId))
       .orderBy(schema.cycleRebuyTiers.drawdownPercentage)
       .all();
-    return rows.map(r => ({
-      id: r.id,
-      cycleId: r.cycleId,
-      drawdownPercentage: r.drawdownPercentage,
-      usagePercentage: r.usagePercentage,
-      createdAt: r.createdAt,
-      updatedAt: r.updatedAt,
-    }));
+    return rows.map(mapRebuyTier);
   }));
 
-  ipcMain.handle("rebuyTiers:upsert", withResult(async (_, data: { id?: string; cycleId: string; drawdownPercentage: number; usagePercentage: number }) => {
+  ipcMain.handle("rebuyTiers:upsert", withResult(async (_, data: { id?: string; cycleId: string; assetId?: string | null; name?: string | null; drawdownPercentage: number; usagePercentage: number; priority?: number; status?: string; effectiveDate?: number | null; notes?: string | null; referenceType?: string | null; referenceValue?: number | null; referenceDate?: number | null }) => {
     const db = getDb();
     const now = Date.now();
     const id = data.id ?? crypto.randomUUID();
     db.insert(schema.cycleRebuyTiers)
-      .values({ id, cycleId: data.cycleId, drawdownPercentage: data.drawdownPercentage, usagePercentage: data.usagePercentage, createdAt: now, updatedAt: now })
+      .values({
+        id, cycleId: data.cycleId,
+        assetId: data.assetId ?? null,
+        name: data.name ?? null,
+        drawdownPercentage: data.drawdownPercentage,
+        usagePercentage: data.usagePercentage,
+        priority: data.priority ?? 0,
+        status: data.status ?? "activa",
+        effectiveDate: data.effectiveDate ?? null,
+        notes: data.notes ?? null,
+        referenceType: data.referenceType ?? null,
+        referenceValue: data.referenceValue ?? null,
+        referenceDate: data.referenceDate ?? null,
+        createdAt: now, updatedAt: now,
+      })
       .onConflictDoUpdate({
         target: schema.cycleRebuyTiers.id,
-        set: { drawdownPercentage: data.drawdownPercentage, usagePercentage: data.usagePercentage, updatedAt: now },
+        set: {
+          drawdownPercentage: data.drawdownPercentage,
+          usagePercentage: data.usagePercentage,
+          assetId: data.assetId ?? null,
+          name: data.name ?? null,
+          priority: data.priority ?? 0,
+          status: data.status ?? "activa",
+          effectiveDate: data.effectiveDate ?? null,
+          notes: data.notes ?? null,
+          referenceType: data.referenceType ?? null,
+          referenceValue: data.referenceValue ?? null,
+          referenceDate: data.referenceDate ?? null,
+          updatedAt: now,
+        },
       })
       .run();
     return { id };
@@ -2588,6 +3390,273 @@ function setupIpcHandlers() {
     const db = getDb();
     db.delete(schema.cycleRebuyTiers).where(eq(schema.cycleRebuyTiers.id, id)).run();
     return null;
+  }));
+
+  ipcMain.handle("rebuyTiers:evaluate", withResult(async (_, input: { cycleId: string; assetId?: string }) => {
+    const db = getDb();
+    const { evaluateRebuyTiersExtended } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+
+    const tierRows = db.select().from(schema.cycleRebuyTiers)
+      .where(eq(schema.cycleRebuyTiers.cycleId, input.cycleId))
+      .all();
+
+    const tiers = tierRows.map(mapRebuyTier).filter(t => t.status === "activa");
+
+    const treasurySummary = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance());
+    const availableLiquidityEur = Math.max(0, (treasurySummary?.eurcBalance ?? 0) - (treasurySummary?.fiscalReserveBalance ?? 0));
+
+    const allocations = await getPortfolioService().getAllocation();
+    const prices: Record<string, number | null> = {};
+    for (const a of (allocations as { assetId: string; valueEur: number }[])) {
+      const pos = await getPortfolioService().getPositions();
+      const balance = (pos.positions as Record<string, { balance: number }>)[a.assetId]?.balance;
+      prices[a.assetId] = balance > 0 ? a.valueEur / balance : null;
+    }
+
+    const results = evaluateRebuyTiersExtended(tiers as any, prices, availableLiquidityEur);
+    const triggered = results.filter(r => r.isTriggered).map(r => mapRebuyTier(tierRows.find(t => t.id === r.tier.id)!));
+    const totalSuggestedEur = results.reduce((s, r) => s + (r.preview?.proposedAmountEur ?? 0), 0);
+
+    return { triggered, availableLiquidityEur, totalSuggestedEur };
+  }));
+
+  // --- REGLAS DE VENTA PARCIAL ---
+
+  function mapPartialSaleRule(r: typeof schema.partialSaleRules.$inferSelect) {
+    return {
+      id: r.id,
+      planId: r.planId ?? null,
+      cycleId: r.cycleId,
+      investmentAssetId: r.investmentAssetId ?? null,
+      assetId: r.assetId,
+      name: r.name,
+      conditionType: r.conditionType as import("@crypto-control/core").PartialSaleConditionType,
+      conditionValue: r.conditionValue ?? null,
+      conditionValue2: r.conditionValue2 ?? null,
+      sellPercentage: r.sellPercentage,
+      priority: r.priority,
+      status: r.status as import("@crypto-control/core").PartialSaleRuleStatus,
+      effectiveDate: r.effectiveDate ?? null,
+      notes: r.notes ?? null,
+      lastTriggeredAt: r.lastTriggeredAt ?? null,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    };
+  }
+
+  ipcMain.handle("partialSaleRules:list", withResult(async (_, input: { cycleId: string; assetId?: string; status?: string }) => {
+    const db = getDb();
+    let q = db.select().from(schema.partialSaleRules).where(eq(schema.partialSaleRules.cycleId, input.cycleId));
+    const rows = q.all();
+    return rows
+      .filter(r => !input.assetId || r.assetId === input.assetId)
+      .filter(r => !input.status || r.status === input.status)
+      .map(mapPartialSaleRule);
+  }));
+
+  ipcMain.handle("partialSaleRules:create", withResult(async (_, data: import("@crypto-control/core").CreatePartialSaleRuleInput) => {
+    const { CreatePartialSaleRuleSchema } = require("@crypto-control/core") as typeof import("@crypto-control/core");
+    const parsed = CreatePartialSaleRuleSchema.parse(data);
+    const db = getDb();
+    const now = Date.now();
+    const id = crypto.randomUUID();
+    db.insert(schema.partialSaleRules).values({
+      id,
+      planId: parsed.planId ?? null,
+      cycleId: parsed.cycleId,
+      investmentAssetId: parsed.investmentAssetId ?? null,
+      assetId: parsed.assetId,
+      name: parsed.name,
+      conditionType: parsed.conditionType,
+      conditionValue: parsed.conditionValue ?? null,
+      conditionValue2: parsed.conditionValue2 ?? null,
+      sellPercentage: parsed.sellPercentage,
+      priority: parsed.priority ?? 0,
+      status: parsed.status ?? "activa",
+      effectiveDate: parsed.effectiveDate ?? null,
+      notes: parsed.notes ?? null,
+      createdAt: now, updatedAt: now,
+    }).run();
+    const row = db.select().from(schema.partialSaleRules).where(eq(schema.partialSaleRules.id, id)).get();
+    return mapPartialSaleRule(row!);
+  }));
+
+  ipcMain.handle("partialSaleRules:update", withResult(async (_, id: string, data: import("@crypto-control/core").UpdatePartialSaleRuleInput) => {
+    const db = getDb();
+    const now = Date.now();
+    const updates: Record<string, unknown> = { updatedAt: now };
+    if (data.name !== undefined) updates.name = data.name;
+    if (data.conditionType !== undefined) updates.conditionType = data.conditionType;
+    if (data.conditionValue !== undefined) updates.conditionValue = data.conditionValue;
+    if (data.conditionValue2 !== undefined) updates.conditionValue2 = data.conditionValue2;
+    if (data.sellPercentage !== undefined) updates.sellPercentage = data.sellPercentage;
+    if (data.priority !== undefined) updates.priority = data.priority;
+    if (data.status !== undefined) updates.status = data.status;
+    if (data.effectiveDate !== undefined) updates.effectiveDate = data.effectiveDate;
+    if (data.notes !== undefined) updates.notes = data.notes;
+    db.update(schema.partialSaleRules).set(updates).where(eq(schema.partialSaleRules.id, id)).run();
+    const row = db.select().from(schema.partialSaleRules).where(eq(schema.partialSaleRules.id, id)).get();
+    if (!row) throw new Error("Regla no encontrada");
+    return mapPartialSaleRule(row);
+  }));
+
+  ipcMain.handle("partialSaleRules:delete", withResult(async (_, id: string) => {
+    const db = getDb();
+    db.delete(schema.partialSaleRules).where(eq(schema.partialSaleRules.id, id)).run();
+    return null;
+  }));
+
+  ipcMain.handle("partialSaleRules:evaluate", withResult(async (_, input: { cycleId: string; assetId?: string }) => {
+    const db = getDb();
+    const { evaluatePartialSaleRules } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+
+    const ruleRows = db.select().from(schema.partialSaleRules)
+      .where(eq(schema.partialSaleRules.cycleId, input.cycleId))
+      .all();
+
+    const rules = ruleRows
+      .filter(r => !input.assetId || r.assetId === input.assetId)
+      .map(r => ({
+        id: r.id, assetId: r.assetId, cycleId: r.cycleId, name: r.name,
+        conditionType: r.conditionType as any,
+        conditionValue: r.conditionValue ?? null,
+        conditionValue2: r.conditionValue2 ?? null,
+        sellPercentage: r.sellPercentage,
+        priority: r.priority,
+        status: r.status as any,
+        effectiveDate: r.effectiveDate ?? null,
+        notes: r.notes ?? null,
+      }));
+
+    const allocations = await getPortfolioService().getAllocation();
+    const positions = (await getPortfolioService().getPositions()).positions as Record<string, { balance: number; averagePriceEur: number | null; totalInvestedEur: number }>;
+
+    const positionMap: Record<string, { assetId: string; balance: number; averagePriceEur: number | null; totalInvestedEur: number }> = {};
+    const marketMap: Record<string, { currentPriceEur: number | null; marketPhase: string | null; isEuphoria: boolean }> = {};
+
+    for (const alloc of (allocations as { assetId: string; valueEur: number }[])) {
+      const p = positions[alloc.assetId];
+      if (p) {
+        positionMap[alloc.assetId] = { assetId: alloc.assetId, ...p };
+        const price = p.balance > 0 ? alloc.valueEur / p.balance : null;
+        marketMap[alloc.assetId] = { currentPriceEur: price, marketPhase: null, isEuphoria: false };
+      }
+    }
+
+    return evaluatePartialSaleRules(rules, positionMap, marketMap);
+  }));
+
+  // --- MONITOREO DEL PLAN ---
+
+  ipcMain.handle("planMonitoring:getSummary", withResult(async (_, input: { cycleId: string }) => {
+    const db = getDb();
+    const { buildAssetPlanStatus, buildPlanAlerts, buildContributionHistory, calculateCycleContributionAggregates } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+
+    const cycle = db.select().from(schema.investmentCycles).where(eq(schema.investmentCycles.id, input.cycleId)).get();
+    if (!cycle) throw new Error("Etapa no encontrada");
+
+    const assetRows = db.select().from(schema.investmentAssets)
+      .where(eq(schema.investmentAssets.cycleId, input.cycleId))
+      .all();
+
+    const substitutionRows = db.select().from(schema.assetSubstitutions)
+      .where(and(eq(schema.assetSubstitutions.cycleId, input.cycleId)))
+      .all();
+
+    const pendingSubstitutions = substitutionRows.filter(s => s.status === "borrador" || s.status === "programada").length;
+
+    const saleRuleRows = db.select().from(schema.partialSaleRules)
+      .where(and(eq(schema.partialSaleRules.cycleId, input.cycleId), eq(schema.partialSaleRules.status, "activa")))
+      .all();
+
+    const rebuyTierRows = db.select().from(schema.cycleRebuyTiers)
+      .where(eq(schema.cycleRebuyTiers.cycleId, input.cycleId))
+      .all();
+
+    const contribRows = db.select().from(schema.contributionSchedule)
+      .where(eq(schema.contributionSchedule.cycleId, input.cycleId))
+      .all();
+
+    const now = Date.now();
+
+    const contributions = contribRows.map(r => ({
+      id: r.id, cycleId: r.cycleId, type: r.type as "periodica" | "extraordinaria",
+      plannedDate: r.plannedDate, amountEur: r.amountEur, status: r.status as any,
+      executedAt: r.executedAt ?? null, notes: r.notes ?? null,
+    }));
+
+    const cycleMeta = { id: cycle.id, startDate: cycle.startDate, endDate: cycle.endDate ?? null, monthlyAmountEur: cycle.monthlyAmountEur };
+    const history = buildContributionHistory(cycleMeta, contributions, now);
+    const agg = calculateCycleContributionAggregates(cycleMeta, history, contributions, now);
+    const deficitEur = agg.totalDeficitEur;
+
+    const allocations = await getPortfolioService().getAllocation();
+    const positions = (await getPortfolioService().getPositions()).positions as Record<string, { balance: number; averagePriceEur: number | null; totalInvestedEur: number }>;
+    const totalPortfolioValue = (allocations as { valueEur: number }[]).reduce((s, a) => s + a.valueEur, 0);
+
+    const treasurySummaryMon = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance());
+    const eurcAvailable = Math.max(0, (treasurySummaryMon?.eurcBalance ?? 0) - (treasurySummaryMon?.fiscalReserveBalance ?? 0));
+    const fiscalReserve = treasurySummaryMon?.fiscalReserveBalance ?? 0;
+
+    const monitoringAssets = assetRows.map(a => ({
+      id: a.id,
+      assetId: a.assetId,
+      cycleId: a.cycleId,
+      investmentAssetId: a.id,
+      targetAllocationPct: a.allocationPercentage ?? null,
+      status: a.status,
+      targetAmount: a.targetAmount ?? null,
+      targetValueEur: a.targetValueEur ?? null,
+      targetPortfolioPercentage: a.targetPortfolioPercentage ?? null,
+      goalReachedAt: a.goalReachedAt ?? null,
+      endDate: a.endDate ?? null,
+    }));
+
+    const assetStatuses = monitoringAssets.map(ma => {
+      const alloc = (allocations as { assetId: string; valueEur: number }[]).find(a => a.assetId === ma.assetId);
+      const pos = positions[ma.assetId];
+      const monPos = pos ? {
+        assetId: ma.assetId,
+        balance: pos.balance,
+        currentValueEur: alloc?.valueEur ?? null,
+        averagePriceEur: pos.averagePriceEur,
+      } : null;
+      const saleRuleCount = saleRuleRows.filter(r => r.assetId === ma.assetId).length;
+      return buildAssetPlanStatus(ma, monPos, totalPortfolioValue, saleRuleCount, 0, null);
+    });
+
+    const goalsReached = monitoringAssets.filter(a => a.goalReachedAt !== null).length;
+    const goalsNearby = assetStatuses.filter(s => s.goalProgress !== null && s.goalProgress >= 90 && s.goalProgress < 100).length;
+
+    const alerts = buildPlanAlerts({
+      cycleId: input.cycleId,
+      assets: monitoringAssets,
+      assetStatuses,
+      deficitEur,
+      triggeredSaleRules: 0,
+      triggeredRebuyRules: 0,
+      pendingSubstitutions,
+      cycle: { id: cycle.id, planId: cycle.planId, endDate: cycle.endDate ?? null, monthlyAmountEur: cycle.monthlyAmountEur },
+      now,
+    });
+
+    return {
+      cycleId: input.cycleId,
+      planId: cycle.planId,
+      activeAssets: assetRows.filter(a => a.status === "active").length,
+      goalsReached,
+      goalsNearby,
+      triggeredSaleRules: 0,
+      triggeredRebuyRules: 0,
+      pendingSubstitutions,
+      compliancePercentage: agg.compliancePercentage,
+      deficitEur,
+      eurcAvailable,
+      fiscalReserve,
+      alerts,
+      assetStatuses,
+      generatedAt: now,
+    };
   }));
 
   // Ping channel: called by the preload every 200 ms to drive uv_run so the

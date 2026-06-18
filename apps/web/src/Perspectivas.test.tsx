@@ -16,6 +16,77 @@ function ok<T>(data: T) {
   return Promise.resolve({ ok: true as const, data });
 }
 
+const MOCK_PROJECTION = {
+  snapshot: {
+    snapshotId: "snap-mock",
+    generatedAt: 0,
+    planId: "plan-1",
+    planName: "Plan principal",
+    historicalCapitalEur: 4000,
+    historicalSalesEur: 0,
+    positionCount: 2,
+    treasury: { cashEur: 100, eurcEur: 80, eurcAvailableEur: 60, fiscalReserveEur: 20, totalLiquidityEur: 180 },
+    dataQuality: { overallScore: 1, missingPrices: [], missingCosts: [], staleData: [], notes: [] },
+    positions: {
+      BTC: { assetId: "BTC", balance: 0.05, avgCostEur: 50000, currentValueEur: 4000, currentPriceEur: 80000 },
+    },
+    fiscalVersion: "es-2024",
+    strategyVersion: "v1",
+  },
+  scenarios: [
+    {
+      scenario: "conservador" as const,
+      label: "Conservador",
+      probability: 0.25,
+      confidence: 0.7,
+      summary: { initialGrossWealthEur: 4000, finalGrossWealthEur: 7000, finalNetWealthEur: 6500, totalCapitalEur: 5000, totalRealizedGainEur: 0, totalUnrealizedGainEur: 2000, totalTaxGeneratedEur: 500, finalEurcAvailableEur: 60, finalCashEur: 100, finalFiscalReserveEur: 20 },
+      chartPoints: [
+        { date: Date.now(), grossWealthEur: 4000, netWealthEur: 4000, portfolioValueEur: 3820, cashEur: 100, eurcAvailableEur: 60 },
+        { date: Date.now() + 365 * 86400000, grossWealthEur: 7000, netWealthEur: 6500, portfolioValueEur: 6820, cashEur: 100, eurcAvailableEur: 60 },
+      ],
+      assetResults: [],
+    },
+    {
+      scenario: "base" as const,
+      label: "Base",
+      probability: 0.45,
+      confidence: 0.8,
+      summary: { initialGrossWealthEur: 4000, finalGrossWealthEur: 9000, finalNetWealthEur: 8200, totalCapitalEur: 5000, totalRealizedGainEur: 0, totalUnrealizedGainEur: 4000, totalTaxGeneratedEur: 800, finalEurcAvailableEur: 60, finalCashEur: 100, finalFiscalReserveEur: 20 },
+      chartPoints: [
+        { date: Date.now(), grossWealthEur: 4000, netWealthEur: 4000, portfolioValueEur: 3820, cashEur: 100, eurcAvailableEur: 60 },
+        { date: Date.now() + 365 * 86400000, grossWealthEur: 9000, netWealthEur: 8200, portfolioValueEur: 8820, cashEur: 100, eurcAvailableEur: 60 },
+      ],
+      assetResults: [],
+    },
+    {
+      scenario: "optimista" as const,
+      label: "Optimista",
+      probability: 0.15,
+      confidence: 0.6,
+      summary: { initialGrossWealthEur: 4000, finalGrossWealthEur: 15000, finalNetWealthEur: 13000, totalCapitalEur: 5000, totalRealizedGainEur: 0, totalUnrealizedGainEur: 10000, totalTaxGeneratedEur: 2000, finalEurcAvailableEur: 60, finalCashEur: 100, finalFiscalReserveEur: 20 },
+      chartPoints: [],
+      assetResults: [],
+    },
+    {
+      scenario: "dinamico" as const,
+      label: "Dinámico",
+      probability: null,
+      confidence: null,
+      summary: { initialGrossWealthEur: 4000, finalGrossWealthEur: 8500, finalNetWealthEur: 7800, totalCapitalEur: 5000, totalRealizedGainEur: 0, totalUnrealizedGainEur: 3500, totalTaxGeneratedEur: 700, finalEurcAvailableEur: 60, finalCashEur: 100, finalFiscalReserveEur: 20 },
+      chartPoints: [],
+      assetResults: [],
+    },
+  ],
+  comparison: [
+    { scenario: "conservador" as const, label: "Conservador", finalGrossWealthEur: 7000, finalNetWealthEur: 6500, probability: 0.25, confidence: 0.7 },
+    { scenario: "base" as const, label: "Base", finalGrossWealthEur: 9000, finalNetWealthEur: 8200, probability: 0.45, confidence: 0.8 },
+    { scenario: "optimista" as const, label: "Optimista", finalGrossWealthEur: 15000, finalNetWealthEur: 13000, probability: 0.15, confidence: 0.6 },
+    { scenario: "dinamico" as const, label: "Dinámico", finalGrossWealthEur: 8500, finalNetWealthEur: 7800, probability: null, confidence: null },
+  ],
+  horizonYears: 10,
+  generatedAt: Date.now(),
+};
+
 beforeEach(() => {
   const now = Date.now();
   window.cryptoControl = {
@@ -134,6 +205,8 @@ beforeEach(() => {
       createGoal:  async () => ({ ok: true as const, data: { id: "mock-goal" } }),
       updateGoal:  async () => ({ ok: true as const, data: { id: "mock-goal", name: "mock", type: "personalizado" as const, targetAmountEur: 1000, targetDate: null, priority: 0, notes: null, createdAt: 0, updatedAt: 0 } }),
       deleteGoal:  async () => ({ ok: true as const, data: null }),
+      getConsolidatedSnapshot: async () => ({ ok: true as const, data: {} as any }),
+      getProjection: async () => ({ ok: true as const, data: MOCK_PROJECTION }),
     },
     smartBuy: {
       getRecommendation: async () => ({ ok: true as const, data: { cycleId: "mock-cycle", analyzedAmountEur: 200, totalPortfolioValueEur: 5000, recommendations: [], hasOpportunities: false, restrictionsApplied: [], dataQuality: "sin_datos" as const, generatedAt: 0 } }),
@@ -165,28 +238,28 @@ describe("Perspectivas", () => {
     await waitFor(() => {
       expect(screen.getByText("Perspectivas")).toBeInTheDocument();
     });
-    expect(screen.getByText(/Resumen futuro/i)).toBeInTheDocument();
-    expect(screen.getByText(/Proyección por ciclos/i)).toBeInTheDocument();
-    expect(screen.getByText(/Simulador de aportaciones/i)).toBeInTheDocument();
+    expect(screen.getByText(/Estado del plan/i)).toBeInTheDocument();
+    expect(screen.getByText(/Proyección.*4 escenarios/i)).toBeInTheDocument();
     expect(screen.getByText(/Objetivos de inversión/i)).toBeInTheDocument();
-    expect(screen.getByText(/Confianza en la proyección/i)).toBeInTheDocument();
+    expect(screen.getByText(/Calidad de datos/i)).toBeInTheDocument();
   });
 
-  test("muestra los tres escenarios en el resumen", async () => {
+  test("muestra los cuatro escenarios en la comparativa", async () => {
     renderWithQuery();
 
     await waitFor(() => {
-      expect(screen.getByText(/Conservador/i)).toBeInTheDocument();
+      expect(screen.getAllByText("Conservador").length).toBeGreaterThan(0);
     });
-    expect(screen.getByText(/Base/i)).toBeInTheDocument();
-    expect(screen.getByText(/Optimista/i)).toBeInTheDocument();
+    expect(screen.getAllByText("Base").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Optimista").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Dinámico").length).toBeGreaterThan(0);
   });
 
-  test("muestra el ciclo de inversión en la proyección", async () => {
+  test("muestra el plan principal del snapshot", async () => {
     renderWithQuery();
 
     await waitFor(() => {
-      expect(screen.getAllByText(/Ciclo 2026-2030/i).length).toBeGreaterThan(0);
+      expect(screen.getByText(/Plan principal/i)).toBeInTheDocument();
     });
   });
 

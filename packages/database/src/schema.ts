@@ -184,9 +184,12 @@ export const investmentAssets = sqliteTable("investment_assets", {
   targetPortfolioPercentage: real("target_portfolio_percentage"),
   startDate: integer("start_date").notNull(),
   endDate: integer("end_date"),
-  status: text("status").notNull().default("active"), // "active" | "paused" | "closed"
+  status: text("status").notNull().default("active"), // "active" | "paused" | "closed" | "goal_reached"
   isActive: integer("is_active").notNull().default(1),
   notes: text("notes"),
+  goalReachedAt: integer("goal_reached_at"),
+  goalReachedValue: real("goal_reached_value"),
+  goalReachedType: text("goal_reached_type"), // "quantity" | "value" | "portfolio_percentage"
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull()
 }, (table) => {
@@ -340,6 +343,12 @@ export const assetSubstitutions = sqliteTable("asset_substitutions", {
   fromInvestmentAssetId: text("from_investment_asset_id").references(() => investmentAssets.id, { onDelete: "set null" }),
   toInvestmentAssetId: text("to_investment_asset_id").references(() => investmentAssets.id, { onDelete: "set null" }),
   effectiveDate: integer("effective_date").notNull(),
+  status: text("status").notNull().default("aplicada"), // "borrador" | "programada" | "aplicada" | "cancelada"
+  allocationTransferMode: text("allocation_transfer_mode"),   // "full" | "custom" | "pending"
+  allocationTransferPercentage: real("allocation_transfer_percentage"),
+  allocationTransferAmount: real("allocation_transfer_amount"),
+  appliedAt: integer("applied_at"),
+  revisionId: text("revision_id"),
   reason: text("reason").notNull(),
   notes: text("notes"),
   createdAt: integer("created_at").notNull()
@@ -358,13 +367,51 @@ export const assetSubstitutions = sqliteTable("asset_substitutions", {
 export const cycleRebuyTiers = sqliteTable("cycle_rebuy_tiers", {
   id: text("id").primaryKey(),
   cycleId: text("cycle_id").notNull().references(() => investmentCycles.id, { onDelete: "cascade" }),
+  assetId: text("asset_id").references(() => assets.id),
+  name: text("name"),
   drawdownPercentage: real("drawdown_percentage").notNull(),
   usagePercentage: real("usage_percentage").notNull(),
+  priority: integer("priority").default(0),
+  status: text("status").default("activa"),
+  effectiveDate: integer("effective_date"),
+  notes: text("notes"),
+  referenceType: text("reference_type").default("max_since_sale"),
+  referenceValue: real("reference_value"),
+  referenceDate: integer("reference_date"),
+  lastTriggeredAt: integer("last_triggered_at"),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull()
 }, (table) => {
   return {
     idxCycleRebuyTiersCycle: index("idx_cycle_rebuy_tiers_cycle").on(table.cycleId)
+  };
+});
+
+// Configurable partial-sale rules. NOT executed sales — see cycle_partial_sales
+// for actual executed sale records linked to real transactions.
+export const partialSaleRules = sqliteTable("partial_sale_rules", {
+  id: text("id").primaryKey(),
+  planId: text("plan_id").references(() => investmentPlans.id),
+  cycleId: text("cycle_id").notNull().references(() => investmentCycles.id, { onDelete: "cascade" }),
+  investmentAssetId: text("investment_asset_id").references(() => investmentAssets.id, { onDelete: "set null" }),
+  assetId: text("asset_id").notNull().references(() => assets.id),
+  name: text("name").notNull(),
+  conditionType: text("condition_type").notNull(),
+  conditionValue: real("condition_value"),
+  conditionValue2: real("condition_value2"),
+  sellPercentage: real("sell_percentage").notNull(),
+  priority: integer("priority").default(0).notNull(),
+  status: text("status").default("activa").notNull(),
+  effectiveDate: integer("effective_date"),
+  notes: text("notes"),
+  lastTriggeredAt: integer("last_triggered_at"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull()
+}, (table) => {
+  return {
+    idxPartialSaleRulesCycle: index("idx_partial_sale_rules_cycle").on(table.cycleId),
+    idxPartialSaleRulesAsset: index("idx_partial_sale_rules_asset").on(table.assetId),
+    idxPartialSaleRulesStatus: index("idx_partial_sale_rules_status").on(table.status),
   };
 });
 

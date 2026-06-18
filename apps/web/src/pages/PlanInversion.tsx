@@ -2,7 +2,11 @@ import { useMemo, useState, type FormEvent } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PlanLayout } from "./plan/PlanLayout";
+import { PlanConfigurar } from "./plan/PlanConfigurar";
 import { PlanResumen } from "./plan/PlanResumen";
+import { PlanAportaciones } from "./plan/PlanAportaciones";
+import { PlanBeneficiosCaidas } from "./plan/PlanBeneficiosCaidas";
+import { PlanSeguimiento } from "./plan/PlanSeguimiento";
 import type {
   Asset,
   AssetHealthResult,
@@ -1997,6 +2001,7 @@ function InvestmentAssetEditor({
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function PlanInversionCiclos() {
   const queryClient = useQueryClient();
   const [planName, setPlanName] = useState("Plan principal");
@@ -2544,15 +2549,37 @@ function PlanInversionCiclos() {
   );
 }
 
-// Placeholder para secciones aún no implementadas
-function PlanProximamente({ seccion, bloque }: { seccion: string; bloque: string }) {
-  return (
-    <Card>
-      <CardContent>
-        <p className="empty-inline">{seccion} — Disponible en {bloque}</p>
-      </CardContent>
-    </Card>
-  );
+
+
+// Wrappers que obtienen la etapa activa y la pasan al componente hijo
+function PlanBeneficiosCaidasWrapper() {
+  const activePlanQ = useQuery<InvestmentPlan | null>({
+    queryKey: ["investment-plan", "active"],
+    queryFn: () => unwrap(window.cryptoControl.investmentPlan.getActive()),
+  });
+  const currentCycleQ = useQuery<InvestmentCycle | null>({
+    queryKey: ["investment-cycles", "current", activePlanQ.data?.id],
+    enabled: Boolean(activePlanQ.data?.id),
+    queryFn: () => unwrap(window.cryptoControl.investmentCycles.getCurrent({ planId: activePlanQ.data!.id })),
+  });
+  const cycle = currentCycleQ.data ?? null;
+  if (!cycle) return <p style={{ padding: 20, color: "var(--color-text-muted)" }}>Cargando etapa activa…</p>;
+  return <PlanBeneficiosCaidas cycleId={cycle.id} />;
+}
+
+function PlanSeguimientoWrapper() {
+  const activePlanQ = useQuery<InvestmentPlan | null>({
+    queryKey: ["investment-plan", "active"],
+    queryFn: () => unwrap(window.cryptoControl.investmentPlan.getActive()),
+  });
+  const currentCycleQ = useQuery<InvestmentCycle | null>({
+    queryKey: ["investment-cycles", "current", activePlanQ.data?.id],
+    enabled: Boolean(activePlanQ.data?.id),
+    queryFn: () => unwrap(window.cryptoControl.investmentCycles.getCurrent({ planId: activePlanQ.data!.id })),
+  });
+  const cycle = currentCycleQ.data ?? null;
+  if (!cycle) return <p style={{ padding: 20, color: "var(--color-text-muted)" }}>Cargando etapa activa…</p>;
+  return <PlanSeguimiento cycleId={cycle.id} />;
 }
 
 export function PlanInversion() {
@@ -2562,11 +2589,11 @@ export function PlanInversion() {
         <Route index element={<Navigate to="resumen" replace />} />
         <Route path="resumen" element={<PlanResumen />} />
         {/* "Configurar mi plan": etapas, monedas, reparto, compra inteligente, cambios */}
-        <Route path="configurar/*" element={<PlanInversionCiclos />} />
+        <Route path="configurar/*" element={<PlanConfigurar />} />
         {/* Secciones en construcción — G-A4 y siguientes */}
-        <Route path="aportaciones" element={<PlanProximamente seccion="Aportaciones" bloque="G-A4" />} />
-        <Route path="beneficios-y-caidas" element={<PlanProximamente seccion="Beneficios y caídas" bloque="G-A5" />} />
-        <Route path="seguimiento" element={<PlanProximamente seccion="Seguimiento" bloque="G-A7" />} />
+        <Route path="aportaciones" element={<PlanAportaciones />} />
+        <Route path="beneficios-y-caidas" element={<PlanBeneficiosCaidasWrapper />} />
+        <Route path="seguimiento" element={<PlanSeguimientoWrapper />} />
         {/* Redirects desde rutas antiguas de la arquitectura provisional */}
         <Route path="ciclos/*" element={<Navigate to="/plan-inversion/configurar" replace />} />
         <Route path="estrategia" element={<Navigate to="/plan-inversion/configurar" replace />} />

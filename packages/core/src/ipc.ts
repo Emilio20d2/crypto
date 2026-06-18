@@ -10,10 +10,14 @@ import type {
   UpdateContributionScheduleInput,
   ContributionSchedule,
   CreateAssetSubstitutionInput,
+  UpdateAssetSubstitutionInput,
   AssetSubstitution,
+  ContributionMonthlySummary,
+  CycleContributionAggregates,
   PartialSale,
   InvestmentAsset,
   InvestmentAssetStateChangeInput,
+  MarkGoalReachedInput,
   InvestmentCycle,
   InvestmentPlan,
   StrategyRevision,
@@ -36,11 +40,17 @@ import type {
   UpdateInvestmentAssetInput,
   UpdateInvestmentCycleInput,
   UpdateInvestmentPlanInput,
-  UpdateTreasuryMovementInput
+  UpdateTreasuryMovementInput,
+  PartialSaleRule,
+  CreatePartialSaleRuleInput,
+  UpdatePartialSaleRuleInput,
+  PartialSaleEvaluation,
+  PlanMonitoringSummary,
+  SmartBuyMode,
 } from "./validation";
 import { CryptoControlAPI, Result, Asset, MarketSentiment, MarketSentimentTimeframe } from "./types";
 
-import { TransactionInput } from "@crypto-control/portfolio";
+import { TransactionInput, PlanConsolidatedSnapshot } from "@crypto-control/portfolio";
 
 export interface CoinbaseCredentials {
   apiKeyName: string;
@@ -123,6 +133,86 @@ export interface DiagnosticsReport {
   perAsset: DiagnosticsAsset[];
 }
 
+export interface ProjectionScenarioResult {
+  scenario: "conservador" | "base" | "optimista" | "dinamico";
+  label: string;
+  probability: number | null;
+  confidence: number | null;
+  summary: {
+    initialGrossWealthEur: number;
+    finalGrossWealthEur: number;
+    finalNetWealthEur: number;
+    totalCapitalEur: number;
+    totalRealizedGainEur: number;
+    totalUnrealizedGainEur: number;
+    totalTaxGeneratedEur: number;
+    finalEurcAvailableEur: number;
+    finalCashEur: number;
+    finalFiscalReserveEur: number;
+  };
+  chartPoints: Array<{
+    date: number;
+    grossWealthEur: number;
+    netWealthEur: number;
+    portfolioValueEur: number;
+    cashEur: number;
+    eurcAvailableEur: number;
+  }>;
+  assetResults: Array<{
+    assetId: string;
+    finalBalance: number;
+    finalValueEur: number | null;
+    realizedGainEur: number;
+    goalReachedProjectedAt: number | null;
+  }>;
+}
+
+export interface ProjectionResult {
+  snapshot: {
+    snapshotId: string;
+    generatedAt: number;
+    planId: string;
+    planName: string;
+    historicalCapitalEur: number;
+    historicalSalesEur: number;
+    positionCount: number;
+    treasury: {
+      cashEur: number;
+      eurcEur: number;
+      eurcAvailableEur: number;
+      fiscalReserveEur: number;
+      totalLiquidityEur: number;
+    };
+    dataQuality: {
+      overallScore: number;
+      missingPrices: string[];
+      missingCosts: string[];
+      staleData: string[];
+      notes: string[];
+    };
+    positions: Record<string, {
+      assetId: string;
+      balance: number;
+      avgCostEur: number | null;
+      currentValueEur: number | null;
+      currentPriceEur: number | null;
+    }>;
+    fiscalVersion: string;
+    strategyVersion: string;
+  };
+  scenarios: ProjectionScenarioResult[];
+  comparison: Array<{
+    scenario: "conservador" | "base" | "optimista" | "dinamico";
+    label: string;
+    finalGrossWealthEur: number;
+    finalNetWealthEur: number;
+    probability: number | null;
+    confidence: number | null;
+  }>;
+  horizonYears: number;
+  generatedAt: number;
+}
+
 export interface FullCryptoControlAPI extends CryptoControlAPI {
   diagnostics: {
     getReport: () => Promise<Result<DiagnosticsReport>>;
@@ -190,6 +280,8 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
     update: (id: string, data: UpdateInvestmentAssetInput) => Promise<Result<InvestmentAsset>>;
     pause: (id: string, data?: InvestmentAssetStateChangeInput) => Promise<Result<InvestmentAsset>>;
     close: (id: string, data?: InvestmentAssetStateChangeInput) => Promise<Result<InvestmentAsset>>;
+    markGoalReached: (id: string, data: MarkGoalReachedInput) => Promise<Result<InvestmentAsset>>;
+    reactivate: (id: string) => Promise<Result<InvestmentAsset>>;
     delete: (id: string) => Promise<Result<null>>;
     getHealth: (input: { assetId: string }) => Promise<Result<AssetHealthResult>>;
   };
@@ -203,10 +295,14 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
     update: (id: string, data: UpdateContributionScheduleInput) => Promise<Result<ContributionSchedule>>;
     execute: (id: string) => Promise<Result<ContributionSchedule>>;
     delete: (id: string) => Promise<Result<null>>;
+    getMonthlySummary: (input: { cycleId: string }) => Promise<Result<{ summaries: ContributionMonthlySummary[]; aggregates: CycleContributionAggregates }>>;
   };
   assetSubstitutions: {
-    list: (input?: { cycleId?: string; fromAssetId?: string }) => Promise<Result<AssetSubstitution[]>>;
+    list: (input?: { cycleId?: string; fromAssetId?: string; status?: string }) => Promise<Result<AssetSubstitution[]>>;
     create: (data: CreateAssetSubstitutionInput) => Promise<Result<{ id: string }>>;
+    update: (id: string, data: UpdateAssetSubstitutionInput) => Promise<Result<AssetSubstitution>>;
+    apply: (id: string) => Promise<Result<{ fromInvestmentAssetId: string | null; toInvestmentAssetId: string | null }>>;
+    cancel: (id: string) => Promise<Result<AssetSubstitution>>;
     execute: (id: string) => Promise<Result<{ fromInvestmentAssetId: string | null; toInvestmentAssetId: string | null }>>;
     delete: (id: string) => Promise<Result<null>>;
   };
@@ -221,14 +317,27 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
     createGoal: (data: CreatePerspectivesGoalInput) => Promise<Result<{ id: string }>>;
     updateGoal: (id: string, data: Partial<CreatePerspectivesGoalInput>) => Promise<Result<PerspectivesGoal>>;
     deleteGoal: (id: string) => Promise<Result<null>>;
+    getConsolidatedSnapshot: () => Promise<Result<PlanConsolidatedSnapshot>>;
+    getProjection: (input?: { horizonYears?: number; complianceRate?: number }) => Promise<Result<ProjectionResult>>;
   };
   smartBuy: {
-    getRecommendation: (input: { cycleId: string; amount: number }) => Promise<Result<SmartBuyRecommendation>>;
+    getRecommendation: (input: { cycleId: string; amount: number; mode?: SmartBuyMode; originType?: "cash" | "eurc" }) => Promise<Result<SmartBuyRecommendation>>;
   };
   rebuyTiers: {
     list: (input: { cycleId: string }) => Promise<Result<CycleRebuyTier[]>>;
-    upsert: (data: { id?: string; cycleId: string; drawdownPercentage: number; usagePercentage: number }) => Promise<Result<{ id: string }>>;
+    upsert: (data: { id?: string; cycleId: string; assetId?: string | null; name?: string | null; drawdownPercentage: number; usagePercentage: number; priority?: number; status?: string; effectiveDate?: number | null; notes?: string | null; referenceType?: string | null; referenceValue?: number | null; referenceDate?: number | null }) => Promise<Result<{ id: string }>>;
     delete: (id: string) => Promise<Result<null>>;
+    evaluate: (input: { cycleId: string; assetId?: string }) => Promise<Result<{ triggered: CycleRebuyTier[]; availableLiquidityEur: number; totalSuggestedEur: number }>>;
+  };
+  partialSaleRules: {
+    list: (input: { cycleId: string; assetId?: string; status?: string }) => Promise<Result<PartialSaleRule[]>>;
+    create: (data: CreatePartialSaleRuleInput) => Promise<Result<PartialSaleRule>>;
+    update: (id: string, data: UpdatePartialSaleRuleInput) => Promise<Result<PartialSaleRule>>;
+    delete: (id: string) => Promise<Result<null>>;
+    evaluate: (input: { cycleId: string; assetId?: string }) => Promise<Result<PartialSaleEvaluation[]>>;
+  };
+  planMonitoring: {
+    getSummary: (input: { cycleId: string }) => Promise<Result<PlanMonitoringSummary>>;
   };
   treasury: {
     getSummary: () => Promise<Result<TreasurySummary>>;
