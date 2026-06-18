@@ -63,7 +63,7 @@ function AlertCard({ alert }: { alert: PlanAlert }) {
         </span>
         <span className={alertBadgeClass(alert.priority)}>{alert.priority}</span>
       </div>
-      {alert.detail && <p className="substitution-meta">{alert.detail}</p>}
+      {alert.assetId && <p className="substitution-meta">{alert.assetId}</p>}
       {alert.actionAvailable && (
         <p className="substitution-notes" style={{ fontStyle: "normal", color: "var(--color-primary, #2563eb)" }}>
           Acción: {alert.actionAvailable}
@@ -85,7 +85,7 @@ function AssetStatusRow({ s }: { s: AssetPlanStatus }) {
         {s.targetAllocationPct != null ? `${s.targetAllocationPct}%` : "—"}
       </td>
       <td style={{ textAlign: "right" }}>
-        {s.currentAllocationPct != null ? `${s.currentAllocationPct.toFixed(1)}%` : "—"}
+        {s.deviationPct != null ? `${s.deviationPct > 0 ? "+" : ""}${s.deviationPct.toFixed(1)}%` : "—"}
       </td>
       <td style={{ textAlign: "right", color: (s.deviationEur ?? 0) < 0 ? "var(--color-danger, #dc2626)" : "inherit" }}>
         {s.deviationEur != null ? `${s.deviationEur > 0 ? "+" : ""}${formatEur(s.deviationEur)}` : "—"}

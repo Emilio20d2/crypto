@@ -455,7 +455,7 @@ function PlanSnapshotSection({
   const snap = projection.snapshot;
   const treasury = snap.treasury;
   const dq = snap.dataQuality;
-  const scoreVariant = dq.overallScore >= 0.9 ? "success" : dq.overallScore >= 0.6 ? "warning" : "error";
+  const scoreVariant = dq.overallScore >= 0.9 ? "success" : dq.overallScore >= 0.6 ? "warning" : "danger";
 
   const positions = Object.values(snap.positions);
   const totalPortfolioValueEur = positions.reduce((s, p) => s + (p.currentValueEur ?? 0), 0);

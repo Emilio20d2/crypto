@@ -114,6 +114,7 @@ const ASSET_STATUS_LABEL: Record<AssetPlanStatus, string> = {
   active: "Activa",
   paused: "Pausada",
   closed: "Cerrada",
+  goal_reached: "Objetivo alcanzado",
 };
 
 const CYCLE_GOAL_LABEL: Record<CycleGoal, string> = {
@@ -2001,8 +2002,7 @@ function InvestmentAssetEditor({
   );
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function PlanInversionCiclos() {
+export function PlanInversionCiclos() {
   const queryClient = useQueryClient();
   const [planName, setPlanName] = useState("Plan principal");
   const [planDescription, setPlanDescription] = useState("");

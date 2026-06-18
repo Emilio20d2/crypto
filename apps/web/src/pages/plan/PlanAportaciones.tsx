@@ -361,7 +361,7 @@ export function PlanAportaciones() {
             <MetricCard label="Déficit acumulado" value={formatMoney(agg.totalDeficitEur)} />
             <MetricCard
               label="Cumplimiento"
-              value={compliance !== null ? `${compliance.toFixed(0)}%` : "—"}
+              value={compliance != null ? `${compliance.toFixed(0)}%` : "—"}
               sub={`${agg.monthsCumplida + agg.monthsSuperada} meses cumplidos · ${agg.monthsParcial} parciales · ${agg.monthsOmitida} omitidos`}
             />
             {agg.lastContributionDate ? (
