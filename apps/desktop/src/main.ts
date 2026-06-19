@@ -177,7 +177,7 @@ function setupDatabase() {
 }
 
 function setupIpcHandlers() {
-  const { MarketService, MarketSentimentService, FearGreedService, GlobalMetricsService } = require("@crypto-control/market-data") as typeof import("@crypto-control/market-data");
+  const { MarketService, MarketSentimentService, FearGreedService, GlobalMetricsService, getAssetMetadata } = require("@crypto-control/market-data") as typeof import("@crypto-control/market-data");
   const { DatabasePortfolioRepository, DatabaseMarketCacheRepository, DatabaseMarketSentimentRepository, DatabaseTreasuryRepository } = require("@crypto-control/database") as typeof import("@crypto-control/database");
 
   const db = getDb();
@@ -588,6 +588,325 @@ function setupIpcHandlers() {
   }
 
   const getTreasuryRepository = () => new DatabaseTreasuryRepository(db);
+
+  function isInvestableAsset(assetId: string): boolean {
+    if (assetId === "EUR" || assetId === "EURC") return false;
+    const row = db.select({ type: schema.assets.type }).from(schema.assets).where(eq(schema.assets.id, assetId)).get();
+    return row?.type !== "fiat";
+  }
+
+  type SnapshotPriceResult = {
+    price: number | null;
+    state: "live" | "cached" | "unavailable";
+    provider: string;
+    fetchedAt: number;
+    reason?: string;
+  };
+
+  const SNAPSHOT_PRICE_TIMEOUT_MS = 4500;
+  const SNAPSHOT_FRESH_CACHE_MS = 5 * 60 * 1000;
+  const snapshotPriceRequests = new Map<string, Promise<SnapshotPriceResult>>();
+
+  function withSoftTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => resolve(fallback), timeoutMs);
+      promise.then(
+        (value) => {
+          clearTimeout(timeout);
+          resolve(value);
+        },
+        () => {
+          clearTimeout(timeout);
+          resolve(fallback);
+        },
+      );
+    });
+  }
+
+  async function getCachedSnapshotPrice(assetId: string): Promise<SnapshotPriceResult | null> {
+    const meta = getAssetMetadata(assetId);
+    if (!meta) return null;
+    const cached = await marketCache.getCurrentPrice(assetId, meta.quoteCurrency, { allowStale: true }).catch(() => null);
+    const price = finiteOrNull(cached?.price);
+    if (price === null || !cached) return null;
+    return {
+      price,
+      state: "cached",
+      provider: cached.provider,
+      fetchedAt: cached.fetchedAt,
+      reason: "Ultimo dato valido en cache",
+    };
+  }
+
+  async function getSnapshotPrice(assetId: string): Promise<SnapshotPriceResult> {
+    const key = assetId.toUpperCase();
+    const pending = snapshotPriceRequests.get(key);
+    if (pending) return pending;
+
+    const request = (async () => {
+      const cached = await getCachedSnapshotPrice(assetId);
+      if (cached && Date.now() - cached.fetchedAt <= SNAPSHOT_FRESH_CACHE_MS) {
+        return cached;
+      }
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), SNAPSHOT_PRICE_TIMEOUT_MS);
+      try {
+        const live = await marketService.getCurrentPrice(assetId, controller.signal);
+        const price = finiteOrNull(live.price);
+        if (price !== null) {
+          return { ...live, price };
+        }
+        return cached ?? {
+          price: null,
+          state: "unavailable",
+          provider: live.provider ?? "none",
+          fetchedAt: live.fetchedAt ?? Date.now(),
+          reason: live.reason ?? "Precio no disponible",
+        };
+      } catch (error) {
+        return cached ?? {
+          price: null,
+          state: "unavailable",
+          provider: "none",
+          fetchedAt: Date.now(),
+          reason: error instanceof Error ? error.message : "Precio no disponible",
+        };
+      } finally {
+        clearTimeout(timeout);
+      }
+    })().finally(() => {
+      snapshotPriceRequests.delete(key);
+    });
+
+    snapshotPriceRequests.set(key, request);
+    return request;
+  }
+
+  async function buildPerspectivesSnapshot(now = Date.now()): Promise<import("@crypto-control/portfolio").PlanConsolidatedSnapshot> {
+    const planRow = db.select().from(schema.investmentPlans)
+      .where(eq(schema.investmentPlans.status, "active"))
+      .orderBy(asc(schema.investmentPlans.createdAt))
+      .get();
+    if (!planRow) throw new Error("No hay un plan de inversión activo.");
+
+    const cycleRows = db.select().from(schema.investmentCycles)
+      .where(eq(schema.investmentCycles.planId, planRow.id))
+      .orderBy(asc(schema.investmentCycles.startDate))
+      .all();
+    const cycleIds = cycleRows.map(c => c.id);
+
+    const allAssetRows = cycleIds.length > 0
+      ? db.select().from(schema.investmentAssets)
+        .where(inArray(schema.investmentAssets.cycleId, cycleIds))
+        .all()
+      : [];
+
+    const cycles: import("@crypto-control/portfolio").SnapshotCycle[] = cycleRows.map(c => ({
+      id: c.id,
+      planId: c.planId,
+      name: c.name,
+      startDate: c.startDate,
+      endDate: c.endDate ?? null,
+      monthlyAmountEur: c.monthlyAmountEur,
+      status: c.status,
+      assets: allAssetRows
+        .filter(a => a.cycleId === c.id)
+        .map(a => ({
+          id: a.id,
+          assetId: a.assetId,
+          cycleId: a.cycleId,
+          status: a.status,
+          allocationPercentage: a.allocationPercentage ?? null,
+          allocationValue: a.allocationValue ?? null,
+          allocationType: a.allocationType ?? "percentage",
+          priority: a.priority,
+          targetAmount: a.targetAmount ?? null,
+          targetValueEur: a.targetValueEur ?? null,
+          targetPortfolioPercentage: a.targetPortfolioPercentage ?? null,
+          goalReachedAt: a.goalReachedAt ?? null,
+          startDate: a.startDate ?? c.startDate,
+          endDate: a.endDate ?? null,
+        })),
+    }));
+
+    const portfolioService = getPortfolioService();
+    const portfolioPositions = (await portfolioService.getPositions()).positions as Record<string, {
+      balance: number;
+      averagePriceEur: number | null;
+      totalInvestedEur: number;
+    }>;
+
+    const investablePositionIds = Object.entries(portfolioPositions)
+      .filter(([assetId, position]) => isInvestableAsset(assetId) && position.balance > 1e-12)
+      .map(([assetId]) => assetId);
+    const plannedAssetIds = allAssetRows
+      .map(row => row.assetId)
+      .filter(isInvestableAsset);
+    const assetIds = Array.from(new Set([...investablePositionIds, ...plannedAssetIds]));
+
+    const prices: Record<string, number | null> = {};
+    const staleData: string[] = [];
+
+    await Promise.all(assetIds.map(async (assetId) => {
+      const priceResult = await getSnapshotPrice(assetId);
+      prices[assetId] = finiteOrNull(priceResult.price);
+      if (priceResult.state === "cached") staleData.push(assetId);
+    }));
+
+    const positions: Record<string, import("@crypto-control/portfolio").SnapshotPosition> = {};
+    for (const assetId of investablePositionIds) {
+      const pos = portfolioPositions[assetId];
+      const price = prices[assetId] ?? null;
+      const currentValueEur = price !== null ? pos.balance * price : null;
+      positions[assetId] = {
+        assetId,
+        balance: pos.balance,
+        avgCostEur: pos.averagePriceEur,
+        currentValueEur,
+        currentPriceEur: price,
+      };
+    }
+
+    const historicalCapitalEur = investablePositionIds.reduce((sum, assetId) => {
+      return sum + (portfolioPositions[assetId]?.totalInvestedEur ?? 0);
+    }, 0);
+
+    const historicalSaleRows = db.select().from(schema.cyclePartialSales).all();
+    const historicalSalesEur = historicalSaleRows.reduce((s, r) => s + r.proceedsEur, 0);
+    const historicalRebuysEur = db.select().from(schema.treasuryMovements).all()
+      .filter(row => row.type === "usar_recompra")
+      .reduce((sum, row) => sum + row.amount, 0);
+
+    const contribRows = cycleIds.length > 0
+      ? db.select().from(schema.contributionSchedule)
+        .where(inArray(schema.contributionSchedule.cycleId, cycleIds))
+        .all()
+      : [];
+    const futureContributions: import("@crypto-control/portfolio").SnapshotContribution[] = contribRows
+      .filter(r => r.status === "pendiente" && r.plannedDate > now)
+      .map(r => ({
+        id: r.id,
+        cycleId: r.cycleId,
+        type: r.type as "periodica" | "extraordinaria",
+        plannedDate: r.plannedDate,
+        amountEur: r.amountEur,
+        status: r.status as "pendiente" | "ejecutada" | "saltada",
+        executedAt: r.executedAt ?? null,
+      }));
+
+    const saleRuleRows = cycleIds.length > 0
+      ? db.select().from(schema.partialSaleRules)
+        .where(inArray(schema.partialSaleRules.cycleId, cycleIds))
+        .all()
+      : [];
+    const saleRules: import("@crypto-control/portfolio").SnapshotSaleRule[] = saleRuleRows.map(r => ({
+      id: r.id,
+      cycleId: r.cycleId,
+      assetId: r.assetId,
+      name: r.name,
+      conditionType: r.conditionType,
+      conditionValue: r.conditionValue ?? null,
+      conditionValue2: r.conditionValue2 ?? null,
+      sellPercentage: r.sellPercentage,
+      priority: r.priority,
+      status: r.status,
+    }));
+
+    const rebuyTierRows = cycleIds.length > 0
+      ? db.select().from(schema.cycleRebuyTiers)
+        .where(inArray(schema.cycleRebuyTiers.cycleId, cycleIds))
+        .all()
+      : [];
+    const rebuyTiers: import("@crypto-control/portfolio").SnapshotRebuyTier[] = rebuyTierRows.map(r => ({
+      id: r.id,
+      cycleId: r.cycleId,
+      assetId: r.assetId ?? null,
+      drawdownPercentage: r.drawdownPercentage,
+      usagePercentage: r.usagePercentage,
+      priority: r.priority ?? 0,
+      status: r.status ?? "activa",
+      referenceType: r.referenceType ?? null,
+      referenceValue: r.referenceValue ?? null,
+      lastTriggeredAt: r.lastTriggeredAt ?? null,
+    }));
+
+    const substitutionRows = cycleIds.length > 0
+      ? db.select().from(schema.assetSubstitutions)
+        .where(inArray(schema.assetSubstitutions.cycleId, cycleIds))
+        .all()
+      : [];
+    const substitutions: import("@crypto-control/portfolio").SnapshotSubstitution[] = substitutionRows
+      .filter(r => r.status === "programada" && r.effectiveDate > now)
+      .map(r => ({
+        id: r.id,
+        cycleId: r.cycleId,
+        fromAssetId: r.fromAssetId,
+        toAssetId: r.toAssetId ?? null,
+        effectiveDate: r.effectiveDate,
+        status: r.status,
+        transferMode: r.allocationTransferMode ?? "full",
+      }));
+
+    const treasurySummary = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance());
+    const eurcEur = treasurySummary?.eurcBalance ?? 0;
+    const fiscalReserveEur = treasurySummary?.fiscalReserveBalance ?? 0;
+    const cashEur = treasurySummary?.cashBalance ?? 0;
+    const eurcAvailableEur = Math.max(0, eurcEur - fiscalReserveEur);
+
+    const missingPrices = assetIds.filter(id => prices[id] == null);
+    const missingCosts = Object.entries(positions)
+      .filter(([, p]) => p.avgCostEur == null || p.avgCostEur <= 0)
+      .map(([id]) => id);
+    const totalAssets = assetIds.length || 1;
+
+    const lastRevision = db.select().from(schema.strategyRevisions)
+      .orderBy(desc(schema.strategyRevisions.createdAt))
+      .get();
+    const strategyVersion = lastRevision
+      ? `rev-${lastRevision.id.slice(0, 8)}`
+      : `plan-${planRow.id.slice(0, 8)}`;
+
+    return {
+      snapshotId: `snap-${now}`,
+      generatedAt: now,
+      projectionStartDate: now,
+      planId: planRow.id,
+      planName: planRow.name,
+      cycles,
+      positions,
+      historicalCapitalEur,
+      historicalSalesEur,
+      historicalRebuysEur,
+      futureContributions,
+      saleRules,
+      rebuyTiers,
+      substitutions,
+      treasury: { cashEur, eurcEur, eurcAvailableEur, fiscalReserveEur, totalLiquidityEur: cashEur + eurcEur },
+      prices,
+      dataQuality: {
+        overallScore: Math.max(0, 1 - (missingPrices.length + missingCosts.length) / (2 * totalAssets)),
+        missingPrices,
+        missingCosts,
+        staleData,
+        notes: [],
+      },
+      fiscalVersion: "es-2024",
+      strategyVersion,
+    };
+  }
+
+  async function getProjectionDynamicFactors(): Promise<{ fearAndGreedIndex: number | null; btcDominance: number | null }> {
+    const [fearGreed, globalMetrics] = await Promise.all([
+      withSoftTimeout(fearGreedService.get(), 2500, null),
+      withSoftTimeout(globalMetricsService.get(), 3000, null),
+    ]);
+
+    return {
+      fearAndGreedIndex: fearGreed ? finiteOrNull(fearGreed.value) : null,
+      btcDominance: globalMetrics ? finiteOrNull(globalMetrics.btcDominance) : null,
+    };
+  }
 
   ipcMain.handle("portfolio:get-summary", withResult(async () => {
     return await getPortfolioService().getSummary();
@@ -2779,400 +3098,28 @@ function setupIpcHandlers() {
   // Solo lee datos; no ejecuta compras, ventas ni conversiones.
 
   ipcMain.handle("perspectives:getConsolidatedSnapshot", withResult(async () => {
-    const db = getDb();
-    const now = Date.now();
-
-    // Plan activo
-    const planRow = db.select().from(schema.investmentPlans)
-      .where(eq(schema.investmentPlans.status, "active"))
-      .orderBy(asc(schema.investmentPlans.createdAt))
-      .get();
-    if (!planRow) throw new Error("No hay un plan de inversión activo.");
-
-    // Ciclos del plan con sus activos
-    const cycleRows = db.select().from(schema.investmentCycles)
-      .where(eq(schema.investmentCycles.planId, planRow.id))
-      .orderBy(asc(schema.investmentCycles.startDate))
-      .all();
-
-    const allAssetRows = db.select().from(schema.investmentAssets)
-      .where(inArray(schema.investmentAssets.cycleId, cycleRows.map(c => c.id)))
-      .all();
-
-    const cycles: import("@crypto-control/portfolio").SnapshotCycle[] = cycleRows.map(c => ({
-      id: c.id,
-      planId: c.planId,
-      name: c.name,
-      startDate: c.startDate,
-      endDate: c.endDate ?? null,
-      monthlyAmountEur: c.monthlyAmountEur,
-      status: c.status,
-      assets: allAssetRows
-        .filter(a => a.cycleId === c.id)
-        .map(a => ({
-          id: a.id,
-          assetId: a.assetId,
-          cycleId: a.cycleId,
-          status: a.status,
-          allocationPercentage: a.allocationPercentage ?? null,
-          allocationValue: a.allocationValue ?? null,
-          allocationType: a.allocationType ?? "porcentaje",
-          priority: a.priority,
-          targetAmount: a.targetAmount ?? null,
-          targetValueEur: a.targetValueEur ?? null,
-          targetPortfolioPercentage: a.targetPortfolioPercentage ?? null,
-          goalReachedAt: a.goalReachedAt ?? null,
-          startDate: a.startDate ?? c.startDate,
-          endDate: a.endDate ?? null,
-        })),
-    }));
-
-    // Posiciones actuales con precios
-    const portfolioPositions = (await getPortfolioService().getPositions()).positions as Record<string, {
-      balance: number;
-      averagePriceEur: number | null;
-      totalInvestedEur: number;
-    }>;
-    const allocations = (await getPortfolioService().getAllocation()) as { assetId: string; valueEur: number }[];
-
-    const positionAssetIds = Object.keys(portfolioPositions);
-    const prices: Record<string, number | null> = {};
-    for (const assetId of positionAssetIds) {
-      const alloc = allocations.find(a => a.assetId === assetId);
-      const pos = portfolioPositions[assetId];
-      prices[assetId] = (pos.balance > 0 && alloc) ? alloc.valueEur / pos.balance : null;
-    }
-
-    const positions: Record<string, import("@crypto-control/portfolio").SnapshotPosition> = {};
-    for (const [assetId, pos] of Object.entries(portfolioPositions)) {
-      const alloc = allocations.find(a => a.assetId === assetId);
-      positions[assetId] = {
-        assetId,
-        balance: pos.balance,
-        avgCostEur: pos.averagePriceEur,
-        currentValueEur: alloc?.valueEur ?? null,
-        currentPriceEur: prices[assetId] ?? null,
-      };
-    }
-
-    // Capital histórico (total invertido hasta hoy)
-    const historicalCapitalEur = allocations.reduce((s, a) => {
-      const pos = portfolioPositions[a.assetId];
-      return s + (pos?.totalInvestedEur ?? 0);
-    }, 0);
-
-    // Ventas históricas (ventas parciales ejecutadas registradas)
-    const historicalSaleRows = db.select().from(schema.cyclePartialSales).all();
-    const historicalSalesEur = historicalSaleRows.reduce((s, r) => s + r.proceedsEur, 0);
-
-    // Recompras históricas (aproximación vía movimientos de tesorería)
-    const historicalRebuysEur = 0; // no hay tabla de recompras ejecutadas
-
-    // Aportaciones futuras (pendientes y fecha futura)
-    const contribRows = db.select().from(schema.contributionSchedule)
-      .where(inArray(schema.contributionSchedule.cycleId, cycleRows.map(c => c.id)))
-      .all();
-    const futureContributions: import("@crypto-control/portfolio").SnapshotContribution[] = contribRows
-      .filter(r => r.status === "pendiente" && r.plannedDate > now)
-      .map(r => ({
-        id: r.id,
-        cycleId: r.cycleId,
-        type: r.type as "periodica" | "extraordinaria",
-        plannedDate: r.plannedDate,
-        amountEur: r.amountEur,
-        status: r.status as "pendiente" | "ejecutada" | "saltada",
-        executedAt: r.executedAt ?? null,
-      }));
-
-    // Reglas de venta parcial
-    const saleRuleRows2 = db.select().from(schema.partialSaleRules)
-      .where(inArray(schema.partialSaleRules.cycleId, cycleRows.map(c => c.id)))
-      .all();
-    const saleRules: import("@crypto-control/portfolio").SnapshotSaleRule[] = saleRuleRows2.map(r => ({
-      id: r.id,
-      cycleId: r.cycleId,
-      assetId: r.assetId,
-      name: r.name,
-      conditionType: r.conditionType,
-      conditionValue: r.conditionValue ?? null,
-      conditionValue2: r.conditionValue2 ?? null,
-      sellPercentage: r.sellPercentage,
-      priority: r.priority,
-      status: r.status,
-    }));
-
-    // Tiers de recompra
-    const rebuyTierRows2 = db.select().from(schema.cycleRebuyTiers)
-      .where(inArray(schema.cycleRebuyTiers.cycleId, cycleRows.map(c => c.id)))
-      .all();
-    const rebuyTiers: import("@crypto-control/portfolio").SnapshotRebuyTier[] = rebuyTierRows2.map(r => ({
-      id: r.id,
-      cycleId: r.cycleId,
-      assetId: r.assetId ?? null,
-      drawdownPercentage: r.drawdownPercentage,
-      usagePercentage: r.usagePercentage,
-      priority: r.priority ?? 0,
-      status: r.status ?? "activa",
-      referenceType: r.referenceType ?? null,
-      referenceValue: r.referenceValue ?? null,
-      lastTriggeredAt: r.lastTriggeredAt ?? null,
-    }));
-
-    // Sustituciones programadas (futuro)
-    const substitutionRows = db.select().from(schema.assetSubstitutions)
-      .where(inArray(schema.assetSubstitutions.cycleId, cycleRows.map(c => c.id)))
-      .all();
-    const substitutions: import("@crypto-control/portfolio").SnapshotSubstitution[] = substitutionRows
-      .filter(r => r.status === "programada" && r.effectiveDate > now)
-      .map(r => ({
-        id: r.id,
-        cycleId: r.cycleId,
-        fromAssetId: r.fromAssetId,
-        toAssetId: r.toAssetId ?? null,
-        effectiveDate: r.effectiveDate,
-        status: r.status,
-        transferMode: r.allocationTransferMode ?? "full",
-      }));
-
-    // Tesorería
-    const treasurySummary = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance());
-    const eurcEur = treasurySummary?.eurcBalance ?? 0;
-    const fiscalReserveEur = treasurySummary?.fiscalReserveBalance ?? 0;
-    const cashEur = treasurySummary?.cashBalance ?? 0;
-    const eurcAvailableEur = Math.max(0, eurcEur - fiscalReserveEur);
-    const treasury: import("@crypto-control/portfolio").SnapshotTreasury = {
-      cashEur,
-      eurcEur,
-      eurcAvailableEur,
-      fiscalReserveEur,
-      totalLiquidityEur: cashEur + eurcEur,
-    };
-
-    // Calidad de datos
-    const missingPrices = positionAssetIds.filter(id => prices[id] == null);
-    const missingCosts = Object.entries(portfolioPositions)
-      .filter(([, p]) => p.averagePriceEur == null || p.averagePriceEur <= 0)
-      .map(([id]) => id);
-    const totalAssets = positionAssetIds.length || 1;
-    const overallScore = Math.max(0, 1 - (missingPrices.length + missingCosts.length) / (2 * totalAssets));
-
-    const dataQuality: import("@crypto-control/portfolio").DataQualityInfo = {
-      overallScore,
-      missingPrices,
-      missingCosts,
-      staleData: [],
-      notes: [],
-    };
-
-    // strategyVersion basado en la última revisión del plan o timestamp
-    const lastRevision = db.select().from(schema.strategyRevisions)
-      .orderBy(desc(schema.strategyRevisions.createdAt))
-      .get();
-    const strategyVersion = lastRevision
-      ? `rev-${lastRevision.id.slice(0, 8)}`
-      : `plan-${planRow.id.slice(0, 8)}`;
-
-    const snapshot: import("@crypto-control/portfolio").PlanConsolidatedSnapshot = {
-      snapshotId: `snap-${now}`,
-      generatedAt: now,
-      projectionStartDate: now,
-      planId: planRow.id,
-      planName: planRow.name,
-      cycles,
-      positions,
-      historicalCapitalEur,
-      historicalSalesEur,
-      historicalRebuysEur,
-      futureContributions,
-      saleRules,
-      rebuyTiers,
-      substitutions,
-      treasury,
-      prices,
-      dataQuality,
-      fiscalVersion: "es-2024",
-      strategyVersion,
-    };
-
-    return snapshot;
+    return await buildPerspectivesSnapshot();
   }));
 
   ipcMain.handle("perspectives:getProjection", withResult(async (_, input?: { horizonYears?: number; complianceRate?: number }) => {
-    const { runAllScenarios, compareScenarios } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
-    const db = getDb();
+    const { runAllScenarios, compareScenarios, SPANISH_FISCAL_CONFIG_2024 } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
     const now = Date.now();
     const horizonYears = Math.min(Math.max(input?.horizonYears ?? 10, 1), 30);
     const horizonDate = now + horizonYears * 365.25 * 24 * 3600 * 1000;
     const complianceRate = Math.min(Math.max(input?.complianceRate ?? 1.0, 0), 1);
+    const snapshot = await buildPerspectivesSnapshot(now);
+    const dynamicFactors = await getProjectionDynamicFactors();
 
-    // Build snapshot (same logic as getConsolidatedSnapshot)
-    const planRow = db.select().from(schema.investmentPlans)
-      .where(eq(schema.investmentPlans.status, "active"))
-      .orderBy(asc(schema.investmentPlans.createdAt))
-      .get();
-    if (!planRow) throw new Error("No hay un plan de inversión activo.");
-
-    const cycleRows = db.select().from(schema.investmentCycles)
-      .where(eq(schema.investmentCycles.planId, planRow.id))
-      .orderBy(asc(schema.investmentCycles.startDate))
-      .all();
-
-    const allAssetRows = cycleRows.length > 0
-      ? db.select().from(schema.investmentAssets)
-        .where(inArray(schema.investmentAssets.cycleId, cycleRows.map(c => c.id)))
-        .all()
-      : [];
-
-    const cycles: import("@crypto-control/portfolio").SnapshotCycle[] = cycleRows.map(c => ({
-      id: c.id, planId: c.planId, name: c.name,
-      startDate: c.startDate, endDate: c.endDate ?? null,
-      monthlyAmountEur: c.monthlyAmountEur, status: c.status,
-      assets: allAssetRows.filter(a => a.cycleId === c.id).map(a => ({
-        id: a.id, assetId: a.assetId, cycleId: a.cycleId, status: a.status,
-        allocationPercentage: a.allocationPercentage ?? null,
-        allocationValue: a.allocationValue ?? null,
-        allocationType: a.allocationType ?? "porcentaje",
-        priority: a.priority,
-        targetAmount: a.targetAmount ?? null,
-        targetValueEur: a.targetValueEur ?? null,
-        targetPortfolioPercentage: a.targetPortfolioPercentage ?? null,
-        goalReachedAt: a.goalReachedAt ?? null,
-        startDate: a.startDate ?? c.startDate,
-        endDate: a.endDate ?? null,
-      })),
-    }));
-
-    const portfolioPositions = (await getPortfolioService().getPositions()).positions as Record<string, {
-      balance: number; averagePriceEur: number | null; totalInvestedEur: number;
-    }>;
-    const allocations = (await getPortfolioService().getAllocation()) as { assetId: string; valueEur: number }[];
-    const positionAssetIds = Object.keys(portfolioPositions);
-
-    const prices: Record<string, number | null> = {};
-    for (const assetId of positionAssetIds) {
-      const alloc = allocations.find(a => a.assetId === assetId);
-      const pos = portfolioPositions[assetId];
-      prices[assetId] = (pos.balance > 0 && alloc) ? alloc.valueEur / pos.balance : null;
-    }
-
-    const positions: Record<string, import("@crypto-control/portfolio").SnapshotPosition> = {};
-    for (const [assetId, pos] of Object.entries(portfolioPositions)) {
-      const alloc = allocations.find(a => a.assetId === assetId);
-      positions[assetId] = {
-        assetId, balance: pos.balance, avgCostEur: pos.averagePriceEur,
-        currentValueEur: alloc?.valueEur ?? null, currentPriceEur: prices[assetId] ?? null,
-      };
-    }
-
-    const historicalCapitalEur = allocations.reduce((s, a) => {
-      const pos = portfolioPositions[a.assetId];
-      return s + (pos?.totalInvestedEur ?? 0);
-    }, 0);
-
-    const historicalSaleRows = db.select().from(schema.cyclePartialSales).all();
-    const historicalSalesEur = historicalSaleRows.reduce((s, r) => s + r.proceedsEur, 0);
-
-    const contribRows = cycleRows.length > 0
-      ? db.select().from(schema.contributionSchedule)
-        .where(inArray(schema.contributionSchedule.cycleId, cycleRows.map(c => c.id)))
-        .all()
-      : [];
-    const futureContributions: import("@crypto-control/portfolio").SnapshotContribution[] = contribRows
-      .filter(r => r.status === "pendiente" && r.plannedDate > now)
-      .map(r => ({
-        id: r.id, cycleId: r.cycleId,
-        type: r.type as "periodica" | "extraordinaria",
-        plannedDate: r.plannedDate, amountEur: r.amountEur,
-        status: r.status as "pendiente" | "ejecutada" | "saltada",
-        executedAt: r.executedAt ?? null,
-      }));
-
-    const saleRuleRows2 = cycleRows.length > 0
-      ? db.select().from(schema.partialSaleRules)
-        .where(inArray(schema.partialSaleRules.cycleId, cycleRows.map(c => c.id)))
-        .all()
-      : [];
-    const saleRules: import("@crypto-control/portfolio").SnapshotSaleRule[] = saleRuleRows2.map(r => ({
-      id: r.id, cycleId: r.cycleId, assetId: r.assetId, name: r.name,
-      conditionType: r.conditionType, conditionValue: r.conditionValue ?? null,
-      conditionValue2: r.conditionValue2 ?? null,
-      sellPercentage: r.sellPercentage, priority: r.priority, status: r.status,
-    }));
-
-    const rebuyTierRows2 = cycleRows.length > 0
-      ? db.select().from(schema.cycleRebuyTiers)
-        .where(inArray(schema.cycleRebuyTiers.cycleId, cycleRows.map(c => c.id)))
-        .all()
-      : [];
-    const rebuyTiers: import("@crypto-control/portfolio").SnapshotRebuyTier[] = rebuyTierRows2.map(r => ({
-      id: r.id, cycleId: r.cycleId, assetId: r.assetId ?? null,
-      drawdownPercentage: r.drawdownPercentage, usagePercentage: r.usagePercentage,
-      priority: r.priority ?? 0, status: r.status ?? "activa",
-      referenceType: r.referenceType ?? null, referenceValue: r.referenceValue ?? null,
-      lastTriggeredAt: r.lastTriggeredAt ?? null,
-    }));
-
-    const substitutionRows = cycleRows.length > 0
-      ? db.select().from(schema.assetSubstitutions)
-        .where(inArray(schema.assetSubstitutions.cycleId, cycleRows.map(c => c.id)))
-        .all()
-      : [];
-    const substitutions: import("@crypto-control/portfolio").SnapshotSubstitution[] = substitutionRows
-      .filter(r => r.status === "programada" && r.effectiveDate > now)
-      .map(r => ({
-        id: r.id, cycleId: r.cycleId, fromAssetId: r.fromAssetId,
-        toAssetId: r.toAssetId ?? null, effectiveDate: r.effectiveDate,
-        status: r.status, transferMode: r.allocationTransferMode ?? "full",
-      }));
-
-    const treasurySummary = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance());
-    const eurcEur = treasurySummary?.eurcBalance ?? 0;
-    const fiscalReserveEur = treasurySummary?.fiscalReserveBalance ?? 0;
-    const cashEur = treasurySummary?.cashBalance ?? 0;
-    const eurcAvailableEur = Math.max(0, eurcEur - fiscalReserveEur);
-
-    const missingPrices = positionAssetIds.filter(id => prices[id] == null);
-    const missingCosts = Object.entries(portfolioPositions)
-      .filter(([, p]) => p.averagePriceEur == null || p.averagePriceEur <= 0)
-      .map(([id]) => id);
-    const totalAssets = positionAssetIds.length || 1;
-
-    const lastRevision = db.select().from(schema.strategyRevisions)
-      .orderBy(desc(schema.strategyRevisions.createdAt)).get();
-    const strategyVersion = lastRevision
-      ? `rev-${lastRevision.id.slice(0, 8)}`
-      : `plan-${planRow.id.slice(0, 8)}`;
-
-    const snapshot: import("@crypto-control/portfolio").PlanConsolidatedSnapshot = {
-      snapshotId: `snap-${now}`,
-      generatedAt: now,
-      projectionStartDate: now,
-      planId: planRow.id,
-      planName: planRow.name,
-      cycles,
-      positions,
-      historicalCapitalEur,
-      historicalSalesEur,
-      historicalRebuysEur: 0,
-      futureContributions,
-      saleRules,
-      rebuyTiers,
-      substitutions,
-      treasury: { cashEur, eurcEur, eurcAvailableEur, fiscalReserveEur, totalLiquidityEur: cashEur + eurcEur },
-      prices,
-      dataQuality: {
-        overallScore: Math.max(0, 1 - (missingPrices.length + missingCosts.length) / (2 * totalAssets)),
-        missingPrices, missingCosts, staleData: [], notes: [],
-      },
-      fiscalVersion: "es-2024",
-      strategyVersion,
-    };
-
-    // Run all 4 scenarios
-    const scenarioSet = runAllScenarios(snapshot, horizonDate, { complianceRate }, undefined, now);
+    const scenarioSet = runAllScenarios(
+      snapshot,
+      horizonDate,
+      { complianceRate },
+      SPANISH_FISCAL_CONFIG_2024,
+      now,
+      dynamicFactors,
+    );
     const comparison = compareScenarios(scenarioSet);
 
-    // Serialize simplified output for the UI (avoid large nested objects)
     const LABELS: Record<string, string> = {
       conservador: "Conservador", base: "Base", optimista: "Optimista", dinamico: "Dinámico",
     };

@@ -38,7 +38,7 @@ function startOfMonth(ts: number): number {
 function activeCycle(cycles: SnapshotCycle[], date: number): SnapshotCycle | null {
   return (
     [...cycles]
-      .filter(c => c.startDate <= date && (c.endDate == null || c.endDate > date))
+      .filter(c => (c.status === "active" || c.status === "planned") && c.startDate <= date && (c.endDate == null || c.endDate > date))
       .sort((a, b) => b.startDate - a.startDate)[0] ?? null
   );
 }
@@ -268,7 +268,7 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
 
     // --- Monthly contribution ---
     if (cycle) {
-      const effectiveAlloc = computeEffectiveAllocation(cycle.assets, goalReachedAssets, currentDate);
+      const effectiveAlloc = computeEffectiveAllocation(cycle.assets, goalReachedAssets, currentDate, cycle.monthlyAmountEur);
 
       const { allocations, events: contribEvents, totalSpentEur } = simulateMonthlyContribution(
         currentDate, cycleId,

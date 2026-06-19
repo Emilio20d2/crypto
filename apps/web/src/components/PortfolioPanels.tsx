@@ -69,6 +69,29 @@ function formatMoneyPerCoin(value: number | null | undefined, fallback = "Pendie
   return typeof value === "number" && Number.isFinite(value) ? formatMoney(value) : fallback;
 }
 
+function positionCurrentPrice(position: any) {
+  const marketPrice = finiteNumber(position.market?.price);
+  if (marketPrice !== null) return { price: marketPrice, state: "market" as const };
+
+  const value = finiteNumber(position.totalBalanceFiat);
+  const amount = finiteNumber(position.totalBalanceCrypto);
+  if (value !== null && amount !== null && amount > 0) {
+    return { price: value / amount, state: "partial" as const };
+  }
+
+  return { price: null, state: "missing" as const };
+}
+
+function priceSourceLabel(position: any, portfolioState?: string) {
+  if (portfolioState === "cached") return "Ultimo valido";
+  const status = typeof position.market?.status === "string" ? position.market.status : "";
+  if (status.startsWith("fallback:")) {
+    const provider = status.replace("fallback:", "").trim();
+    return provider ? `via ${provider}` : "fuente alternativa";
+  }
+  return "Live";
+}
+
 export function DataStatus({ state, reason }: { state?: string; reason?: string }) {
   const label = state === "live" ? "Live" : state === "cached" ? "Caché" : state === "unavailable" ? "Error" : "Sin estado";
   const Icon = state === "live" ? ShieldCheck : state === "cached" ? Database : CircleAlert;
@@ -261,12 +284,14 @@ function PositionCard({
   logoUrl,
   onSelect,
   localCostByAsset,
+  portfolioState,
 }: {
   position: any;
   name: string;
   logoUrl?: string | null;
   onSelect: () => void;
   localCostByAsset: Record<string, number>;
+  portfolioState?: string;
 }) {
   const invested = positionInvested(position, localCostByAsset);
   const pnl = positionPnL(position, localCostByAsset);
@@ -274,6 +299,7 @@ function PositionCard({
   const averageCost = positionAverageCost(position, localCostByAsset);
   const weight = formatAllocation(position.allocation);
   const change = finiteNumber(position.market?.pricePercentageChange24h);
+  const currentPrice = positionCurrentPrice(position);
 
   return (
     <button type="button" className="position-card" onClick={onSelect}>
@@ -293,6 +319,10 @@ function PositionCard({
 
       <span className="position-card-metrics">
         <span><small>Cantidad</small><strong>{formatCrypto(position.totalBalanceCrypto, "Pendiente")} {position.asset}</strong></span>
+        <span>
+          <small>Precio actual <i className={currentPrice.state === "market" && portfolioState !== "cached" ? "price-source-live" : "price-source-partial"}>{currentPrice.state === "missing" ? "pendiente" : currentPrice.state === "partial" ? "parcial" : priceSourceLabel(position, portfolioState)}</i></small>
+          <strong>{formatMoneyPerCoin(currentPrice.price)}</strong>
+        </span>
         <span><small>Invertido</small><strong>{formatMoney(invested, "Pendiente")}</strong></span>
         <span><small>Beneficio/Pérdida</small><strong className={pnl !== null && pnl < 0 ? "text-negative" : "text-positive"}>{formatMoney(pnl, "Pendiente")}</strong></span>
         <span><small>ROI</small><strong className={roi !== null && roi < 0 ? "text-negative" : "text-positive"}>{formatPercentPoints(roi)}</strong></span>
@@ -315,11 +345,13 @@ export function PositionList({
   assets,
   onSelect,
   localCostByAsset = {},
+  portfolioState,
 }: {
   positions: any[];
   assets: any[];
   onSelect: (assetId: string) => void;
   localCostByAsset?: Record<string, number>;
+  portfolioState?: string;
 }) {
   const allocated = positions.flatMap((position, index) => {
     const percent = formatAllocation(position.allocation);
@@ -364,6 +396,7 @@ export function PositionList({
                 logoUrl={logoUrl}
                 onSelect={() => onSelect(position.asset)}
                 localCostByAsset={localCostByAsset}
+                portfolioState={portfolioState}
               />
             );
           })}

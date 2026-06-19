@@ -394,7 +394,13 @@ export function Portfolio() {
 
       <PortfolioChart data={chartData} period={period} onPeriodChange={setPeriod} />
 
-      <PositionList positions={positions} assets={assets} onSelect={(assetId) => navigate(`/activo/${assetId}`)} localCostByAsset={localPositionMap} />
+      <PositionList
+        positions={positions}
+        assets={assets}
+        onSelect={(assetId) => navigate(`/activo/${assetId}`)}
+        localCostByAsset={localPositionMap}
+        portfolioState={breakdown.state}
+      />
     </section>
   );
 }

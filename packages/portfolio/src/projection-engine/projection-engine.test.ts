@@ -2,6 +2,7 @@ import { describe, test, expect } from "vitest";
 import { runProjection } from "./projection-engine";
 import { SPANISH_FISCAL_CONFIG_2024, buildCacheKey } from "./types";
 import { buildDefaultHypotheses } from "./asset-simulator";
+import { computeEffectiveAllocation } from "./contribution-simulator";
 import { computeTaxOnGain } from "./tax-simulator";
 import { simulateSaleRules } from "./sale-simulator";
 import type { PlanConsolidatedSnapshot, ProjectionInput } from "./types";
@@ -214,6 +215,62 @@ describe("runProjection — aportaciones y objetivos", () => {
     // BTC ya tiene el objetivo alcanzado → no debería recibir compras
     expect(cr?.buysByAsset["BTC"] ?? 0).toBe(0);
     expect(cr?.buysByAsset["ETH"] ?? 0).toBeGreaterThan(0);
+  });
+
+  test("una moneda con fecha inicio futura no recibe compras antes de activarse", () => {
+    const snap = makeSnapshot({
+      cycles: [{
+        id: "cycle-1",
+        planId: "plan-1",
+        name: "Ciclo",
+        startDate: makeSnapshot().projectionStartDate,
+        endDate: null,
+        monthlyAmountEur: 200,
+        status: "active",
+        assets: [
+          {
+            id: "ia-btc", assetId: "BTC", cycleId: "cycle-1", status: "active",
+            allocationPercentage: 50, allocationValue: null, allocationType: "percentage",
+            priority: 1, targetAmount: null, targetValueEur: null, targetPortfolioPercentage: null,
+            goalReachedAt: null, startDate: makeSnapshot().projectionStartDate, endDate: null,
+          },
+          {
+            id: "ia-ton", assetId: "TON", cycleId: "cycle-1", status: "active",
+            allocationPercentage: 50, allocationValue: null, allocationType: "percentage",
+            priority: 2, targetAmount: null, targetValueEur: null, targetPortfolioPercentage: null,
+            goalReachedAt: null, startDate: new Date("2028-01-01").getTime(), endDate: null,
+          },
+        ],
+      }],
+      prices: { BTC: 80_000, ETH: 2_000, TON: 2 },
+    });
+
+    const result = runProjection(makeInput(snap, 1));
+    const tonResult = result.assetResults.find(a => a.assetId === "TON");
+
+    expect(result.cycleResults[0]?.buysByAsset["TON"] ?? 0).toBe(0);
+    expect(tonResult?.finalBalance ?? 0).toBe(0);
+  });
+
+  test("los importes fijos reservan su parte y el resto se reparte por porcentaje", () => {
+    const now = makeSnapshot().projectionStartDate;
+    const allocation = computeEffectiveAllocation([
+      {
+        id: "ia-ada", assetId: "ADA", cycleId: "cycle-1", status: "active",
+        allocationPercentage: null, allocationValue: 50, allocationType: "amount",
+        priority: 1, targetAmount: null, targetValueEur: null, targetPortfolioPercentage: null,
+        goalReachedAt: null, startDate: now, endDate: null,
+      },
+      {
+        id: "ia-btc", assetId: "BTC", cycleId: "cycle-1", status: "active",
+        allocationPercentage: 100, allocationValue: null, allocationType: "percentage",
+        priority: 2, targetAmount: null, targetValueEur: null, targetPortfolioPercentage: null,
+        goalReachedAt: null, startDate: now, endDate: null,
+      },
+    ], new Set(), now, 200);
+
+    expect(allocation.ADA).toBeCloseTo(0.25, 4);
+    expect(allocation.BTC).toBeCloseTo(0.75, 4);
   });
 });
 
