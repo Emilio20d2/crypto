@@ -87,6 +87,85 @@ const MOCK_PROJECTION = {
   generatedAt: Date.now(),
 };
 
+(MOCK_PROJECTION.snapshot as any).plans = [
+  { id: "plan-1", name: "Plan principal", status: "active", baseCurrency: "EUR" },
+];
+(MOCK_PROJECTION.snapshot as any).cycles = [
+  { id: "cycle-1", planId: "plan-1", name: "Ciclo principal", startDate: Date.now(), endDate: null, monthlyAmountEur: 200, status: "active", assetCount: 2 },
+];
+(MOCK_PROJECTION.snapshot as any).currentPortfolioValueEur = 4000;
+for (const scenario of MOCK_PROJECTION.scenarios as any[]) {
+  scenario.summary.historicalCapitalEur = 4000;
+  scenario.summary.totalFutureCapitalEur = 1000;
+  scenario.summary.estimatedMarketGainEur = scenario.summary.finalNetWealthEur - 5000;
+  scenario.summary.treasuryInterestEur = 0;
+  scenario.summary.estimatedFeesEur = 0;
+  scenario.summary.weightedAnnualReturn = 0.12;
+  scenario.summary.totalTaxPendingEur = 0;
+  scenario.hypotheses = [
+    {
+      assetId: "BTC",
+      annualGrowthRate: 0.15,
+      volatility: 0.5,
+      correctionDepth: 0.4,
+      source: "test",
+      hypothesis: "Perfil propio BTC de prueba",
+      dataQuality: "media",
+      confidence: 0.6,
+    },
+  ];
+  scenario.assetResults = [
+    {
+      assetId: "BTC",
+      initialBalance: 0.05,
+      initialValueEur: 4000,
+      initialAvgCostEur: 50000,
+      balanceBoughtContributions: 0.01,
+      balanceBoughtExtraordinary: 0,
+      balanceSold: 0,
+      balanceRebought: 0,
+      finalBalance: 0.06,
+      costContributionsEur: 1000,
+      costRebuyEur: 0,
+      salesProceedsEur: 0,
+      finalValueEur: scenario.summary.finalNetWealthEur,
+      finalPriceEur: 90000,
+      finalAvgCostEur: 60000,
+      unrealizedGainEur: scenario.summary.totalUnrealizedGainEur,
+      realizedGainEur: 0,
+      targetAmount: null,
+      targetValueEur: null,
+      goalReachedProjectedAt: null,
+      hypothesis: {
+        annualGrowthRate: 0.15,
+        source: "test",
+        hypothesis: "Perfil propio BTC de prueba",
+        dataQuality: "media",
+        confidence: 0.6,
+      },
+    },
+  ];
+  scenario.cycleResults = [
+    {
+      cycleId: "cycle-1",
+      cycleName: "Ciclo principal",
+      startDate: Date.now(),
+      endDate: null,
+      plannedContributionEur: 1200,
+      simulatedContributionEur: 1000,
+      extraordinaryContributionEur: 0,
+      salesEur: 0,
+      rebuysEur: 0,
+      taxGeneratedEur: scenario.summary.totalTaxGeneratedEur,
+      eurcGeneratedEur: 0,
+      eurcUsedEur: 0,
+      buysByAsset: { BTC: 1000 },
+      goalReachedAssets: [],
+    },
+  ];
+  scenario.goalResults = [];
+}
+
 beforeEach(() => {
   const now = Date.now();
   window.cryptoControl = {
@@ -132,6 +211,8 @@ beforeEach(() => {
       listPortfolios: () => ok([]),
       getPortfolioBreakdown: () => ok({}),
       getPortfolioSnapshots: () => ok([]),
+      previewOrder: () => ok({ preview_id: "preview-1" }),
+      submitOrder: () => ok({ success: true }),
     },
     sentiment: {
       getGlobal: () => ok({ scope: "global" as const, direction: "neutral" as const, score: 0, confidence: 0, timeframe: "24h" as const, factors: [], sourceSummary: [], calculatedAt: now, validUntil: null, state: "unavailable" as const }),

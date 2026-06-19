@@ -142,14 +142,31 @@ export interface ProjectionScenarioResult {
     initialGrossWealthEur: number;
     finalGrossWealthEur: number;
     finalNetWealthEur: number;
+    historicalCapitalEur: number;
+    totalFutureCapitalEur: number;
     totalCapitalEur: number;
+    estimatedMarketGainEur: number;
+    treasuryInterestEur: number;
+    estimatedFeesEur: number;
+    weightedAnnualReturn: number | null;
     totalRealizedGainEur: number;
     totalUnrealizedGainEur: number;
     totalTaxGeneratedEur: number;
+    totalTaxPendingEur: number;
     finalEurcAvailableEur: number;
     finalCashEur: number;
     finalFiscalReserveEur: number;
   };
+  hypotheses: Array<{
+    assetId: string;
+    annualGrowthRate: number;
+    volatility: number;
+    correctionDepth: number;
+    source: string | null;
+    hypothesis: string | null;
+    dataQuality: "alta" | "media" | "baja" | null;
+    confidence: number | null;
+  }>;
   chartPoints: Array<{
     date: number;
     grossWealthEur: number;
@@ -160,10 +177,62 @@ export interface ProjectionScenarioResult {
   }>;
   assetResults: Array<{
     assetId: string;
+    initialBalance: number;
+    initialValueEur: number | null;
+    initialAvgCostEur: number | null;
+    balanceBoughtContributions: number;
+    balanceBoughtExtraordinary: number;
+    balanceSold: number;
+    balanceRebought: number;
     finalBalance: number;
+    costContributionsEur: number;
+    costRebuyEur: number;
+    salesProceedsEur: number;
     finalValueEur: number | null;
+    finalPriceEur: number | null;
+    finalAvgCostEur: number | null;
+    unrealizedGainEur: number | null;
     realizedGainEur: number;
+    targetAmount: number | null;
+    targetValueEur: number | null;
     goalReachedProjectedAt: number | null;
+    hypothesis: {
+      annualGrowthRate: number;
+      source: string | null;
+      hypothesis: string | null;
+      dataQuality: "alta" | "media" | "baja" | null;
+      confidence: number | null;
+    } | null;
+  }>;
+  cycleResults: Array<{
+    cycleId: string;
+    cycleName: string;
+    startDate: number;
+    endDate: number | null;
+    plannedContributionEur: number;
+    simulatedContributionEur: number;
+    extraordinaryContributionEur: number;
+    salesEur: number;
+    rebuysEur: number;
+    taxGeneratedEur: number;
+    eurcGeneratedEur: number;
+    eurcUsedEur: number;
+    buysByAsset: Record<string, number>;
+    goalReachedAssets: string[];
+  }>;
+  goalResults: Array<{
+    id: string;
+    name: string;
+    type: string;
+    targetAmountEur: number;
+    targetDate: number | null;
+    priority: number;
+    currentAssignedEur: number;
+    projectedAssignedEur: number;
+    progress: number;
+    reachedAt: number | null;
+    reachedYear: number | null;
+    isReached: boolean;
   }>;
 }
 
@@ -173,8 +242,25 @@ export interface ProjectionResult {
     generatedAt: number;
     planId: string;
     planName: string;
+    plans: Array<{
+      id: string;
+      name: string;
+      status: string;
+      baseCurrency: string;
+    }>;
+    cycles: Array<{
+      id: string;
+      planId: string;
+      name: string;
+      startDate: number;
+      endDate: number | null;
+      monthlyAmountEur: number;
+      status: string;
+      assetCount: number;
+    }>;
     historicalCapitalEur: number;
     historicalSalesEur: number;
+    currentPortfolioValueEur: number;
     positionCount: number;
     treasury: {
       cashEur: number;
@@ -238,6 +324,8 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
     listPortfolios: () => Promise<Result<any>>;
     getPortfolioBreakdown: (portfolioUuid: string, currency: string) => Promise<Result<any>>;
     getPortfolioSnapshots: (portfolioUuid: string) => Promise<Result<any>>;
+    previewOrder: (input: { productId?: string; assetId?: string; side?: "BUY" | "SELL"; quoteAmountEur?: number; baseAmount?: number }) => Promise<Result<any>>;
+    submitOrder: (input: { productId?: string; assetId?: string; side?: "BUY" | "SELL"; quoteAmountEur?: number; baseAmount?: number; previewId?: string | null; confirmationText: string }) => Promise<Result<any>>;
   };
   sentiment: {
     getGlobal: (input: { timeframe: MarketSentimentTimeframe }) => Promise<Result<MarketSentiment>>;
@@ -321,7 +409,7 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
     getProjection: (input?: { horizonYears?: number; complianceRate?: number }) => Promise<Result<ProjectionResult>>;
   };
   smartBuy: {
-    getRecommendation: (input: { cycleId: string; amount: number; mode?: SmartBuyMode; originType?: "cash" | "eurc" }) => Promise<Result<SmartBuyRecommendation>>;
+    getRecommendation: (input: { cycleId: string; amount: number; mode?: SmartBuyMode; originType?: "cash" | "eurc"; weights?: { planPct?: number; balancePct?: number; opportunityPct?: number; potentialPct?: number }; horizon?: "1-3y" | "3-5y" | "5y+" }) => Promise<Result<SmartBuyRecommendation>>;
   };
   rebuyTiers: {
     list: (input: { cycleId: string }) => Promise<Result<CycleRebuyTier[]>>;

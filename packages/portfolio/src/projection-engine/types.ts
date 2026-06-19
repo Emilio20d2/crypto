@@ -37,6 +37,10 @@ export interface AssetScenarioRates {
   annualGrowthRate: number; // ej. 0.10 = 10%
   volatility: number;       // 0..1 (informativo, no aleatorio)
   correctionDepth: number;  // fracción máx de corrección esperada
+  source?: string;
+  hypothesis?: string;
+  dataQuality?: "alta" | "media" | "baja";
+  confidence?: number;
 }
 
 export interface ScenarioHypotheses {
@@ -62,6 +66,13 @@ export interface DynamicMarketFactors {
 }
 
 // ── Snapshot consolidado (fuente única de verdad) ─────────────────────────────
+
+export interface SnapshotPlan {
+  id: string;
+  name: string;
+  status: string;
+  baseCurrency: string;
+}
 
 export interface SnapshotPosition {
   assetId: string;
@@ -105,7 +116,8 @@ export interface SnapshotContribution {
   type: "periodica" | "extraordinaria";
   plannedDate: number;
   amountEur: number;
-  status: "pendiente" | "ejecutada" | "saltada";
+  destinationAssetId?: string | null;
+  status: "pendiente" | "ejecutada" | "saltada" | "cancelada";
   executedAt: number | null;
 }
 
@@ -168,6 +180,7 @@ export interface PlanConsolidatedSnapshot {
 
   planId: string;
   planName: string;
+  plans?: SnapshotPlan[];
 
   cycles: SnapshotCycle[];         // ordenados por startDate
   positions: Record<string, SnapshotPosition>;
@@ -402,6 +415,10 @@ export interface ProjectionSummary {
   historicalCapitalEur: number;
   totalFutureCapitalEur: number;
   totalCapitalEur: number;
+  estimatedMarketGainEur: number;
+  treasuryInterestEur: number;
+  estimatedFeesEur: number;
+  weightedAnnualReturn: number | null;
 
   totalRealizedGainEur: number;
   totalUnrealizedGainEur: number;
@@ -427,6 +444,7 @@ export interface ProjectionOutput {
   generatedAt: number;
   horizonDate: number;
   scenario: ProjectionScenario;
+  scenarioHypotheses: ScenarioHypotheses;
 
   summary: ProjectionSummary;
   periods: ProjectionPeriod[];

@@ -34,13 +34,30 @@ function startOfMonth(ts: number): number {
   return d.getTime();
 }
 
-// Determine which cycle is active at a given date.
-function activeCycle(cycles: SnapshotCycle[], date: number): SnapshotCycle | null {
+function isCycleProjectable(cycle: SnapshotCycle, date: number): boolean {
   return (
-    [...cycles]
-      .filter(c => (c.status === "active" || c.status === "planned") && c.startDate <= date && (c.endDate == null || c.endDate > date))
-      .sort((a, b) => b.startDate - a.startDate)[0] ?? null
+    (cycle.status === "active" || cycle.status === "planned") &&
+    cycle.startDate <= date &&
+    (cycle.endDate == null || cycle.endDate > date)
   );
+}
+
+// Determine every cycle that contributes at a given date. Different plans may
+// intentionally overlap; each projectable cycle contributes once per month.
+function activeCycles(cycles: SnapshotCycle[], date: number): SnapshotCycle[] {
+  return [...cycles]
+    .filter(cycle => isCycleProjectable(cycle, date))
+    .sort((a, b) => a.startDate - b.startDate || a.id.localeCompare(b.id));
+}
+
+function sameMonth(left: number, right: number): boolean {
+  const a = new Date(left);
+  const b = new Date(right);
+  return a.getUTCFullYear() === b.getUTCFullYear() && a.getUTCMonth() === b.getUTCMonth();
+}
+
+function yearsBetween(start: number, end: number): number {
+  return Math.max((end - start) / (365.25 * 24 * 3600 * 1000), 1 / 12);
 }
 
 // Simple lot counter — deterministic sequential IDs.
@@ -176,8 +193,10 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
   let currentDate = startOfMonth(projectionStartDate);
 
   while (currentDate <= effectiveHorizon) {
-    const cycle = activeCycle(snapshot.cycles, currentDate);
-    const cycleId = cycle?.id ?? snapshot.cycles[snapshot.cycles.length - 1]?.id ?? "none";
+    const currentCycles = activeCycles(snapshot.cycles, currentDate);
+    const periodCycleId = currentCycles.length > 0
+      ? currentCycles.map(cycle => cycle.id).join("+")
+      : snapshot.cycles[snapshot.cycles.length - 1]?.id ?? "none";
     const periodEvents: ProjectionEvent[] = [];
 
     // Project prices forward
@@ -187,87 +206,88 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
       }
     }
 
-    // --- Sale rules ---
-    const saleResults = simulateSaleRules(
-      cycleId, currentDate,
-      snapshot.saleRules,
-      balances, avgCosts, prices,
-      fifoLots, fiscalConfig,
-      triggeredSaleRuleIds,
-    );
-
-    for (const sr of saleResults.filter(r => r.triggered)) {
-      initAsset(sr.assetId);
-      balances[sr.assetId] = Math.max(0, (balances[sr.assetId] ?? 0) - sr.quantitySold);
-
-      // Consume FIFO lots
-      for (const lc of sr.lotsConsumed) {
-        const lot = fifoLots.find(l => l.lotId === lc.lotId);
-        if (lot) lot.remaining = Math.max(0, lot.remaining - lc.quantity);
-      }
-
-      treasury = addSaleProceeds(treasury, sr.grossEur, sr.taxEur);
-      assetSold[sr.assetId] = (assetSold[sr.assetId] ?? 0) + sr.quantitySold;
-      assetSalesProceeds[sr.assetId] = (assetSalesProceeds[sr.assetId] ?? 0) + sr.grossEur;
-      assetRealizedGain[sr.assetId] = (assetRealizedGain[sr.assetId] ?? 0) + sr.gainEur;
-      assetEvents[sr.assetId].push(sr.event!);
-      periodEvents.push(sr.event!);
-      totalRealizedGainEur += sr.gainEur;
-      totalSalesEur += sr.grossEur;
-      totalTaxGeneratedEur += sr.taxEur;
-      triggeredSaleRuleIds.add(sr.ruleId);
-
-      const cr = cycleResultsMap.get(cycleId);
-      if (cr) {
-        cr.salesEur += sr.grossEur;
-        cr.taxGeneratedEur += sr.taxEur;
-        cr.eurcGeneratedEur += sr.netEurcEur;
-        cr.events.push(sr.event!);
-      }
-    }
-
-    // --- Rebuy tiers ---
     const usedTierIds = new Set<string>();
-    const rebuyResults = simulateRebuyTiers(
-      cycleId, currentDate,
-      snapshot.rebuyTiers,
-      prices,
-      eurcAvailable(treasury),
-      usedTierIds,
-      lotCounter,
-    );
 
-    for (const rr of rebuyResults.filter(r => r.triggered)) {
-      initAsset(rr.assetId);
-      balances[rr.assetId] = (balances[rr.assetId] ?? 0) + rr.quantityBought;
-      treasury = consumeEurcForRebuy(treasury, rr.eurcConsumedEur);
+    for (const cycle of currentCycles) {
+      const cycleId = cycle.id;
 
-      if (rr.newLot) fifoLots.push(rr.newLot);
+      // --- Sale rules ---
+      const saleResults = simulateSaleRules(
+        cycleId, currentDate,
+        snapshot.saleRules,
+        balances, avgCosts, prices,
+        fifoLots, fiscalConfig,
+        triggeredSaleRuleIds,
+      );
 
-      // Update avg cost
-      const prevBal = (balances[rr.assetId] ?? 0) - rr.quantityBought;
-      const prevCost = avgCosts[rr.assetId] ?? rr.priceEur;
-      const newCost =
-        (prevBal * prevCost + rr.quantityBought * rr.priceEur) /
-        ((balances[rr.assetId] ?? rr.quantityBought) || 1);
-      avgCosts[rr.assetId] = newCost;
+      for (const sr of saleResults.filter(r => r.triggered)) {
+        initAsset(sr.assetId);
+        balances[sr.assetId] = Math.max(0, (balances[sr.assetId] ?? 0) - sr.quantitySold);
 
-      assetRebought[rr.assetId] = (assetRebought[rr.assetId] ?? 0) + rr.quantityBought;
-      assetCostRebuy[rr.assetId] = (assetCostRebuy[rr.assetId] ?? 0) + rr.eurcConsumedEur;
-      assetEvents[rr.assetId].push(rr.event!);
-      periodEvents.push(rr.event!);
-      totalRebuysEur += rr.eurcConsumedEur;
+        for (const lc of sr.lotsConsumed) {
+          const lot = fifoLots.find(l => l.lotId === lc.lotId);
+          if (lot) lot.remaining = Math.max(0, lot.remaining - lc.quantity);
+        }
 
-      const cr = cycleResultsMap.get(cycleId);
-      if (cr) {
-        cr.rebuysEur += rr.eurcConsumedEur;
-        cr.eurcUsedEur += rr.eurcConsumedEur;
-        cr.events.push(rr.event!);
+        treasury = addSaleProceeds(treasury, sr.grossEur, sr.taxEur);
+        assetSold[sr.assetId] = (assetSold[sr.assetId] ?? 0) + sr.quantitySold;
+        assetSalesProceeds[sr.assetId] = (assetSalesProceeds[sr.assetId] ?? 0) + sr.grossEur;
+        assetRealizedGain[sr.assetId] = (assetRealizedGain[sr.assetId] ?? 0) + sr.gainEur;
+        assetEvents[sr.assetId].push(sr.event!);
+        periodEvents.push(sr.event!);
+        totalRealizedGainEur += sr.gainEur;
+        totalSalesEur += sr.grossEur;
+        totalTaxGeneratedEur += sr.taxEur;
+        triggeredSaleRuleIds.add(sr.ruleId);
+
+        const cr = cycleResultsMap.get(cycleId);
+        if (cr) {
+          cr.salesEur += sr.grossEur;
+          cr.taxGeneratedEur += sr.taxEur;
+          cr.eurcGeneratedEur += sr.netEurcEur;
+          cr.events.push(sr.event!);
+        }
       }
-    }
 
-    // --- Monthly contribution ---
-    if (cycle) {
+      // --- Rebuy tiers ---
+      const rebuyResults = simulateRebuyTiers(
+        cycleId, currentDate,
+        snapshot.rebuyTiers,
+        prices,
+        eurcAvailable(treasury),
+        usedTierIds,
+        lotCounter,
+      );
+
+      for (const rr of rebuyResults.filter(r => r.triggered)) {
+        initAsset(rr.assetId);
+        balances[rr.assetId] = (balances[rr.assetId] ?? 0) + rr.quantityBought;
+        treasury = consumeEurcForRebuy(treasury, rr.eurcConsumedEur);
+
+        if (rr.newLot) fifoLots.push(rr.newLot);
+
+        const prevBal = (balances[rr.assetId] ?? 0) - rr.quantityBought;
+        const prevCost = avgCosts[rr.assetId] ?? rr.priceEur;
+        const newCost =
+          (prevBal * prevCost + rr.quantityBought * rr.priceEur) /
+          ((balances[rr.assetId] ?? rr.quantityBought) || 1);
+        avgCosts[rr.assetId] = newCost;
+
+        assetRebought[rr.assetId] = (assetRebought[rr.assetId] ?? 0) + rr.quantityBought;
+        assetCostRebuy[rr.assetId] = (assetCostRebuy[rr.assetId] ?? 0) + rr.eurcConsumedEur;
+        assetEvents[rr.assetId].push(rr.event!);
+        periodEvents.push(rr.event!);
+        totalRebuysEur += rr.eurcConsumedEur;
+
+        const cr = cycleResultsMap.get(cycleId);
+        if (cr) {
+          cr.rebuysEur += rr.eurcConsumedEur;
+          cr.eurcUsedEur += rr.eurcConsumedEur;
+          cr.events.push(rr.event!);
+        }
+      }
+
+      // --- Monthly contribution ---
       const effectiveAlloc = computeEffectiveAllocation(cycle.assets, goalReachedAssets, currentDate, cycle.monthlyAmountEur);
 
       const { allocations, events: contribEvents, totalSpentEur } = simulateMonthlyContribution(
@@ -337,6 +357,53 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
           }
         }
       }
+
+      if (projectExtraordinaryContributions) {
+        const scheduled = snapshot.futureContributions.filter(contribution =>
+          contribution.cycleId === cycleId &&
+          contribution.type === "extraordinaria" &&
+          contribution.status === "pendiente" &&
+          sameMonth(contribution.plannedDate, currentDate)
+        );
+
+        for (const contribution of scheduled) {
+          const extraAlloc = contribution.destinationAssetId
+            ? { [contribution.destinationAssetId]: 1 }
+            : computeEffectiveAllocation(cycle.assets, goalReachedAssets, currentDate, contribution.amountEur);
+          const { allocations: extraAllocations, events: extraEvents, totalSpentEur: extraSpent } = simulateMonthlyContribution(
+            currentDate, cycleId,
+            contribution.amountEur,
+            1.0,
+            extraAlloc,
+            prices,
+            lotCounter,
+          );
+
+          for (const alloc of extraAllocations) {
+            initAsset(alloc.assetId);
+            const prevBal = balances[alloc.assetId] ?? 0;
+            const prevCost = avgCosts[alloc.assetId] ?? alloc.priceEur;
+            const newBal = prevBal + alloc.quantity;
+            balances[alloc.assetId] = newBal;
+            avgCosts[alloc.assetId] = newBal > 0 ? (prevBal * prevCost + alloc.amountEur) / newBal : alloc.priceEur;
+            fifoLots.push({ ...alloc.newLot, source: "projection_contribution" });
+            assetBoughtExtraordinary[alloc.assetId] = (assetBoughtExtraordinary[alloc.assetId] ?? 0) + alloc.quantity;
+            assetCostContributions[alloc.assetId] = (assetCostContributions[alloc.assetId] ?? 0) + alloc.amountEur;
+            const evt = extraEvents.find(e => e.assetId === alloc.assetId);
+            if (evt) {
+              const extraEvt = { ...evt, type: "extraordinary_contribution" as const, description: `Aportación extraordinaria: ${alloc.amountEur.toFixed(2)} € → ${alloc.assetId}` };
+              assetEvents[alloc.assetId].push(extraEvt);
+              periodEvents.push(extraEvt);
+              const cr = cycleResultsMap.get(cycleId);
+              if (cr) cr.events.push(extraEvt);
+            }
+          }
+
+          futureCapitalEur += extraSpent;
+          const cr = cycleResultsMap.get(cycleId);
+          if (cr) cr.extraordinaryContributionEur += extraSpent;
+        }
+      }
     }
 
     allEvents.push(...periodEvents);
@@ -365,7 +432,7 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
 
     periods.push({
       date: currentDate,
-      cycleId,
+      cycleId: periodCycleId,
       portfolioValueEur: Math.round(portfolioValue * 100) / 100,
       cashEur: Math.round(treasury.cashEur * 100) / 100,
       eurcAvailableEur: Math.round(eurcAvailable(treasury) * 100) / 100,
@@ -394,10 +461,14 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
   const assetResults: AssetProjectionResult[] = [];
   const lastPeriod = periods[periods.length - 1];
 
-  for (const assetId of new Set([...Object.keys(snapshot.positions), ...Object.keys(balances)])) {
+  const strategyAssetIds = snapshot.cycles.flatMap(cycle => cycle.assets.map(asset => asset.assetId));
+  for (const assetId of new Set([...Object.keys(snapshot.positions), ...Object.keys(balances), ...strategyAssetIds])) {
     initAsset(assetId);
     const initPos = snapshot.positions[assetId];
     const finalPos = lastPeriod?.positions[assetId];
+    const strategyAsset = snapshot.cycles
+      .flatMap(cycle => cycle.assets)
+      .find(asset => asset.assetId === assetId);
 
     assetResults.push({
       assetId,
@@ -417,9 +488,9 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
       finalValueEur: finalPos?.valueEur ?? null,
       finalAvgCostEur: finalPos?.avgCostEur ?? null,
       unrealizedGainEur: finalPos?.unrealizedGainEur ?? null,
-      targetAmount: null,
-      targetValueEur: null,
-      goalReachedAt: snapshot.cycles.flatMap(c => c.assets).find(a => a.assetId === assetId)?.goalReachedAt ?? null,
+      targetAmount: strategyAsset?.targetAmount ?? null,
+      targetValueEur: strategyAsset?.targetValueEur ?? null,
+      goalReachedAt: strategyAsset?.goalReachedAt ?? null,
       goalReachedProjectedAt: goalReachedProjectedAt[assetId] ?? null,
       rulesTriggered: snapshot.saleRules.filter(r => r.assetId === assetId && triggeredSaleRuleIds.has(r.id)).map(r => r.id),
       events: assetEvents[assetId] ?? [],
@@ -436,17 +507,38 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
   if (missingPrices.length > 0) confidenceFactors.push(`Sin precio: ${missingPrices.join(", ")}`);
   if (!lastPeriod) confidenceFactors.push("Sin periodos proyectados");
   const finalUnrealized = lastPeriod ? Object.values(lastPeriod.positions).reduce((s, p) => s + (p.unrealizedGainEur ?? 0), 0) : 0;
+  const initialGrossWealthEur = firstPeriod?.grossWealthEur ?? 0;
+  const finalNetWealthEur = lastPeriod?.netWealthEur ?? 0;
+  const estimatedFeesEur = 0;
+  const treasuryInterestEur = 0;
+  const estimatedMarketGainEur = Math.round((
+    finalNetWealthEur -
+    initialGrossWealthEur -
+    futureCapitalEur +
+    totalTaxGeneratedEur +
+    estimatedFeesEur -
+    treasuryInterestEur
+  ) * 100) / 100;
+  const weightedBaseCapital = Math.max(1, initialGrossWealthEur + futureCapitalEur);
+  const projectionYears = yearsBetween(projectionStartDate, effectiveHorizon);
+  const weightedAnnualReturn = finalNetWealthEur > 0
+    ? Math.pow(finalNetWealthEur / weightedBaseCapital, 1 / projectionYears) - 1
+    : null;
 
   const summary: ProjectionSummary = {
     scenario,
     horizonDate: effectiveHorizon,
     projectionStartDate,
-    initialGrossWealthEur: firstPeriod?.grossWealthEur ?? 0,
+    initialGrossWealthEur,
     finalGrossWealthEur: lastPeriod?.grossWealthEur ?? 0,
-    finalNetWealthEur: lastPeriod?.netWealthEur ?? 0,
+    finalNetWealthEur,
     historicalCapitalEur: snapshot.historicalCapitalEur,
     totalFutureCapitalEur: Math.round(futureCapitalEur * 100) / 100,
     totalCapitalEur: Math.round((snapshot.historicalCapitalEur + futureCapitalEur) * 100) / 100,
+    estimatedMarketGainEur,
+    treasuryInterestEur,
+    estimatedFeesEur,
+    weightedAnnualReturn: weightedAnnualReturn != null ? Math.round(weightedAnnualReturn * 10_000) / 10_000 : null,
     totalRealizedGainEur: Math.round(totalRealizedGainEur * 100) / 100,
     totalUnrealizedGainEur: Math.round(finalUnrealized * 100) / 100,
     totalTaxGeneratedEur: Math.round(totalTaxGeneratedEur * 100) / 100,
@@ -468,6 +560,7 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
     generatedAt: input.now,
     horizonDate: effectiveHorizon,
     scenario,
+    scenarioHypotheses,
     summary,
     periods,
     cycleResults: Array.from(cycleResultsMap.values()),

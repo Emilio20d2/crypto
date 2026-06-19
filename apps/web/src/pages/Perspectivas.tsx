@@ -9,7 +9,7 @@ import { Button } from "../components/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/Card";
 import { Input } from "../components/Input";
 import { PageToolbar } from "../components/PageToolbar";
-import type { PerspectivesGoal, PerspectivesGoalType, ProjectionResult, ProjectionScenarioResult } from "@crypto-control/core";
+import type { PerspectivesGoalType, ProjectionResult, ProjectionScenarioResult } from "@crypto-control/core";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -34,10 +34,6 @@ function dateToTs(s: string): number | null {
 function tsToDate(ts: number | null): string {
   if (!ts) return "";
   return new Date(ts).toISOString().slice(0, 10);
-}
-
-function yearOf(ts: number) {
-  return new Date(ts).getFullYear();
 }
 
 const SCENARIO_COLORS: Record<string, string> = {
@@ -75,7 +71,9 @@ const EMPTY_GOAL_FORM: GoalFormState = {
 export function Perspectivas() {
   const qc = useQueryClient();
 
-  const [horizonYears, setHorizonYears] = useState(10);
+  const currentYear = new Date().getFullYear();
+  const [targetYear, setTargetYear] = useState(currentYear + 10);
+  const horizonYears = Math.max(1, targetYear - currentYear);
   const [activeScenario, setActiveScenario] = useState<"conservador" | "base" | "optimista" | "dinamico">("base");
 
   const [showGoalForm, setShowGoalForm] = useState(false);
@@ -90,7 +88,8 @@ export function Perspectivas() {
       if (!r.ok) throw new Error(r.error?.message ?? "Error al calcular proyección");
       return r.data as ProjectionResult;
     },
-    staleTime: 5 * 60_000,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
     retry: 1,
   });
 
@@ -104,6 +103,11 @@ export function Perspectivas() {
     },
     staleTime: 30_000,
   });
+
+  const projectionYears = useMemo(
+    () => Array.from({ length: 30 }, (_, index) => currentYear + index + 1),
+    [currentYear]
+  );
 
   // ── mutations ─────────────────────────────────────────────────────────────
   const createGoal = useMutation({
@@ -150,19 +154,11 @@ export function Perspectivas() {
     [projection, activeScenario],
   );
 
-  const currentValueEur = projection?.snapshot.positions
-    ? Object.values(projection.snapshot.positions).reduce((s, p) => s + (p.currentValueEur ?? 0), 0)
-    : 0;
-
-  function goalEta(goal: PerspectivesGoal): string | null {
-    if (!activeScenarioData) return null;
-    for (const pt of activeScenarioData.chartPoints) {
-      if (pt.netWealthEur >= goal.targetAmountEur) {
-        return String(yearOf(pt.date));
-      }
-    }
-    return null;
-  }
+  const currentValueEur = projection?.snapshot.currentPortfolioValueEur ?? 0;
+  const goalResultById = useMemo(
+    () => new Map((activeScenarioData?.goalResults ?? []).map(goal => [goal.id, goal])),
+    [activeScenarioData],
+  );
 
   const dataScore = projection?.snapshot.dataQuality.overallScore ?? null;
 
@@ -185,15 +181,15 @@ export function Perspectivas() {
             Proyección — 4 escenarios
           </CardTitle>
           <div className="flex gap-2 items-center">
-            <label className="text-sm text-muted">Horizonte:</label>
+            <label className="text-sm text-muted">Año:</label>
             <select
               className="ui-select"
-              style={{ width: 100 }}
-              value={horizonYears}
-              onChange={e => setHorizonYears(parseInt(e.target.value))}
+              style={{ width: 110 }}
+              value={targetYear}
+              onChange={e => setTargetYear(parseInt(e.target.value))}
             >
-              {[3, 5, 10, 15, 20, 30].map(y => (
-                <option key={y} value={y}>{y} años</option>
+              {projectionYears.map(year => (
+                <option key={year} value={year}>{year}</option>
               ))}
             </select>
             {projectionQ.isFetching && <RefreshCw size={14} className="animate-spin text-muted" />}
@@ -231,7 +227,8 @@ export function Perspectivas() {
                       <span className="label">{sc.label}</span>
                       <span className="value">{fmt(sc.summary.finalNetWealthEur)}</span>
                       <span className="sub">Bruto: {fmt(sc.summary.finalGrossWealthEur)}</span>
-                      <span className="sub">Impuesto: {fmt(sc.summary.totalTaxGeneratedEur)}</span>
+                      <span className="sub">Aportaciones futuras: {fmt(sc.summary.totalFutureCapitalEur)}</span>
+                      <span className="sub">Retorno ponderado: {pct(sc.summary.weightedAnnualReturn)}</span>
                       {sc.probability != null && (
                         <span className="sub">Probabilidad: {pct(sc.probability)}</span>
                       )}
@@ -247,6 +244,9 @@ export function Perspectivas() {
                     <tr>
                       <th>Escenario</th>
                       <th className="text-right">Capital total</th>
+                      <th className="text-right">Aportaciones futuras</th>
+                      <th className="text-right">Ganancia mercado</th>
+                      <th className="text-right">Retorno ponderado</th>
                       <th className="text-right">Plusvalía realizada</th>
                       <th className="text-right">No realizada</th>
                       <th className="text-right">Impuesto</th>
@@ -268,6 +268,11 @@ export function Perspectivas() {
                           {sc.label}
                         </td>
                         <td className="text-right">{fmt(sc.summary.totalCapitalEur)}</td>
+                        <td className="text-right">{fmt(sc.summary.totalFutureCapitalEur)}</td>
+                        <td className={`text-right ${sc.summary.estimatedMarketGainEur > 0 ? "text-success" : "text-danger"}`}>
+                          {sc.summary.estimatedMarketGainEur > 0 ? "+" : ""}{fmt(sc.summary.estimatedMarketGainEur)}
+                        </td>
+                        <td className="text-right">{pct(sc.summary.weightedAnnualReturn)}</td>
                         <td className={`text-right ${sc.summary.totalRealizedGainEur > 0 ? "text-success" : ""}`}>
                           {sc.summary.totalRealizedGainEur > 0 ? "+" : ""}{fmt(sc.summary.totalRealizedGainEur)}
                         </td>
@@ -301,9 +306,14 @@ export function Perspectivas() {
               scenarios={projection!.scenarios}
               activeScenario={activeScenario}
               horizonYears={horizonYears}
+              targetYear={targetYear}
             />
           </CardContent>
         </Card>
+      )}
+
+      {projection && activeScenarioData && (
+        <StrategyBreakdownSection projection={projection} scenario={activeScenarioData} />
       )}
 
       {/* ── Sección 4: Objetivos ── */}
@@ -348,8 +358,9 @@ export function Perspectivas() {
           )}
 
           {(goalsQ.data ?? []).map(goal => {
-            const progress = Math.min(1, currentValueEur / goal.targetAmountEur);
-            const eta = goalEta(goal);
+            const projectedGoal = goalResultById.get(goal.id);
+            const progress = projectedGoal?.progress ?? Math.min(1, currentValueEur / goal.targetAmountEur);
+            const eta = projectedGoal?.reachedYear ? String(projectedGoal.reachedYear) : null;
             return (
               <div key={goal.id} className="perspectives-goal-row">
                 <div className="goal-header">
@@ -358,7 +369,7 @@ export function Perspectivas() {
                     <Badge variant="neutral">{GOAL_TYPE_LABELS[goal.type] ?? goal.type}</Badge>
                     {eta && <Badge variant="success">ETA: {eta}</Badge>}
                     {!eta && activeScenarioData && (
-                      <Badge variant="warning">Fuera del horizonte ({horizonYears}a)</Badge>
+                      <Badge variant="warning">Fuera del horizonte ({targetYear})</Badge>
                     )}
                   </div>
                   <div className="goal-actions">
@@ -391,11 +402,16 @@ export function Perspectivas() {
                     <div className="goal-progress-fill" style={{ width: `${progress * 100}%` }} />
                   </div>
                   <div className="goal-progress-labels">
-                    <span className="text-sm">{fmt(currentValueEur)}</span>
+                    <span className="text-sm">{fmt(projectedGoal?.currentAssignedEur ?? currentValueEur)}</span>
                     <span className="text-sm font-medium">{pct(progress)}</span>
                     <span className="text-sm">{fmt(goal.targetAmountEur)}</span>
                   </div>
                 </div>
+                {projectedGoal && (
+                  <p className="text-sm text-muted">
+                    Proyectado en {activeScenarioData?.label ?? "escenario activo"}: {fmt(projectedGoal.projectedAssignedEur)} asignados por prioridad.
+                  </p>
+                )}
 
                 {goal.targetDate && (
                   <p className="text-sm text-muted">
@@ -410,7 +426,7 @@ export function Perspectivas() {
       </Card>
 
       {/* ── Sección 5: Calidad de datos e hipótesis ── */}
-      <DataQualitySection projection={projection} dataScore={dataScore} />
+      <DataQualitySection projection={projection} activeScenario={activeScenarioData} dataScore={dataScore} />
     </section>
   );
 }
@@ -534,10 +550,12 @@ function ScenarioChart({
   scenarios,
   activeScenario,
   horizonYears,
+  targetYear,
 }: {
   scenarios: ProjectionScenarioResult[];
   activeScenario: string;
   horizonYears: number;
+  targetYear: number;
 }) {
   const active = scenarios.find(s => s.scenario === activeScenario);
   if (!active || active.chartPoints.length === 0) {
@@ -617,7 +635,7 @@ function ScenarioChart({
               <td className="text-right">{fmtEur(first.eurcAvailableEur)}</td>
             </tr>
             <tr>
-              <td className="font-medium">En {horizonYears} años</td>
+              <td className="font-medium">Año {targetYear}</td>
               <td className="text-right font-medium">{fmtEur(last.grossWealthEur)}</td>
               <td className="text-right font-medium">{fmtEur(last.netWealthEur)}</td>
               <td className="text-right">{fmtEur(last.portfolioValueEur)}</td>
@@ -634,13 +652,129 @@ function ScenarioChart({
   );
 }
 
+// ─── Desglose de estrategia completa ─────────────────────────────────────────
+
+function StrategyBreakdownSection({
+  projection,
+  scenario,
+}: {
+  projection: ProjectionResult;
+  scenario: ProjectionScenarioResult;
+}) {
+  const activeCycles = projection.snapshot.cycles.filter(cycle =>
+    cycle.status === "active" || cycle.status === "planned"
+  );
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <Info size={16} />
+          Desglose de estrategia — {scenario.label}
+        </CardTitle>
+        <Badge variant="neutral">{projection.snapshot.plans.length || 1} plan(es)</Badge>
+      </CardHeader>
+      <CardContent>
+        <div className="perspectives-summary-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))" }}>
+          <div className="perspectives-current-card">
+            <span className="label">Capital actual</span>
+            <span className="value">{fmt(scenario.summary.initialGrossWealthEur)}</span>
+            <span className="sub">Cartera + tesorería</span>
+          </div>
+          <div className="perspectives-current-card">
+            <span className="label">Aportaciones futuras</span>
+            <span className="value">{fmt(scenario.summary.totalFutureCapitalEur)}</span>
+            <span className="sub">{activeCycles.length} ciclos proyectables</span>
+          </div>
+          <div className="perspectives-current-card">
+            <span className="label">Ganancia mercado</span>
+            <span className={`value ${scenario.summary.estimatedMarketGainEur >= 0 ? "text-success" : "text-danger"}`}>
+              {fmt(scenario.summary.estimatedMarketGainEur)}
+            </span>
+            <span className="sub">Después de impuestos pendientes</span>
+          </div>
+          <div className="perspectives-current-card">
+            <span className="label">Patrimonio neto</span>
+            <span className="value">{fmt(scenario.summary.finalNetWealthEur)}</span>
+            <span className="sub">Retorno ponderado: {pct(scenario.summary.weightedAnnualReturn)}</span>
+          </div>
+        </div>
+
+        {scenario.cycleResults.length > 0 && (
+          <div className="perspectives-cycle-table-wrapper" style={{ marginTop: "1rem" }}>
+            <table className="perspectives-cycle-table">
+              <thead>
+                <tr>
+                  <th>Ciclo</th>
+                  <th className="text-right">Planificado</th>
+                  <th className="text-right">Aportado</th>
+                  <th className="text-right">Extra</th>
+                  <th className="text-right">Ventas</th>
+                  <th className="text-right">Recompras</th>
+                </tr>
+              </thead>
+              <tbody>
+                {scenario.cycleResults.map(cycle => (
+                  <tr key={cycle.cycleId}>
+                    <td>{cycle.cycleName}</td>
+                    <td className="text-right">{fmt(cycle.plannedContributionEur)}</td>
+                    <td className="text-right">{fmt(cycle.simulatedContributionEur)}</td>
+                    <td className="text-right">{fmt(cycle.extraordinaryContributionEur)}</td>
+                    <td className="text-right">{fmt(cycle.salesEur)}</td>
+                    <td className="text-right">{fmt(cycle.rebuysEur)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {scenario.assetResults.length > 0 && (
+          <div className="perspectives-cycle-table-wrapper" style={{ marginTop: "1rem" }}>
+            <table className="perspectives-cycle-table">
+              <thead>
+                <tr>
+                  <th>Activo</th>
+                  <th className="text-right">Saldo final</th>
+                  <th className="text-right">Valor final</th>
+                  <th className="text-right">Aportado</th>
+                  <th className="text-right">Recomprado</th>
+                  <th className="text-right">Rentabilidad latente</th>
+                  <th className="text-right">Hipótesis</th>
+                </tr>
+              </thead>
+              <tbody>
+                {scenario.assetResults.map(asset => (
+                  <tr key={asset.assetId}>
+                    <td>{asset.assetId}</td>
+                    <td className="text-right">{asset.finalBalance.toLocaleString("es-ES", { maximumFractionDigits: 6 })}</td>
+                    <td className="text-right">{fmt(asset.finalValueEur)}</td>
+                    <td className="text-right">{fmt(asset.costContributionsEur)}</td>
+                    <td className="text-right">{fmt(asset.costRebuyEur)}</td>
+                    <td className={`text-right ${(asset.unrealizedGainEur ?? 0) >= 0 ? "text-success" : "text-danger"}`}>
+                      {fmt(asset.unrealizedGainEur)}
+                    </td>
+                    <td className="text-right">{pct(asset.hypothesis?.annualGrowthRate)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Sección 5: Calidad e hipótesis ─────────────────────────────────────────
 
 function DataQualitySection({
   projection,
+  activeScenario,
   dataScore,
 }: {
   projection: ProjectionResult | undefined;
+  activeScenario: ProjectionScenarioResult | null;
   dataScore: number | null;
 }) {
   const dq = projection?.snapshot.dataQuality;
@@ -700,9 +834,22 @@ function DataQualitySection({
         <div className="perspectives-confidence-label" style={{ marginTop: "1rem" }}>
           <p className="text-sm text-muted">
             Las proyecciones son escenarios hipotéticos calculados con el motor de proyección interno.
-            Tasas de crecimiento: Conservador +8%/año BTC · Base +15%/año BTC · Optimista +35%/año BTC.
+            Cada activo usa su propia hipótesis de crecimiento y calidad de dato; Bitcoin no se reutiliza como proxy global.
             Los escenarios no garantizan rentabilidades futuras y no modifican el plan ni ejecutan operaciones.
           </p>
+          {activeScenario && activeScenario.hypotheses.length > 0 && (
+            <div className="perspectives-confidence-grid" style={{ marginTop: "0.75rem" }}>
+              {activeScenario.hypotheses.map(rate => (
+                <div key={rate.assetId} className="confidence-item">
+                  <Info size={16} className="text-muted" />
+                  <span>
+                    {rate.assetId}: {pct(rate.annualGrowthRate)} anual · {rate.dataQuality ?? "calidad no definida"}
+                    {rate.source ? ` · ${rate.source}` : ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </CardContent>
     </Card>

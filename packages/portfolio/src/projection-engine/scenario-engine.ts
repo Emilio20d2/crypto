@@ -28,7 +28,11 @@ export function buildScenarioInput(
   now: number,
   dynamicFactors?: { fearAndGreedIndex: number | null; btcDominance: number | null },
 ): ProjectionInput {
-  const assetIds = Object.keys(snapshot.positions);
+  const assetIds = Array.from(new Set([
+    ...Object.keys(snapshot.positions),
+    ...Object.keys(snapshot.prices),
+    ...snapshot.cycles.flatMap(cycle => cycle.assets.map(asset => asset.assetId)),
+  ]));
   const hypotheses = buildDefaultHypotheses(scenario, assetIds, dynamicFactors);
 
   return {

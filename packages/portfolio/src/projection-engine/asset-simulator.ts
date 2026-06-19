@@ -75,6 +75,12 @@ export function buildDefaultHypotheses(
       annualGrowthRate,
       volatility: scenario === "conservador" ? 0.3 : scenario === "optimista" ? 0.8 : 0.5,
       correctionDepth: scenario === "conservador" ? 0.5 : scenario === "optimista" ? 0.3 : 0.4,
+      source: RATES[assetId] ? "crypto-control:asset-profile-v1" : "crypto-control:default-altcoin-profile-v1",
+      hypothesis: RATES[assetId]
+        ? `Perfil propio ${assetId} para escenario ${scenario}; no se reutiliza BTC como proxy.`
+        : `Activo sin perfil propio: usa hipótesis conservadora genérica para no extrapolar BTC.`,
+      dataQuality: RATES[assetId] ? "media" : "baja",
+      confidence: RATES[assetId] ? 0.65 : 0.35,
     };
   });
 

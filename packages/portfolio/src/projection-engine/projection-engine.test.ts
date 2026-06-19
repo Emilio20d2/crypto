@@ -337,6 +337,146 @@ describe("runProjection — determinismo", () => {
   });
 });
 
+// ── Proyección multiactivo y estrategia completa ─────────────────────────────
+
+describe("runProjection — multiactivo sin proxy BTC", () => {
+  test("BTC puede caer mientras ETH sube con hipótesis independientes", () => {
+    const snap = makeSnapshot();
+    const input = makeInput(snap, 2);
+    const result = runProjection({
+      ...input,
+      scenarioHypotheses: {
+        ...input.scenarioHypotheses,
+        assetRates: [
+          { assetId: "BTC", annualGrowthRate: -0.25, volatility: 0.6, correctionDepth: 0.5 },
+          { assetId: "ETH", annualGrowthRate: 0.35, volatility: 0.6, correctionDepth: 0.4 },
+        ],
+        defaultAnnualGrowthRate: 0,
+      },
+    });
+
+    const first = result.periods[0].positions;
+    const last = result.periods[result.periods.length - 1].positions;
+    expect(last.BTC.priceEur!).toBeLessThan(first.BTC.priceEur!);
+    expect(last.ETH.priceEur!).toBeGreaterThan(first.ETH.priceEur!);
+  });
+
+  test("una cartera sin BTC se proyecta sin crear BTC ni usarlo como activo implícito", () => {
+    const now = makeSnapshot().projectionStartDate;
+    const snap = makeSnapshot({
+      cycles: [{
+        id: "cycle-eth-ada",
+        planId: "plan-1",
+        name: "Ciclo ETH/ADA",
+        startDate: now,
+        endDate: null,
+        monthlyAmountEur: 200,
+        status: "active",
+        assets: [
+          {
+            id: "ia-eth", assetId: "ETH", cycleId: "cycle-eth-ada", status: "active",
+            allocationPercentage: 50, allocationValue: null, allocationType: "percentage",
+            priority: 1, targetAmount: null, targetValueEur: null, targetPortfolioPercentage: null,
+            goalReachedAt: null, startDate: now, endDate: null,
+          },
+          {
+            id: "ia-ada", assetId: "ADA", cycleId: "cycle-eth-ada", status: "active",
+            allocationPercentage: 50, allocationValue: null, allocationType: "percentage",
+            priority: 2, targetAmount: null, targetValueEur: null, targetPortfolioPercentage: null,
+            goalReachedAt: null, startDate: now, endDate: null,
+          },
+        ],
+      }],
+      positions: {
+        ETH: { assetId: "ETH", balance: 0.5, avgCostEur: 2_000, currentValueEur: 1_000, currentPriceEur: 2_000 },
+      },
+      prices: { ETH: 2_000, ADA: 0.5 },
+      historicalCapitalEur: 1_000,
+    });
+
+    const result = runProjection(makeInput(snap, 2));
+    expect(result.assetResults.map(asset => asset.assetId)).not.toContain("BTC");
+    expect(result.scenarioHypotheses.assetRates.map(rate => rate.assetId)).not.toContain("BTC");
+    expect(result.assetResults.find(asset => asset.assetId === "ADA")?.finalBalance).toBeGreaterThan(0);
+  });
+
+  test("varios ciclos activos de planes distintos suman aportaciones sin pisarse", () => {
+    const now = makeSnapshot().projectionStartDate;
+    const baseCycle = makeSnapshot().cycles[0];
+    const snap = makeSnapshot({
+      plans: [
+        { id: "plan-1", name: "Plan A", status: "active", baseCurrency: "EUR" },
+        { id: "plan-2", name: "Plan B", status: "active", baseCurrency: "EUR" },
+      ],
+      cycles: [
+        { ...baseCycle, id: "cycle-a", planId: "plan-1", monthlyAmountEur: 100, assets: baseCycle.assets.map(a => ({ ...a, cycleId: "cycle-a" })) },
+        { ...baseCycle, id: "cycle-b", planId: "plan-2", monthlyAmountEur: 50, assets: baseCycle.assets.map(a => ({ ...a, id: `${a.id}-b`, cycleId: "cycle-b" })) },
+      ],
+    });
+
+    const result = runProjection(makeInput(snap, 1));
+    const a = result.cycleResults.find(cycle => cycle.cycleId === "cycle-a")!;
+    const b = result.cycleResults.find(cycle => cycle.cycleId === "cycle-b")!;
+
+    expect(a.simulatedContributionEur).toBeGreaterThan(0);
+    expect(b.simulatedContributionEur).toBeGreaterThan(0);
+    expect(result.periods[result.periods.length - 1].futureCapitalEur).toBeCloseTo(
+      a.simulatedContributionEur + b.simulatedContributionEur,
+      1,
+    );
+    expect(now).toBe(snap.projectionStartDate);
+  });
+
+  test("un ciclo pausado no genera compras futuras", () => {
+    const baseCycle = makeSnapshot().cycles[0];
+    const snap = makeSnapshot({
+      cycles: [
+        baseCycle,
+        {
+          ...baseCycle,
+          id: "cycle-paused",
+          name: "Ciclo pausado",
+          status: "paused",
+          monthlyAmountEur: 999,
+          assets: baseCycle.assets.map(a => ({ ...a, id: `${a.id}-paused`, cycleId: "cycle-paused" })),
+        },
+      ],
+    });
+
+    const result = runProjection(makeInput(snap, 1));
+    const paused = result.cycleResults.find(cycle => cycle.cycleId === "cycle-paused")!;
+    expect(paused.simulatedContributionEur).toBe(0);
+    expect(paused.plannedContributionEur).toBe(0);
+  });
+
+  test("una aportación extraordinaria pendiente se proyecta una sola vez al activo destino", () => {
+    const now = makeSnapshot().projectionStartDate;
+    const snap = makeSnapshot({
+      prices: { BTC: 80_000, ETH: 2_000, ADA: 0.5 },
+      futureContributions: [{
+        id: "extra-ada",
+        cycleId: "cycle-1",
+        type: "extraordinaria",
+        plannedDate: now + 3 * MONTH,
+        amountEur: 500,
+        destinationAssetId: "ADA",
+        status: "pendiente",
+        executedAt: null,
+      }],
+    });
+    const input = makeInput(snap, 1);
+    const result = runProjection({
+      ...input,
+      options: { ...input.options, projectExtraordinaryContributions: true },
+    });
+
+    const ada = result.assetResults.find(asset => asset.assetId === "ADA")!;
+    expect(ada.balanceBoughtExtraordinary).toBeGreaterThan(0);
+    expect(result.cycleResults[0].extraordinaryContributionEur).toBeCloseTo(500, 1);
+    expect(ada.events.some(event => event.type === "extraordinary_contribution")).toBe(true);
+  });
+});
+
 // ── Ventas y fiscalidad ───────────────────────────────────────────────────────
 
 describe("runProjection — ventas parciales", () => {
