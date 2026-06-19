@@ -132,6 +132,25 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
+input[type="checkbox"],
+input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  margin: 0;
+  accent-color: var(--color-primary);
+}
+
+input[type="checkbox"] {
+  border-radius: var(--radius-sm);
+}
+
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(50, 124, 255, 0.16);
+}
+
 input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="hidden"]),
 select,
 textarea,
@@ -497,7 +516,7 @@ dd {
   height: var(--control-height);
   padding: 0 13px;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-control);
   font-weight: 600;
   font-size: 13px;
   cursor: pointer;
@@ -593,7 +612,7 @@ dd {
   height: var(--control-height-sm);
   width: var(--control-height-sm);
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-control);
   cursor: pointer;
   transition: background var(--transition-fast), color var(--transition-fast);
 }
@@ -703,6 +722,12 @@ dd {
   border: 1px solid transparent;
 }
 
+.badge-sm {
+  min-height: 20px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
 .badge-success {
   color: #166534;
   background: #dcfce7;
@@ -710,6 +735,12 @@ dd {
 }
 
 .badge-danger {
+  color: #991b1b;
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+.badge-error {
   color: #991b1b;
   background: #fee2e2;
   border-color: #fca5a5;
@@ -728,6 +759,12 @@ dd {
 }
 
 .badge-neutral {
+  color: var(--text-secondary);
+  background: #f1f4f8;
+  border-color: var(--border-color);
+}
+
+.badge-secondary {
   color: var(--text-secondary);
   background: #f1f4f8;
   border-color: var(--border-color);
@@ -2765,6 +2802,30 @@ dd {
   border-bottom: 0;
 }
 
+.responsive-table th:first-child,
+.data-table th:first-child,
+.perspectives-cycle-table th:first-child {
+  border-top-left-radius: calc(var(--radius-table) - 1px);
+}
+
+.responsive-table th:last-child,
+.data-table th:last-child,
+.perspectives-cycle-table th:last-child {
+  border-top-right-radius: calc(var(--radius-table) - 1px);
+}
+
+.responsive-table tbody tr:last-child td:first-child,
+.data-table tbody tr:last-child td:first-child,
+.perspectives-cycle-table tbody tr:last-child td:first-child {
+  border-bottom-left-radius: calc(var(--radius-table) - 1px);
+}
+
+.responsive-table tbody tr:last-child td:last-child,
+.data-table tbody tr:last-child td:last-child,
+.perspectives-cycle-table tbody tr:last-child td:last-child {
+  border-bottom-right-radius: calc(var(--radius-table) - 1px);
+}
+
 .responsive-table-row:hover {
   background: var(--bg-row-hover);
 }
@@ -2939,6 +3000,95 @@ dd {
 }
 
 .investment-warning span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.investment-contribution-list {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.investment-contribution {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-muted);
+}
+
+.investment-contribution--opportunity {
+  border-color: #bdecc8;
+  background: var(--color-sage-tint);
+}
+
+.investment-contribution-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.investment-contribution-header > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.investment-contribution-header strong,
+.investment-contribution-header span:not(.badge),
+.investment-contribution-meta {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.investment-contribution-header span:not(.badge),
+.investment-contribution-meta {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.investment-contribution-meta {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.investment-asset-badges {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.investment-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--control-height);
+  min-width: 0;
+  padding: 0 var(--control-padding-x);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-control);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.investment-checkbox-label:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-row-hover);
+  color: var(--text-primary);
+}
+
+.investment-checkbox-label span {
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -4023,15 +4173,16 @@ dd {
 }
 
 .fiscal-year-btn {
-  padding: 5px 14px;
+  min-height: var(--control-height);
+  padding: 0 14px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-control);
   background: var(--bg-surface);
   color: var(--text-secondary);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
 }
 
 .fiscal-year-btn:hover {
@@ -4771,7 +4922,8 @@ dd {
 .contribution-history {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  overflow: hidden;
+  overflow: clip;
+  background: var(--border-color);
 }
 
 .contribution-month-row {
@@ -4782,6 +4934,7 @@ dd {
   border-bottom: 1px solid var(--border-color);
   align-items: center;
   font-size: 0.875rem;
+  background: var(--bg-surface);
 }
 
 .contribution-month-row:last-child {
@@ -4972,7 +5125,7 @@ dd {
 
 .perspectives-cycle-table th,
 .perspectives-cycle-table td {
-  padding: 8px 10px;
+  padding: 10px var(--panel-padding-md);
   border-bottom: 1px solid var(--border-color);
   background: var(--bg-surface);
   text-align: left;

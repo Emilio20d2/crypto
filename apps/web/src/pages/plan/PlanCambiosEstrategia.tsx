@@ -116,14 +116,14 @@ function NuevaSubstitucionForm({
 
   if (!open) {
     return (
-      <button
+      <Button
         type="button"
-        className="btn btn-ghost btn-sm"
-        style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+        variant="ghost"
+        size="sm"
         onClick={() => setOpen(true)}
       >
         <PlusCircle size={14} /> Crear sustitución
-      </button>
+      </Button>
     );
   }
 

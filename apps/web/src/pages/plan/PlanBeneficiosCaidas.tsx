@@ -74,9 +74,9 @@ function NuevaReglaVentaForm({ cycleId, onSuccess }: { cycleId: string; onSucces
 
   if (!open) {
     return (
-      <button className="btn btn-ghost btn-sm" style={{ display: "inline-flex", alignItems: "center", gap: 6 }} onClick={() => setOpen(true)}>
+      <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(true)}>
         <PlusCircle size={14} /> Nueva regla de venta
-      </button>
+      </Button>
     );
   }
 
@@ -156,7 +156,7 @@ function ReglaVentaCard({ rule, onDelete }: { rule: PartialSaleRule; onDelete: (
 
       {evaluation ? (
         evaluation.isTriggered ? (
-          <div style={{ marginTop: 8, padding: 8, background: "var(--color-warning-bg, #fef3c7)", borderRadius: 6 }}>
+          <div style={{ marginTop: 8, padding: 8, background: "var(--color-warning-bg, #fef3c7)", borderRadius: "var(--radius-control)" }}>
             <p style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--color-warning-text, #92400e)" }}>
               ⚡ Regla activada: {evaluation.triggeredReason}
             </p>
@@ -230,9 +230,9 @@ function NuevaTierRecompraForm({ cycleId, onSuccess }: { cycleId: string; onSucc
 
   if (!open) {
     return (
-      <button className="btn btn-ghost btn-sm" style={{ display: "inline-flex", alignItems: "center", gap: 6 }} onClick={() => setOpen(true)}>
+      <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(true)}>
         <PlusCircle size={14} /> Nuevo escalón de recompra
-      </button>
+      </Button>
     );
   }
 
