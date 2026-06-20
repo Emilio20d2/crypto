@@ -182,7 +182,7 @@ export function PlanSeguimiento({ cycleId }: { cycleId: string }) {
           <CardHeader><CardTitle>Estado por activo</CardTitle></CardHeader>
           <CardContent>
             <div style={{ overflowX: "auto" }}>
-              <table className="data-table" style={{ width: "100%", borderSpacing: 0 }}>
+              <table className="data-table" style={{ width: "100%" }}>
                 <thead>
                   <tr>
                     <th>Activo</th>

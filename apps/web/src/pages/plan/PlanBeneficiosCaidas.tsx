@@ -4,7 +4,7 @@ import { PlusCircle, TrendingDown, TrendingUp, Trash2 } from "lucide-react";
 import { Button } from "../../components/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/Card";
 import { Input } from "../../components/Input";
-import type { PartialSaleRule, CycleRebuyTier, Result } from "@crypto-control/core";
+import type { PartialSaleRule, CycleRebuyTier, CycleStrategyReport, Result } from "@crypto-control/core";
 
 async function unwrap<T>(p: Promise<Result<T>>): Promise<T> {
   const r = await p;
@@ -35,6 +35,117 @@ const STATUS_BADGE: Record<string, string> = {
   pausada: "badge-secondary",
   cancelada: "",
 };
+
+const PROPOSAL_LABELS: Record<string, string> = {
+  mantener: "Mantener",
+  vigilar: "Vigilar",
+  venta_parcial: "Venta parcial",
+  recogida_beneficios: "Recoger beneficios",
+};
+
+const RISK_BADGE: Record<string, string> = {
+  bajo: "badge-success",
+  moderado: "badge-warning",
+  alto: "badge-warning",
+  muy_alto: "badge-error",
+};
+
+function AutomaticProposals({ report, loading }: { report: CycleStrategyReport | null; loading: boolean }) {
+  const saleProposals = report?.partialSaleProposals ?? [];
+  const rebuyProposals = report?.rebuyProposals ?? [];
+  const actionableSales = saleProposals.filter((proposal) => proposal.type !== "mantener");
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Propuestas automáticas</CardTitle>
+        {report ? <span className="badge">{new Date(report.generatedAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}</span> : null}
+      </CardHeader>
+      <CardContent>
+        <p className="panel-caption">
+          Generadas con fase de mercado, sentimiento por activo, Fear & Greed, datos de mercado y señales públicas de medios/analistas cuando están disponibles. No ejecutan operaciones automáticamente.
+        </p>
+
+        {loading ? (
+          <p className="empty-inline">Calculando propuestas…</p>
+        ) : !report ? (
+          <p className="empty-inline">No se pudieron calcular propuestas automáticas.</p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div className="investment-distribution">
+              <span>Fase: <strong>{report.marketPhase.phase}</strong></span>
+              <span>Confianza: <strong>{report.marketPhase.confidence}</strong></span>
+              <span>Indicadores: <strong>{report.marketPhase.indicatorsUsed.length}</strong></span>
+            </div>
+            <p className="substitution-meta">{report.marketPhase.reasoning}</p>
+
+            <section>
+              <h3 className="plan-section-title" style={{ marginBottom: 8 }}>Ventas sugeridas</h3>
+              {actionableSales.length === 0 ? (
+                <p className="empty-inline">No hay ventas sugeridas ahora. Las posiciones se mantienen en observación.</p>
+              ) : (
+                <div className="substitution-list">
+                  {actionableSales.map((proposal) => (
+                    <article key={`${proposal.assetId}-${proposal.type}`} className="substitution-card">
+                      <div className="substitution-card-header">
+                        <span className="substitution-assets">
+                          <strong>{proposal.assetId}</strong> — {PROPOSAL_LABELS[proposal.type] ?? proposal.type}
+                        </span>
+                        <span className={`badge ${RISK_BADGE[proposal.riskLevel] ?? ""}`}>{proposal.riskLevel}</span>
+                      </div>
+                      <p className="substitution-meta">
+                        {proposal.percentageSuggested != null ? `Sugerido: vender ${proposal.percentageSuggested}%` : "Sin venta directa; vigilar"}
+                        {proposal.estimatedProceedsEur != null ? ` · Estimado: ${formatEur(proposal.estimatedProceedsEur)}` : ""}
+                      </p>
+                      <p className="substitution-notes">{proposal.reason}</p>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section>
+              <h3 className="plan-section-title" style={{ marginBottom: 8 }}>Recompras sugeridas</h3>
+              {rebuyProposals.length === 0 ? (
+                <p className="empty-inline">No hay recompras sugeridas con las señales actuales.</p>
+              ) : (
+                <div className="substitution-list">
+                  {rebuyProposals.map((proposal, index) => (
+                    <article key={`${proposal.assetId}-${proposal.triggerDropPercentage}-${index}`} className="substitution-card">
+                      <div className="substitution-card-header">
+                        <span className="substitution-assets">
+                          <strong>{proposal.assetId}</strong> — Recompra en caída {proposal.triggerDropPercentage}%
+                        </span>
+                        <span className={`badge ${proposal.proposedAmountEur > 0 ? "badge-success" : "badge-warning"}`}>
+                          {proposal.proposedAmountEur > 0 ? formatEur(proposal.proposedAmountEur) : "Pendiente de EURC"}
+                        </span>
+                      </div>
+                      <p className="substitution-meta">Liquidez asignada: {formatEur(proposal.availableLiquidityEur)}</p>
+                      <p className="substitution-notes">{proposal.reason}</p>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            {report.riskSummary.length > 0 ? (
+              <section>
+                <h3 className="plan-section-title" style={{ marginBottom: 8 }}>Riesgos detectados</h3>
+                <div className="substitution-list">
+                  {report.riskSummary.map((item) => (
+                    <article key={item} className="substitution-card">
+                      <p className="substitution-notes">{item}</p>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 // ── Formulario nueva regla de venta ───────────────────────────────────────────
 
@@ -314,6 +425,12 @@ export function PlanBeneficiosCaidas({ cycleId }: { cycleId: string }) {
     staleTime: 60_000,
   });
 
+  const strategyReportQ = useQuery({
+    queryKey: ["strategic-decisions", "cycle-report", cycleId],
+    queryFn: () => unwrap(window.cryptoControl.strategicDecisions.getCycleReport({ cycleId })),
+    staleTime: 5 * 60_000,
+  });
+
   const deleteRule = useMutation({
     mutationFn: (id: string) => unwrap(window.cryptoControl.partialSaleRules.delete(id)),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["partial-sale-rules", cycleId] }),
@@ -327,6 +444,7 @@ export function PlanBeneficiosCaidas({ cycleId }: { cycleId: string }) {
   const treasury = treasuryQ.data;
   const saleRules: PartialSaleRule[] = saleRulesQ.data ?? [];
   const rebuyTiers: CycleRebuyTier[] = rebuyTiersQ.data ?? [];
+  const strategyReport: CycleStrategyReport | null = strategyReportQ.data ?? null;
 
   const eurcAvailable = treasury ? Math.max(0, treasury.eurcBalance - treasury.fiscalReserveBalance) : null;
 
@@ -366,6 +484,8 @@ export function PlanBeneficiosCaidas({ cycleId }: { cycleId: string }) {
           )}
         </CardContent>
       </Card>
+
+      <AutomaticProposals report={strategyReport} loading={strategyReportQ.isLoading} />
 
       {/* ── Reglas de venta parcial ── */}
       <Card>

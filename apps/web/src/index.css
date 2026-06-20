@@ -75,6 +75,9 @@
   --radius-control: var(--radius-sm);
   --radius-table: var(--radius-md);
 
+  /* ── Focus ring ── */
+  --focus-ring: 0 0 0 3px rgba(50, 124, 255, 0.16);
+
   /* ── Elevation ── */
   --shadow-panel: 0 1px 3px rgba(15, 23, 42, 0.05);
   --shadow-card: 0 1px 4px rgba(15, 23, 42, 0.06), 0 4px 14px rgba(15, 23, 42, 0.05);
@@ -148,7 +151,7 @@ input[type="checkbox"] {
 input[type="checkbox"]:focus-visible,
 input[type="radio"]:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px rgba(50, 124, 255, 0.16);
+  box-shadow: var(--focus-ring);
 }
 
 input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="hidden"]),
@@ -217,7 +220,7 @@ textarea:focus,
 .ui-select:focus,
 .ui-textarea:focus {
   border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px rgba(50, 124, 255, 0.16);
+  box-shadow: var(--focus-ring);
 }
 
 input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="hidden"]):disabled,
@@ -542,7 +545,7 @@ dd {
 .settings-list button:focus-visible,
 .plan-nav-item:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px rgba(50, 124, 255, 0.16);
+  box-shadow: var(--focus-ring);
 }
 
 .ui-button-sm {
@@ -657,7 +660,7 @@ dd {
 .ui-select:focus,
 .ui-textarea:focus {
   border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px rgba(50, 124, 255, 0.16);
+  box-shadow: var(--focus-ring);
 }
 
 .ui-input.is-invalid,
@@ -935,7 +938,7 @@ dd {
 
 .segmented-control button,
 .ui-period-btn {
-  height: 26px;
+  height: var(--control-height-sm);
   min-width: 34px;
   padding: 0 9px;
   border: 0;
@@ -1684,7 +1687,7 @@ dd {
 }
 
 .market-filter-tabs button {
-  min-height: 28px;
+  min-height: var(--control-height-sm);
   border: 0;
   border-radius: var(--radius-control);
   background: transparent;

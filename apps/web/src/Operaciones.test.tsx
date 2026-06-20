@@ -1,6 +1,5 @@
-import { describe, test, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { act } from "react";
+import { describe, test, expect, beforeEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { Operaciones } from "./pages/Operaciones";
@@ -76,6 +75,8 @@ const mockAPI = () => {
       listPortfolios: async () => ({ ok: true as const, data: [] }),
       getPortfolioBreakdown: async () => ({ ok: true as const, data: {} }),
       getPortfolioSnapshots: async () => ({ ok: true as const, data: [] }),
+      previewOrder: async () => ({ ok: true as const, data: { preview_id: "preview-1" } }),
+      submitOrder: async () => ({ ok: true as const, data: { success: true } }),
     },
     sentiment: {
       getGlobal: async () => ({ ok: true as const, data: { scope: "global" as const, direction: "neutral" as const, score: 0, confidence: 0, timeframe: "24h" as const, factors: [], sourceSummary: [], calculatedAt: Date.now(), validUntil: null, state: "unavailable" as const } }),
@@ -195,25 +196,14 @@ const mockAPI = () => {
 beforeEach(mockAPI);
 
 describe("Operaciones UI", () => {
-  test("rechazar cantidades negativas mediante validación Zod", async () => {
+  test("no muestra registro manual de operaciones", async () => {
     renderWithQuery(<Operaciones />);
 
-    // Fill in only the amount field with a negative value and submit
-    await act(async () => {
-      const dateInput = screen.getByLabelText(/Fecha/i);
-      fireEvent.change(dateInput, { target: { value: "2026-06-13T10:00" } });
-
-      const amountInput = screen.getByLabelText(/^Cantidad/i);
-      // Simulate entering a negative number
-      fireEvent.change(amountInput, { target: { value: "-5", valueAsNumber: -5 } });
-
-      const submitBtn = screen.getByText(/Guardar Operación/i);
-      fireEvent.click(submitBtn);
-    });
-
     await waitFor(() => {
-      expect(screen.getByText(/La cantidad debe ser mayor a 0/i)).toBeInTheDocument();
-    }, { timeout: 3000 });
+      expect(screen.queryByText(/Registrar Operación/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Guardar Operación/i)).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/Fecha/i)).not.toBeInTheDocument();
+    });
   });
 
   test("usa window.cryptoControl, no window.api", () => {
@@ -226,44 +216,41 @@ describe("Operaciones UI", () => {
   test("muestra historial vacío cuando no hay operaciones", async () => {
     renderWithQuery(<Operaciones />);
     await waitFor(() => {
-      expect(screen.getByText(/Sin operaciones registradas/i)).toBeInTheDocument();
+      expect(screen.getByText(/Sin operaciones de Coinbase/i)).toBeInTheDocument();
     });
   });
 
-  test("editar operación: precarga el formulario y llama a update, no a create", async () => {
-    const updateSpy = vi.fn(async () => ({ ok: true as const, data: null }));
-    const createSpy = vi.fn(async () => ({ ok: true as const, data: { id: "new-id" } }));
+  test("solo muestra operaciones sincronizadas desde Coinbase y no permite editarlas", async () => {
     window.cryptoControl.transactions.list = async () => ({
       ok: true as const,
-      data: [{
-        id: "tx-1",
-        type: "buy" as const,
-        date: new Date("2026-06-13T10:00:00").getTime(),
-        legs: [{ assetId: "BTC", amount: 0.001, legType: "destination" as const, valuationEur: 50 }],
-        fees: [],
-      }],
+      data: [
+        {
+          id: "coinbase-tx",
+          type: "buy" as const,
+          date: new Date("2026-06-13T10:00:00").getTime(),
+          externalId: "coinbase-fill-1",
+          legs: [{ assetId: "BTC", amount: 0.001, legType: "destination" as const, valuationEur: 50 }],
+          fees: [],
+        },
+        {
+          id: "manual-tx",
+          type: "buy" as const,
+          date: new Date("2026-06-13T11:00:00").getTime(),
+          externalId: null,
+          legs: [{ assetId: "ETH", amount: 0.1, legType: "destination" as const, valuationEur: 300 }],
+          fees: [],
+        },
+      ],
     });
-    window.cryptoControl.transactions.update = updateSpy;
-    window.cryptoControl.transactions.create = createSpy;
 
     renderWithQuery(<Operaciones />);
 
     await waitFor(() => {
-      expect(screen.getByTitle(/Editar operación/i)).toBeInTheDocument();
+      expect(screen.getAllByText("BTC").length).toBeGreaterThan(0);
     });
 
-    fireEvent.click(screen.getByTitle(/Editar operación/i));
-
-    await waitFor(() => {
-      expect(screen.getByText("Editar Operación")).toBeInTheDocument();
-    });
-    expect((screen.getByLabelText(/^Cantidad/i) as HTMLInputElement).value).toBe("0.001");
-
-    fireEvent.click(screen.getByText(/Guardar cambios/i));
-
-    await waitFor(() => {
-      expect(updateSpy).toHaveBeenCalledWith("tx-1", expect.objectContaining({ type: "buy" }));
-    });
-    expect(createSpy).not.toHaveBeenCalled();
+    expect(screen.queryByText("ETH")).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/Editar operación/i)).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/Eliminar operación/i)).not.toBeInTheDocument();
   });
 });

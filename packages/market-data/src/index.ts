@@ -38,7 +38,7 @@ type HistoricalPricesResult = {
   reason?: string;
 };
 
-const CURRENT_PRICE_CACHE_MS = 60_000;
+const CURRENT_PRICE_CACHE_MS = 5_000;
 const MIN_HISTORICAL_POINTS = 2;
 
 function historicalWindowMs(period: string): number | null {

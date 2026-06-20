@@ -62,6 +62,8 @@ beforeEach(() => {
       listPortfolios: () => ok([]),
       getPortfolioBreakdown: () => ok({}),
       getPortfolioSnapshots: () => ok([]),
+      previewOrder: () => ok({ preview_id: "preview-1" }),
+      submitOrder: () => ok({ success: true }),
     },
     sentiment: {
       getGlobal: () => ok({ scope: "global" as const, direction: "neutral" as const, score: 0, confidence: 0, timeframe: "24h" as const, factors: [], sourceSummary: [], calculatedAt: now, validUntil: null, state: "unavailable" as const }),

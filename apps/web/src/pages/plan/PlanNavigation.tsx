@@ -4,7 +4,8 @@ export type PlanSectionId =
   | "resumen"
   | "configurar"
   | "aportaciones"
-  | "beneficios-y-caidas"
+  | "compra-inteligente"
+  | "ventas-recompras"
   | "seguimiento";
 
 interface PlanNavItem {
@@ -16,7 +17,8 @@ const PLAN_NAV: PlanNavItem[] = [
   { id: "resumen", label: "Resumen" },
   { id: "configurar", label: "Configurar mi plan" },
   { id: "aportaciones", label: "Aportaciones" },
-  { id: "beneficios-y-caidas", label: "Beneficios y caídas" },
+  { id: "compra-inteligente", label: "Compra Inteligente" },
+  { id: "ventas-recompras", label: "Ventas/Recompras" },
   { id: "seguimiento", label: "Seguimiento" },
 ];
 
@@ -24,9 +26,8 @@ const PLAN_NAV: PlanNavItem[] = [
 const LEGACY_ROUTE_MAP: Record<string, PlanSectionId> = {
   ciclos: "configurar",
   estrategia: "configurar",
-  "compra-inteligente": "configurar",
-  "ventas-recompras": "beneficios-y-caidas",
-  sustituciones: "beneficios-y-caidas",
+  "beneficios-y-caidas": "ventas-recompras",
+  sustituciones: "ventas-recompras",
   historial: "seguimiento",
 };
 

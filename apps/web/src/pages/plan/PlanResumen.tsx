@@ -761,7 +761,7 @@ function computeNextAction({
     return {
       type: "completar-aportacion",
       message: `Faltan ${formatMoney(deficit)} para completar la aportación de ${lastMonth!.monthKey}.`,
-      cta: "Registrar aportación",
+      cta: "Revisar aportaciones",
       ctaPath: "/plan-inversion/aportaciones",
       detail: `Aportado: ${formatMoney(lastMonth!.actualEur)} · Previsto: ${formatMoney(lastMonth!.programmedEur)}`,
     };
@@ -788,7 +788,7 @@ function computeNextAction({
   return {
     type: "registrar-aportacion",
     message: `Este mes corresponde aportar ${formatMoney(metrics.expectedContributionMonthly)}.`,
-    cta: "Registrar aportación",
+    cta: "Revisar aportaciones",
     ctaPath: "/plan-inversion/aportaciones",
     detail: null,
   };

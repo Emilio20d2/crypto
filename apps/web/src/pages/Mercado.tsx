@@ -36,13 +36,27 @@ const PERIOD_LABEL: Record<MarketFilter, string> = {
   losers: "Perdedoras 24h",
 };
 
+const MARKET_PRICE_REFRESH_MS = 5_000;
+const MARKET_OVERVIEW_REFRESH_MS = 5_000;
+
+function historyRefreshMs(period: Period) {
+  if (period === "1h") return 30_000;
+  if (period === "24h") return 60_000;
+  return 120_000;
+}
+
 function historyToChart(points: { time: number; value: number; source?: string; confidence?: number }[]): ChartPoint[] {
-  return points.map((point) => ({
-    time: point.time as import("lightweight-charts").Time,
-    value: point.value,
-    source: point.source,
-    confidence: point.confidence,
-  }));
+  const deduped = new Map<number, ChartPoint>();
+  for (const point of points) {
+    if (!Number.isFinite(point.time) || !Number.isFinite(point.value) || point.time <= 0 || point.value <= 0) continue;
+    deduped.set(point.time, {
+      time: point.time as import("lightweight-charts").Time,
+      value: point.value,
+      source: point.source,
+      confidence: point.confidence,
+    });
+  }
+  return Array.from(deduped.values()).sort((a, b) => (a.time as number) - (b.time as number));
 }
 
 function sourceLabelFor(provider?: string | null, isCached?: boolean, cacheStatus?: string) {
@@ -98,7 +112,10 @@ export function Mercado() {
       queryKey: ["market", "overview", asset.id],
       queryFn: () => window.cryptoControl.market.getOverview({ assetId: asset.id, quoteCurrency: "EUR" }),
       enabled: !!asset.id,
-      staleTime: 5 * 60 * 1000,
+      staleTime: 20_000,
+      refetchInterval: MARKET_OVERVIEW_REFRESH_MS,
+      refetchIntervalInBackground: true,
+      refetchOnMount: "always",
     })),
   });
 
@@ -146,14 +163,20 @@ export function Mercado() {
     queryKey: ["market", "price", selectedAsset?.id],
     queryFn: () => window.cryptoControl.market.getCurrentPrice({ assetId: selectedAsset.id, quoteCurrency: "EUR" }),
     enabled: !!selectedAsset,
-    staleTime: 60 * 1000,
+    staleTime: 15_000,
+    refetchInterval: MARKET_PRICE_REFRESH_MS,
+    refetchIntervalInBackground: true,
+    refetchOnMount: "always",
   });
 
   const { data: overviewRes } = useQuery({
     queryKey: ["market", "overview", selectedAsset?.id],
     queryFn: () => window.cryptoControl.market.getOverview({ assetId: selectedAsset.id, quoteCurrency: "EUR" }),
     enabled: !!selectedAsset,
-    staleTime: 5 * 60 * 1000,
+    staleTime: 20_000,
+    refetchInterval: MARKET_PRICE_REFRESH_MS,
+    refetchIntervalInBackground: true,
+    refetchOnMount: "always",
   });
 
   const { data: historyRes, isLoading: loadingHistory } = useQuery({
@@ -164,6 +187,10 @@ export function Mercado() {
       period: PERIOD_MAP[period],
     }),
     enabled: !!selectedAsset,
+    staleTime: 15_000,
+    refetchInterval: historyRefreshMs(period),
+    refetchIntervalInBackground: true,
+    refetchOnMount: "always",
   });
 
   const chartData = historyRes?.ok ? historyToChart(historyRes.data.points) : [];

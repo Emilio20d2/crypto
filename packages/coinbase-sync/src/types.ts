@@ -295,3 +295,56 @@ export interface CoinbaseCandle {
 export interface CandlesResponse {
   candles: CoinbaseCandle[];
 }
+
+export interface CoinbaseMoney {
+  value: string;
+  currency: string;
+}
+
+export interface CoinbaseOrderConfiguration {
+  market_market_ioc: {
+    quote_size?: string;
+    base_size?: string;
+  };
+}
+
+export interface CoinbaseOrderPreviewRequest {
+  product_id: string;
+  side: "BUY" | "SELL";
+  order_configuration: CoinbaseOrderConfiguration;
+}
+
+export interface CoinbaseOrderPreviewResponse {
+  preview_id?: string;
+  order_total?: CoinbaseMoney;
+  commission_total?: CoinbaseMoney;
+  quote_size?: CoinbaseMoney;
+  base_size?: CoinbaseMoney;
+  best_bid?: string;
+  best_ask?: string;
+  slippage?: string;
+  est_average_filled_price?: string;
+  is_max?: boolean;
+}
+
+export interface CoinbaseCreateOrderRequest extends CoinbaseOrderPreviewRequest {
+  client_order_id: string;
+  preview_id?: string;
+}
+
+export interface CoinbaseCreateOrderResponse {
+  success: boolean;
+  success_response?: {
+    order_id: string;
+    product_id: string;
+    side: string;
+    client_order_id: string;
+  };
+  error_response?: {
+    error: string;
+    message: string;
+    error_details?: string;
+    preview_failure_reason?: string;
+  };
+  order_id?: string;
+}

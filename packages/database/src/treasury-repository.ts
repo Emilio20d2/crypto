@@ -191,7 +191,7 @@ export class DatabaseTreasuryRepository {
     const observedEurcAvailable = Math.max(0, observedEurcBalance - fiscalReserveBalance);
     const eurcBalance = Math.max(0, totals.eurc, observedEurcAvailable);
     const cashBalance = Math.max(0, totals.cash);
-    const freeRebuyLiquidity = Math.max(0, eurcBalance - allocatedToRebuy);
+    const freeRebuyLiquidity = Math.max(0, eurcBalance - fiscalReserveBalance - allocatedToRebuy);
     const freeCashForRebuy = Math.max(0, cashBalance - allocatedCashToRebuy);
     const recommended = Math.max(0, recommendedFiscalReserve);
 
@@ -199,7 +199,7 @@ export class DatabaseTreasuryRepository {
       cashBalance,
       eurcBalance,
       fiscalReserveBalance,
-      totalLiquidity: cashBalance + eurcBalance + fiscalReserveBalance,
+      totalLiquidity: cashBalance + eurcBalance,
       freeRebuyLiquidity,
       allocatedToRebuy,
       freeCashForRebuy,

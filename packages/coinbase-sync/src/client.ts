@@ -8,7 +8,11 @@ import type {
   PortfoliosResponse,
   PortfolioBreakdownResponse,
   ProductResponse,
-  CandlesResponse
+  CandlesResponse,
+  CoinbaseOrderPreviewRequest,
+  CoinbaseOrderPreviewResponse,
+  CoinbaseCreateOrderRequest,
+  CoinbaseCreateOrderResponse
 } from "./types";
 
 export type CoinbaseErrorCode =
@@ -170,7 +174,8 @@ export class CoinbaseClient {
   private async fetchWithRetry<T>(
     method: string,
     path: string,
-    params?: Record<string, string>
+    params?: Record<string, string>,
+    body?: unknown
   ): Promise<T> {
     const url = new URL(BASE_URL + path);
     if (params) {
@@ -194,6 +199,7 @@ export class CoinbaseClient {
         const response = await fetch(url.toString(), {
           method,
           headers: this.buildHeaders(method, path),
+          body: body === undefined ? undefined : JSON.stringify(body),
           signal: controller.signal,
         });
 
@@ -311,5 +317,23 @@ export class CoinbaseClient {
       end,
       granularity
     });
+  }
+
+  async previewOrder(request: CoinbaseOrderPreviewRequest): Promise<CoinbaseOrderPreviewResponse> {
+    return this.fetchWithRetry<CoinbaseOrderPreviewResponse>(
+      "POST",
+      "/api/v3/brokerage/orders/preview",
+      undefined,
+      request
+    );
+  }
+
+  async createOrder(request: CoinbaseCreateOrderRequest): Promise<CoinbaseCreateOrderResponse> {
+    return this.fetchWithRetry<CoinbaseCreateOrderResponse>(
+      "POST",
+      "/api/v3/brokerage/orders",
+      undefined,
+      request
+    );
   }
 }

@@ -18,37 +18,26 @@ function finiteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-// Coinbase's own cost_basis is frequently missing (older transactions,
-// transfers-in, staking rewards) — fall back to the cost reconstructed
-// locally from transactionLegs (the same number the "Total invertido"
-// summary already uses) before giving up and showing "Pendiente".
-function positionInvested(position: any, localCostByAsset: Record<string, number> = {}) {
-  const coinbaseCost = finiteNumber(position.costBasis?.value);
-  if (coinbaseCost !== null && coinbaseCost > 0) return coinbaseCost;
-  return finiteNumber(localCostByAsset[position.asset]) ?? coinbaseCost;
+function positionInvested(position: any, localCostByAsset: Record<string, number> = {}, pendingCostByAsset: Record<string, boolean> = {}) {
+  if (pendingCostByAsset[position.asset]) return null;
+  return finiteNumber(localCostByAsset[position.asset]);
 }
 
-function positionPnL(position: any, localCostByAsset: Record<string, number> = {}) {
-  const coinbasePnl = finiteNumber(position.unrealizedPnl);
-  if (coinbasePnl !== null) return coinbasePnl;
-
-  const invested = positionInvested(position, localCostByAsset);
+function positionPnL(position: any, localCostByAsset: Record<string, number> = {}, pendingCostByAsset: Record<string, boolean> = {}) {
+  const invested = positionInvested(position, localCostByAsset, pendingCostByAsset);
   const value = finiteNumber(position.totalBalanceFiat);
   if (invested !== null && value !== null) return value - invested;
   return null;
 }
 
-function positionRoi(position: any, localCostByAsset: Record<string, number> = {}) {
-  const invested = positionInvested(position, localCostByAsset);
-  const pnl = positionPnL(position, localCostByAsset);
+function positionRoi(position: any, localCostByAsset: Record<string, number> = {}, pendingCostByAsset: Record<string, boolean> = {}) {
+  const invested = positionInvested(position, localCostByAsset, pendingCostByAsset);
+  const pnl = positionPnL(position, localCostByAsset, pendingCostByAsset);
   return invested !== null && invested > 0 && pnl !== null ? (pnl / invested) * 100 : null;
 }
 
-function positionAverageCost(position: any, localCostByAsset: Record<string, number> = {}) {
-  const coinbaseAverage = finiteNumber(position.averageEntryPrice?.value);
-  if (coinbaseAverage !== null) return coinbaseAverage;
-
-  const invested = positionInvested(position, localCostByAsset);
+function positionAverageCost(position: any, localCostByAsset: Record<string, number> = {}, pendingCostByAsset: Record<string, boolean> = {}) {
+  const invested = positionInvested(position, localCostByAsset, pendingCostByAsset);
   const quantity = finiteNumber(position.totalBalanceCrypto);
   return invested !== null && quantity !== null && quantity > 0 ? invested / quantity : null;
 }
@@ -194,7 +183,15 @@ export function PortfolioChart({
   );
 }
 
-export function AllocationPanel({ positions, localCostByAsset = {} }: { positions: any[]; localCostByAsset?: Record<string, number> }) {
+export function AllocationPanel({
+  positions,
+  localCostByAsset = {},
+  localCostPendingByAsset = {},
+}: {
+  positions: any[];
+  localCostByAsset?: Record<string, number>;
+  localCostPendingByAsset?: Record<string, boolean>;
+}) {
   const allocated = positions.flatMap((position, index) => {
     const percent = formatAllocation(position.allocation);
     if (percent === null || percent <= 0) return [];
@@ -240,7 +237,7 @@ export function AllocationPanel({ positions, localCostByAsset = {} }: { position
             <div className="allocation-list">
               {allocated.slice(0, 8).map(({ position, percent, color }) => {
                 const style: AllocationStyle = { "--allocation-color": color };
-                const pnl = positionPnL(position, localCostByAsset);
+                const pnl = positionPnL(position, localCostByAsset, localCostPendingByAsset);
                 return (
                   <button type="button" className="allocation-item" key={position.accountUuid || position.asset}>
                     <LocalAssetLogo logoUrl={position.assetImageUrl || position.market?.iconUrl} symbol={position.asset} size={28} />
@@ -284,6 +281,7 @@ function PositionCard({
   logoUrl,
   onSelect,
   localCostByAsset,
+  localCostPendingByAsset,
   portfolioState,
 }: {
   position: any;
@@ -291,12 +289,13 @@ function PositionCard({
   logoUrl?: string | null;
   onSelect: () => void;
   localCostByAsset: Record<string, number>;
+  localCostPendingByAsset: Record<string, boolean>;
   portfolioState?: string;
 }) {
-  const invested = positionInvested(position, localCostByAsset);
-  const pnl = positionPnL(position, localCostByAsset);
-  const roi = positionRoi(position, localCostByAsset);
-  const averageCost = positionAverageCost(position, localCostByAsset);
+  const invested = positionInvested(position, localCostByAsset, localCostPendingByAsset);
+  const pnl = positionPnL(position, localCostByAsset, localCostPendingByAsset);
+  const roi = positionRoi(position, localCostByAsset, localCostPendingByAsset);
+  const averageCost = positionAverageCost(position, localCostByAsset, localCostPendingByAsset);
   const weight = formatAllocation(position.allocation);
   const change = finiteNumber(position.market?.pricePercentageChange24h);
   const currentPrice = positionCurrentPrice(position);
@@ -323,10 +322,10 @@ function PositionCard({
           <small>Precio actual <i className={currentPrice.state === "market" && portfolioState !== "cached" ? "price-source-live" : "price-source-partial"}>{currentPrice.state === "missing" ? "pendiente" : currentPrice.state === "partial" ? "parcial" : priceSourceLabel(position, portfolioState)}</i></small>
           <strong>{formatMoneyPerCoin(currentPrice.price)}</strong>
         </span>
-        <span><small>Invertido</small><strong>{formatMoney(invested, "Pendiente")}</strong></span>
+        <span><small>Invertido</small><strong>{formatMoney(invested, "Coste pendiente de completar")}</strong></span>
         <span><small>Beneficio/Pérdida</small><strong className={pnl !== null && pnl < 0 ? "text-negative" : "text-positive"}>{formatMoney(pnl, "Pendiente")}</strong></span>
         <span><small>ROI</small><strong className={roi !== null && roi < 0 ? "text-negative" : "text-positive"}>{formatPercentPoints(roi)}</strong></span>
-        <span><small>Coste medio</small><strong>{formatMoneyPerCoin(averageCost)}</strong></span>
+        <span><small>Coste medio</small><strong>{formatMoneyPerCoin(averageCost, "Coste pendiente de completar")}</strong></span>
         <span><small>Variación 24 h</small><strong className={change !== null && change < 0 ? "text-negative" : "text-positive"}>{formatPercentPoints(change)}</strong></span>
         <span><small>Peso</small><strong>{weight === null ? "Pendiente" : `${weight.toLocaleString("es-ES", { maximumFractionDigits: 2 })}%`}</strong></span>
       </span>
@@ -345,12 +344,14 @@ export function PositionList({
   assets,
   onSelect,
   localCostByAsset = {},
+  localCostPendingByAsset = {},
   portfolioState,
 }: {
   positions: any[];
   assets: any[];
   onSelect: (assetId: string) => void;
   localCostByAsset?: Record<string, number>;
+  localCostPendingByAsset?: Record<string, boolean>;
   portfolioState?: string;
 }) {
   const allocated = positions.flatMap((position, index) => {
@@ -396,6 +397,7 @@ export function PositionList({
                 logoUrl={logoUrl}
                 onSelect={() => onSelect(position.asset)}
                 localCostByAsset={localCostByAsset}
+                localCostPendingByAsset={localCostPendingByAsset}
                 portfolioState={portfolioState}
               />
             );

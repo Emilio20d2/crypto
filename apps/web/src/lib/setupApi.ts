@@ -62,6 +62,8 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
       listPortfolios:         () =>                         ipc("coinbase:list-portfolios"),
       getPortfolioBreakdown:  (uuid: unknown, cur: unknown) => ipc("coinbase:get-portfolio-breakdown", uuid, cur),
       getPortfolioSnapshots:  (uuid: unknown) =>            ipc("coinbase:get-portfolio-snapshots", uuid),
+      previewOrder:           (input: unknown) =>           ipc("coinbase:preview-order", input),
+      submitOrder:            (input: unknown) =>           ipc("coinbase:submit-order", input),
     },
     sentiment: {
       getGlobal: (i: unknown) => ipc("sentiment:get-global", i),

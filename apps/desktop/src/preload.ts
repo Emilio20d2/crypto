@@ -71,6 +71,8 @@ const cryptoControl: FullCryptoControlAPI = {
     listPortfolios:        ()                           => ipcRenderer.invoke("coinbase:list-portfolios"),
     getPortfolioBreakdown: (portfolioUuid: string, currency: string) => ipcRenderer.invoke("coinbase:get-portfolio-breakdown", portfolioUuid, currency),
     getPortfolioSnapshots: (portfolioUuid: string)      => ipcRenderer.invoke("coinbase:get-portfolio-snapshots", portfolioUuid),
+    previewOrder:          (input: unknown)             => ipcRenderer.invoke("coinbase:preview-order", input),
+    submitOrder:           (input: unknown)             => ipcRenderer.invoke("coinbase:submit-order", input),
   },
   sentiment: {
     getGlobal: (input) => ipcRenderer.invoke("sentiment:get-global", input),

@@ -48,7 +48,7 @@ describe("Tesorería de ciclos", () => {
     expect(summary.cashBalance).toBe(100);
     expect(summary.eurcBalance).toBe(60);
     expect(summary.fiscalReserveBalance).toBe(20);
-    expect(summary.totalLiquidity).toBe(180);
+    expect(summary.totalLiquidity).toBe(160);
     expect(summary.pendingEstimatedTaxes).toBe(5);
   });
 
@@ -59,7 +59,7 @@ describe("Tesorería de ciclos", () => {
     const summary = repo.getSummary(40);
     expect(summary.eurcBalance).toBe(60);
     expect(summary.fiscalReserveBalance).toBe(40);
-    expect(summary.freeRebuyLiquidity).toBe(60);
+    expect(summary.freeRebuyLiquidity).toBe(20);
   });
 
   test("usa EURC disponible para recompras sin consumir efectivo", () => {
@@ -85,7 +85,7 @@ describe("Tesorería de ciclos", () => {
     const summary = repo.getSummary(20, 100);
     expect(summary.eurcBalance).toBe(80);
     expect(summary.fiscalReserveBalance).toBe(20);
-    expect(summary.freeRebuyLiquidity).toBe(80);
+    expect(summary.freeRebuyLiquidity).toBe(60);
   });
 
   test("no permite financiar recompras con efectivo si no hay EURC libre", () => {

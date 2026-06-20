@@ -1,10 +1,7 @@
 import { useMemo, useState } from "react";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { z } from "zod";
 import { ClipboardList, Filter } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "../components/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/Card";
 import { EmptyState } from "../components/EmptyState";
@@ -14,79 +11,53 @@ import { LoadingState } from "../components/LoadingState";
 import { OperationDetail, OperationList } from "../components/OperationPanels";
 import { PageToolbar } from "../components/PageToolbar";
 import { Select } from "../components/Select";
+import { formatMoney } from "../lib/format";
 
-const uiSchema = z.object({
-  type: z.enum(["buy", "sell", "convert", "transfer_in", "transfer_out", "reward", "staking", "airdrop", "fee", "adjustment"]),
-  date: z.string().min(1, "La fecha es obligatoria"),
-  sourceAsset: z.string().min(1, "Selecciona el activo"),
-  destinationAsset: z.string().optional(),
-  amount: z.number().positive("La cantidad debe ser mayor a 0"),
-  destinationAmount: z.number().positive("La cantidad debe ser mayor a 0").optional(),
-  priceEur: z.number().positive("El precio debe ser mayor a 0").optional(),
-  feeAmount: z.number().min(0, "La comisión no puede ser negativa").optional(),
-});
-
-type FormData = z.infer<typeof uiSchema>;
-
-function toDatetimeLocalValue(ms: number) {
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+function moneyValue(input: any): number | null {
+  if (!input) return null;
+  if (typeof input === "number" && Number.isFinite(input)) return input;
+  const raw = typeof input === "string" ? input : input.value;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
-// Inverse of onSubmit's leg-building below: rebuilds form values from a
-// stored transaction so "Editar" can prefill the same form used to create it.
-function transactionToFormValues(tx: any): FormData {
-  const source = tx.legs.find((leg: any) => leg.legType === "source");
-  const destination = tx.legs.find((leg: any) => leg.legType === "destination");
-  const feeAmount = tx.fees?.[0]?.amount ?? 0;
-  const date = toDatetimeLocalValue(tx.date);
-
-  if (tx.type === "convert") {
-    return {
-      type: "convert",
-      date,
-      sourceAsset: source?.assetId ?? "",
-      amount: Math.abs(source?.amount ?? 0),
-      destinationAsset: destination?.assetId ?? "",
-      destinationAmount: destination?.amount ?? undefined,
-      feeAmount,
-    };
-  }
-
-  const primaryLeg = source ?? destination ?? tx.legs[0];
-  const amount = Math.abs(primaryLeg?.amount ?? 0);
-  const valuation = primaryLeg?.valuationEur ?? primaryLeg?.acquisitionValueEur;
-
-  return {
-    type: tx.type,
-    date,
-    sourceAsset: primaryLeg?.assetId ?? "",
-    amount,
-    priceEur: typeof valuation === "number" && amount > 0 ? valuation / amount : undefined,
-    feeAmount,
-  };
+function stringAmount(input: any): string | null {
+  if (!input) return null;
+  if (typeof input === "string") return input;
+  if (typeof input.value === "string") return input.value;
+  if (typeof input === "number") return String(input);
+  return null;
 }
 
 export function Operaciones() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const [submitting, setSubmitting] = useState(false);
-  const [errorMsg, setErrorMsg] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [orderLoading, setOrderLoading] = useState(false);
+  const [preparedPreview, setPreparedPreview] = useState<{ key: string; data: any } | null>(null);
+  const [preparedError, setPreparedError] = useState("");
+  const [confirmationText, setConfirmationText] = useState("");
   const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState("all");
-  const [editingId, setEditingId] = useState<string | null>(null);
 
-  const { register, watch, handleSubmit, reset, formState: { errors } } = useForm<FormData>({
-    resolver: zodResolver(uiSchema),
-    defaultValues: { type: "buy", amount: undefined, feeAmount: 0 },
-  });
+  const preparedTrade = useMemo(() => {
+    if (searchParams.get("source") !== "smart-buy") return null;
+    const assetId = searchParams.get("asset")?.toUpperCase() || "";
+    const quoteAmountEur = Number(searchParams.get("quoteAmount"));
+    if (!assetId || !Number.isFinite(quoteAmountEur) || quoteAmountEur <= 0) return null;
+    return {
+      assetId,
+      quoteAmountEur,
+      cycleId: searchParams.get("cycleId") || null,
+    };
+  }, [searchParams]);
 
-  // eslint-disable-next-line react-hooks/incompatible-library
-  const type = watch("type");
-  const needsDestination = type === "convert";
-  const hasPriceField = type === "buy" || type === "sell";
+  const preparedTradeKey = preparedTrade
+    ? `${preparedTrade.assetId}:${preparedTrade.quoteAmountEur}:${preparedTrade.cycleId ?? ""}`
+    : null;
+  const currentPreparedPreview = preparedTradeKey && preparedPreview?.key === preparedTradeKey ? preparedPreview.data : null;
 
   const { data: assetsRes } = useQuery({
     queryKey: ["assets"],
@@ -101,91 +72,59 @@ export function Operaciones() {
   const assets = assetsRes?.ok ? assetsRes.data : [];
   const transactions = useMemo(() => txsRes?.ok ? txsRes.data : [], [txsRes]);
   const filteredTransactions = useMemo(() => {
-    const sorted = [...transactions].sort((a, b) => b.date - a.date);
+    const coinbaseTransactions = transactions.filter((tx) => typeof tx.externalId === "string" && tx.externalId.length > 0);
+    const sorted = [...coinbaseTransactions].sort((a, b) => b.date - a.date);
     return typeFilter === "all" ? sorted : sorted.filter((tx) => tx.type === typeFilter);
   }, [transactions, typeFilter]);
   const selectedTx = filteredTransactions.find((tx) => tx.id === selectedTxId) || filteredTransactions[0];
 
-  const onSubmit = async (data: FormData) => {
-    setSubmitting(true);
-    setErrorMsg("");
-    setSuccessMsg("");
-
+  const requestPreparedPreview = async () => {
+    if (!preparedTrade || !preparedTradeKey) return;
+    setPreviewLoading(true);
+    setPreparedError("");
+    setPreparedPreview(null);
     try {
-      const dateMs = new Date(data.date).getTime();
-      const legs = [];
-
-      if (["buy", "transfer_in", "reward", "staking", "airdrop"].includes(data.type)) {
-        const valuationEur = data.priceEur ? data.amount * data.priceEur : undefined;
-        legs.push({ assetId: data.sourceAsset, amount: data.amount, legType: "destination" as const, valuationEur });
-      } else if (["sell", "transfer_out"].includes(data.type)) {
-        const valuationEur = data.priceEur ? data.amount * data.priceEur : undefined;
-        legs.push({ assetId: data.sourceAsset, amount: -data.amount, legType: "source" as const, valuationEur });
-      } else if (data.type === "convert") {
-        legs.push({ assetId: data.sourceAsset, amount: -data.amount, legType: "source" as const });
-        if (data.destinationAsset && data.destinationAmount) {
-          legs.push({ assetId: data.destinationAsset, amount: data.destinationAmount, legType: "destination" as const });
-        }
-      } else {
-        legs.push({ assetId: data.sourceAsset, amount: -data.amount, legType: "fee" as const });
-      }
-
-      const fees = data.feeAmount && data.feeAmount > 0
-        ? [{ assetId: data.sourceAsset, amount: data.feeAmount }]
-        : [];
-
-      const payload = {
-        type: data.type,
-        date: dateMs,
-        legs,
-        fees: fees.length ? fees : undefined,
-      };
-
-      const result = editingId
-        ? await window.cryptoControl.transactions.update(editingId, payload)
-        : await window.cryptoControl.transactions.create(payload);
-
+      const result = await window.cryptoControl.coinbase.previewOrder({
+        assetId: preparedTrade.assetId,
+        side: "BUY",
+        quoteAmountEur: preparedTrade.quoteAmountEur,
+      });
       if (!result.ok) {
-        setErrorMsg(result.error?.message ?? "Error desconocido");
+        setPreparedError(result.error.message);
         return;
       }
-
-      setSuccessMsg(editingId ? "Operación actualizada correctamente." : "Operación guardada correctamente.");
-      setEditingId(null);
-      reset({ type: "buy", amount: undefined, feeAmount: 0 });
-      await queryClient.invalidateQueries({ queryKey: ["transactions"] });
-      await queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+      setPreparedPreview({ key: preparedTradeKey, data: result.data });
     } catch (error) {
-      setErrorMsg(`Fallo al guardar: ${error instanceof Error ? error.message : "Error"}`);
+      setPreparedError(error instanceof Error ? error.message : "No se pudo obtener preview de Coinbase");
     } finally {
-      setSubmitting(false);
+      setPreviewLoading(false);
     }
   };
 
-  const handleEdit = (id: string) => {
-    const tx = transactions.find((item) => item.id === id);
-    if (!tx) return;
-    setErrorMsg("");
-    setSuccessMsg("");
-    setEditingId(id);
-    setSelectedTxId(id);
-    reset(transactionToFormValues(tx));
-  };
-
-  const handleCancelEdit = () => {
-    setEditingId(null);
-    setErrorMsg("");
-    setSuccessMsg("");
-    reset({ type: "buy", amount: undefined, feeAmount: 0 });
-  };
-
-  const handleDelete = async (id: string) => {
-    if (!confirm("¿Eliminar esta operación?")) return;
-    const result = await window.cryptoControl.transactions.delete(id);
-    if (result.ok) {
+  const submitPreparedOrder = async () => {
+    if (!preparedTrade || !currentPreparedPreview) return;
+    setOrderLoading(true);
+    setPreparedError("");
+    try {
+      const result = await window.cryptoControl.coinbase.submitOrder({
+        assetId: preparedTrade.assetId,
+        side: "BUY",
+        quoteAmountEur: preparedTrade.quoteAmountEur,
+        previewId: currentPreparedPreview.preview_id ?? null,
+        confirmationText,
+      });
+      if (!result.ok) {
+        setPreparedError(result.error.message);
+        return;
+      }
+      setSuccessMsg("Orden enviada a Coinbase. Sincronizando cartera y operaciones en segundo plano.");
+      await queryClient.invalidateQueries({ queryKey: ["coinbase"] });
       await queryClient.invalidateQueries({ queryKey: ["transactions"] });
-      if (selectedTxId === id) setSelectedTxId(null);
-      if (editingId === id) handleCancelEdit();
+      await queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+    } catch (error) {
+      setPreparedError(error instanceof Error ? error.message : "No se pudo enviar la orden a Coinbase");
+    } finally {
+      setOrderLoading(false);
     }
   };
 
@@ -215,84 +154,72 @@ export function Operaciones() {
       />
 
       <div className="operations-layout">
-        <Card className="operation-form-panel">
-          <CardHeader>
-            <CardTitle>{editingId ? "Editar Operación" : "Registrar Operación"}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {errorMsg && <div className="banner banner-error">{errorMsg}</div>}
-            {successMsg && <div className="banner banner-success">{successMsg}</div>}
-
-            <form className="compact-form" onSubmit={handleSubmit(onSubmit)} noValidate>
-              <FormField label="Tipo de operación" htmlFor="type">
-                <Select id="type" {...register("type")}>
-                  <option value="buy">Compra</option>
-                  <option value="sell">Venta</option>
-                  <option value="convert">Conversión</option>
-                  <option value="transfer_in">Entrada (transferencia)</option>
-                  <option value="transfer_out">Salida (transferencia)</option>
-                  <option value="reward">Recompensa</option>
-                  <option value="staking">Staking</option>
-                  <option value="airdrop">Airdrop</option>
-                  <option value="fee">Comisión</option>
-                  <option value="adjustment">Ajuste</option>
-                </Select>
-              </FormField>
-
-              <FormField label="Fecha y hora" htmlFor="date" error={errors.date?.message}>
-                <Input id="date" type="datetime-local" error={!!errors.date} {...register("date")} />
-              </FormField>
-
-              <FormField label={needsDestination ? "Activo origen" : "Activo"} htmlFor="sourceAsset" error={errors.sourceAsset?.message}>
-                <Select id="sourceAsset" error={!!errors.sourceAsset} {...register("sourceAsset")}>
-                  <option value="">Selecciona un activo</option>
-                  {assets.map((asset: any) => (
-                    <option key={asset.id} value={asset.id}>{asset.name} ({asset.symbol})</option>
-                  ))}
-                </Select>
-              </FormField>
-
-              <FormField label={needsDestination ? "Cantidad entregada" : "Cantidad"} htmlFor="amount" error={errors.amount?.message}>
-                <Input id="amount" type="number" step="any" error={!!errors.amount} {...register("amount", { valueAsNumber: true })} />
-              </FormField>
-
-              {hasPriceField && (
-                <FormField label="Precio unitario (€) — opcional" htmlFor="priceEur" error={errors.priceEur?.message}>
-                  <Input id="priceEur" type="number" step="any" error={!!errors.priceEur} {...register("priceEur", { valueAsNumber: true })} />
-                </FormField>
-              )}
-
-              {needsDestination && (
-                <>
-                  <FormField label="Activo destino" htmlFor="destinationAsset">
-                    <Select id="destinationAsset" {...register("destinationAsset")}>
-                      <option value="">Selecciona un activo</option>
-                      {assets.map((asset: any) => (
-                        <option key={asset.id} value={asset.id}>{asset.name} ({asset.symbol})</option>
-                      ))}
-                    </Select>
-                  </FormField>
-                  <FormField label="Cantidad recibida" htmlFor="destinationAmount">
-                    <Input id="destinationAmount" type="number" step="any" {...register("destinationAmount", { valueAsNumber: true })} />
-                  </FormField>
-                </>
-              )}
-
-              <FormField label="Comisión (opcional)" htmlFor="feeAmount" error={errors.feeAmount?.message}>
-                <Input id="feeAmount" type="number" step="any" error={!!errors.feeAmount} {...register("feeAmount", { valueAsNumber: true })} />
-              </FormField>
-
-              <Button type="submit" fullWidth loading={submitting}>
-                {editingId ? "Guardar cambios" : "Guardar Operación"}
-              </Button>
-              {editingId && (
-                <Button type="button" variant="secondary" fullWidth onClick={handleCancelEdit}>
-                  Cancelar edición
+        {preparedTrade ? (
+          <Card className="operation-form-panel">
+            <CardHeader>
+              <CardTitle>Orden preparada desde Compra Inteligente</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="investment-distribution">
+                <span>Activo: <strong>{preparedTrade.assetId}</strong></span>
+                <span>Importe: <strong>{formatMoney(preparedTrade.quoteAmountEur)}</strong></span>
+                <span>Origen: <strong>Aportaciones EUR</strong></span>
+              </div>
+              {preparedError ? <div className="banner banner-error">{preparedError}</div> : null}
+              {currentPreparedPreview ? (
+                <div className="investment-contribution-list" style={{ marginTop: 12 }}>
+                  <article className="investment-contribution">
+                    <div className="investment-contribution-header">
+                      <div>
+                        <strong>Preview Coinbase</strong>
+                        <span>{currentPreparedPreview.productId ?? `${preparedTrade.assetId}-EUR`}</span>
+                      </div>
+                      <span className="badge">No ejecutada</span>
+                    </div>
+                    <p className="investment-contribution-meta">
+                      Total estimado: <strong>{formatMoney(moneyValue(currentPreparedPreview.order_total), "Pendiente")}</strong>
+                      {" "} · Comisión: <strong>{formatMoney(moneyValue(currentPreparedPreview.commission_total), "Pendiente")}</strong>
+                    </p>
+                    <p className="investment-contribution-meta">
+                      Cantidad estimada: {stringAmount(currentPreparedPreview.base_size) ?? "Pendiente"} {preparedTrade.assetId}
+                      {" "} · Precio medio estimado: {currentPreparedPreview.est_average_filled_price ?? "Pendiente"}
+                    </p>
+                    <FormField label="Confirmación explícita" htmlFor="coinbase-confirmation">
+                      <Input
+                        id="coinbase-confirmation"
+                        value={confirmationText}
+                        onChange={(event) => setConfirmationText(event.target.value)}
+                        placeholder="Escribe CONFIRMAR"
+                      />
+                    </FormField>
+                    <Button
+                      type="button"
+                      variant="primary"
+                      fullWidth
+                      loading={orderLoading}
+                      disabled={confirmationText !== "CONFIRMAR"}
+                      onClick={() => void submitPreparedOrder()}
+                    >
+                      Enviar orden real a Coinbase
+                    </Button>
+                  </article>
+                </div>
+              ) : (
+                <Button type="button" fullWidth loading={previewLoading} onClick={() => void requestPreparedPreview()}>
+                  Solicitar preview de Coinbase
                 </Button>
               )}
-            </form>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {successMsg ? (
+          <Card className="operation-form-panel">
+            <CardContent>
+              <div className="banner banner-success">{successMsg}</div>
+            </CardContent>
+          </Card>
+        ) : null}
 
         <Card className="operation-history-panel">
           <CardHeader>
@@ -303,8 +230,8 @@ export function Operaciones() {
             {!loadingTxs && filteredTransactions.length === 0 && (
               <EmptyState
                 icon={<ClipboardList size={44} />}
-                title="Sin operaciones registradas"
-                description="Las compras, ventas y conversiones aparecerán en esta lista."
+                title="Sin operaciones de Coinbase"
+                description="Sincroniza Coinbase para ver compras, ventas y conversiones reales. El registro manual está desactivado."
               />
             )}
             {filteredTransactions.length > 0 && (
@@ -313,8 +240,6 @@ export function Operaciones() {
                 assets={assets}
                 selectedId={selectedTx?.id}
                 onSelect={setSelectedTxId}
-                onEdit={handleEdit}
-                onDelete={handleDelete}
               />
             )}
           </CardContent>

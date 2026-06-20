@@ -1,7 +1,8 @@
 import type { PortfolioCalculator } from "./calculator";
-import type { FifoCalculator } from "./fifo";
+import type { FifoCalculator, FifoLot } from "./fifo";
 import type { PortfolioRepository } from "./repository";
-import type { PortfolioSummary, AssetAllocation, PortfolioResult } from "./schemas";
+import type { PortfolioSummary, AssetAllocation, PortfolioPosition, PortfolioResult } from "./schemas";
+import type { TransactionInput } from "./types";
 
 export interface PriceResult {
   price: number | null;
@@ -34,35 +35,29 @@ export class PortfolioService {
 
   async getPositions(): Promise<PortfolioResult> {
     const txs = await this.repository.getTransactions();
-    const result = this.portfolioCalculator.calculate(txs);
+    const fifoResult = this.fifoCalculator.calculate(txs);
+    const positions = this.buildFifoPositions(txs, fifoResult.lots);
     
     try {
       const realBalances = await this.repository.getAccountBalances();
       
       for (const [assetId, balance] of Object.entries(realBalances)) {
-        if (!result.positions[assetId]) {
-          result.positions[assetId] = {
-            assetId,
-            balance: balance,
-            totalInvestedEur: 0,
-            averagePriceEur: null,
-            hasPendingValuation: false
-          };
-        } else {
-          result.positions[assetId].balance = balance;
-        }
+        this.applyLiveBalance(positions, assetId, balance, fifoResult.lots);
       }
       
-      for (const assetId of Object.keys(result.positions)) {
+      for (const assetId of Object.keys(positions)) {
         if (realBalances[assetId] === undefined) {
-          result.positions[assetId].balance = 0;
+          positions[assetId].balance = 0;
         }
       }
     } catch (e) {
       console.warn("Could not fetch real balances, falling back to computed balances:", e);
     }
     
-    return result;
+    return {
+      positions,
+      realizedGains: fifoResult.realizedGains
+    };
   }
 
   async getSummary(): Promise<PortfolioSummary> {
@@ -88,7 +83,11 @@ export class PortfolioService {
         if (result.price !== null) {
           const value = pos.balance * result.price;
           totalValueEur += value;
-          totalInvestedEur += pos.totalInvestedEur;
+          if (pos.hasPendingValuation) {
+            unavailableAssets++;
+          } else {
+            totalInvestedEur += pos.totalInvestedEur;
+          }
           valuedAssets++;
           if (result.fetchedAt && (!lastSuccessfulPriceAt || result.fetchedAt > lastSuccessfulPriceAt)) {
             lastSuccessfulPriceAt = result.fetchedAt;
@@ -105,7 +104,7 @@ export class PortfolioService {
     
     let valuationStatus: "complete" | "partial" | "empty" = "empty";
     if (assetCount > 0) {
-      if (valuedAssets === assetCount) valuationStatus = "complete";
+      if (valuedAssets === assetCount && unavailableAssets === 0) valuationStatus = "complete";
       else if (valuedAssets > 0) valuationStatus = "partial";
       else valuationStatus = "empty";
     }
@@ -192,5 +191,93 @@ export class PortfolioService {
 
     const txs = await this.repository.getTransactions();
     return this.fifoCalculator.calculate(txs).lots;
+  }
+
+  private buildFifoPositions(transactions: TransactionInput[], lots: FifoLot[]): Record<string, PortfolioPosition> {
+    const balances = new Map<string, number>();
+    const pendingAssets = this.findAssetsWithIncompleteAcquisitionCost(transactions);
+    const assets = new Set<string>();
+
+    for (const tx of transactions) {
+      for (const leg of tx.legs) {
+        assets.add(leg.assetId);
+        balances.set(leg.assetId, (balances.get(leg.assetId) ?? 0) + leg.amount);
+      }
+    }
+
+    for (const lot of lots) assets.add(lot.assetId);
+
+    const positions: Record<string, PortfolioPosition> = {};
+    for (const assetId of assets) {
+      const balance = balances.get(assetId) ?? 0;
+      positions[assetId] = this.createPositionFromLots(assetId, balance, lots, pendingAssets.has(assetId));
+    }
+
+    return positions;
+  }
+
+  private findAssetsWithIncompleteAcquisitionCost(transactions: TransactionInput[]): Set<string> {
+    const pending = new Set<string>();
+
+    for (const tx of transactions) {
+      for (const leg of tx.legs) {
+        if (leg.amount <= 0) continue;
+        if (tx.type === "transfer_out") continue;
+
+        const lacksValuation = leg.valuationEur === undefined || leg.valuationStatus === "pending";
+        if (lacksValuation) pending.add(leg.assetId);
+      }
+    }
+
+    return pending;
+  }
+
+  private applyLiveBalance(
+    positions: Record<string, PortfolioPosition>,
+    assetId: string,
+    liveBalance: number,
+    lots: FifoLot[]
+  ): void {
+    const existingPending = positions[assetId]?.hasPendingValuation ?? false;
+    positions[assetId] = this.createPositionFromLots(assetId, liveBalance, lots, existingPending);
+  }
+
+  private createPositionFromLots(
+    assetId: string,
+    balance: number,
+    allLots: FifoLot[],
+    hasIncompleteAcquisition: boolean
+  ): PortfolioPosition {
+    const lots = allLots
+      .filter((lot) => lot.assetId === assetId && lot.remainingAmount > 0)
+      .sort((a, b) => a.date - b.date);
+    const openAmount = lots.reduce((sum, lot) => sum + lot.remainingAmount, 0);
+    const costForVisibleBalance = this.costForQuantity(lots, Math.max(0, Math.min(balance, openAmount)));
+    const tolerance = Math.max(1e-8, Math.abs(balance) * 1e-6);
+    const hasBalanceMismatch = balance > tolerance && Math.abs(balance - openAmount) > tolerance;
+    const hasPendingValuation = hasIncompleteAcquisition || hasBalanceMismatch;
+    const totalInvestedEur = balance > 0 ? costForVisibleBalance : 0;
+
+    return {
+      assetId,
+      balance,
+      totalInvestedEur,
+      averagePriceEur: !hasPendingValuation && balance > 0 ? totalInvestedEur / balance : null,
+      hasPendingValuation
+    };
+  }
+
+  private costForQuantity(lots: FifoLot[], quantity: number): number {
+    let remaining = quantity;
+    let cost = 0;
+
+    for (const lot of lots) {
+      if (remaining <= 0) break;
+      const amount = Math.min(lot.remainingAmount, remaining);
+      cost += amount * lot.unitAcquisitionPriceEur;
+      remaining -= amount;
+    }
+
+    return cost;
   }
 }

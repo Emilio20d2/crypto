@@ -118,6 +118,8 @@ describe("Fiscalidad", () => {
         listPortfolios: async () => ({ ok: true as const, data: [] }),
         getPortfolioBreakdown: async () => ({ ok: true as const, data: {} }),
         getPortfolioSnapshots: async () => ({ ok: true as const, data: [] }),
+        previewOrder: async () => ({ ok: true as const, data: { preview_id: "preview-1" } }),
+        submitOrder: async () => ({ ok: true as const, data: { success: true } }),
       },
       sentiment: {
         getGlobal: async () => ({ ok: true as const, data: { scope: "global" as const, direction: "neutral" as const, score: 0, confidence: 0, timeframe: "24h" as const, factors: [], sourceSummary: [], calculatedAt: 0, validUntil: null, state: "unavailable" as const } }),
