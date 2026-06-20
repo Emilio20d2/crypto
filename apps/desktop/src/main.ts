@@ -3356,8 +3356,8 @@ function setupIpcHandlers() {
       let riskLevel: "bajo" | "moderado" | "alto" | "muy_alto";
 
       if (health.estadoEstrategico === "sustitucion_recomendada") {
-        type = "venta_parcial"; percentageSuggested = 100; riskLevel = "muy_alto";
-        reason = `Deterioro severo detectado. Salida total recomendada. ${health.reasoning}`;
+        type = "venta_parcial"; percentageSuggested = 60; riskLevel = "muy_alto";
+        reason = `Deterioro severo detectado. Reducción fuerte propuesta conservando una posición residual del 40%. ${health.reasoning}`;
       } else if (health.estadoEstrategico === "deterioro") {
         type = "venta_parcial"; percentageSuggested = 30; riskLevel = "alto";
         reason = `Activo en deterioro. Reducción del 30% para limitar exposición. ${health.reasoning} ${mediaReason(assetRow.assetId)}`;
@@ -3401,9 +3401,10 @@ function setupIpcHandlers() {
       .where(eq(schema.cycleRebuyTiers.cycleId, input.cycleId))
       .orderBy(schema.cycleRebuyTiers.drawdownPercentage)
       .all();
-    const tierDefs: Array<[number, number, string]> = dbTiers.length > 0
-      ? dbTiers.map(t => [t.drawdownPercentage, t.usagePercentage / 100, `Regla configurada: ${t.name ?? `corrección ${Math.abs(t.drawdownPercentage)}%`}`])
-      : [[-15, 0.3, "Corrección moderada"], [-25, 0.5, "Corrección fuerte"], [-40, 0.7, "Corrección extrema"]];
+    const tierDefs: Array<[number, number, string]> = dbTiers
+      .filter(t => t.usagePercentage > 0 && t.usagePercentage < 100)
+      .sort((a, b) => Math.abs(a.drawdownPercentage) - Math.abs(b.drawdownPercentage))
+      .map(t => [t.drawdownPercentage, t.usagePercentage / 100, `Regla configurada: ${t.name ?? `corrección ${Math.abs(t.drawdownPercentage)}%`}`]);
 
     if (assetRows.length > 0) {
       for (const assetRow of assetRows) {
@@ -3428,18 +3429,31 @@ function setupIpcHandlers() {
           continue;
         }
 
+        if (tierDefs.length === 0) {
+          rebuyProposals.push(RebuyProposalSchema.parse({
+            assetId: assetRow.assetId,
+            triggerDropPercentage: marketPhaseResult.phase === "capitulacion" ? -15 : -25,
+            proposedAmountEur: 0,
+            reason: `No hay escalones de recompra configurados. Configura porcentajes por tramo para que la propuesta use solo EURC libre y mantenga liquidez residual. ${mediaReason(assetRow.assetId)}`,
+            availableLiquidityEur: Math.round(assetLiquidity * 100) / 100,
+          }));
+          continue;
+        }
+
         if (assetLiquidity < 5) continue;
 
+        let remainingAssetLiquidity = assetLiquidity;
         for (const [drop, deployFraction, label] of tierDefs) {
-          const amount = Math.round(assetLiquidity * deployFraction * 100) / 100;
+          const amount = Math.round(remainingAssetLiquidity * deployFraction * 100) / 100;
           if (amount < 5) continue;
           rebuyProposals.push(RebuyProposalSchema.parse({
             assetId: assetRow.assetId,
             triggerDropPercentage: drop,
             proposedAmountEur: amount,
-            reason: `${label} (${drop}%): desplegar ${Math.round(deployFraction * 100)}% de la liquidez EURC asignada a ${assetRow.assetId} (${assetLiquidity.toFixed(0)} EUR disponibles de ${freeRebuyLiquidity.toFixed(0)} EUR libres totales). ${mediaReason(assetRow.assetId)}`,
-            availableLiquidityEur: Math.round(assetLiquidity * 100) / 100,
+            reason: `${label} (${drop}%): desplegar ${Math.round(deployFraction * 100)}% del EURC libre restante asignado a ${assetRow.assetId} (${remainingAssetLiquidity.toFixed(0)} EUR de ${freeRebuyLiquidity.toFixed(0)} EUR libres totales). ${mediaReason(assetRow.assetId)}`,
+            availableLiquidityEur: Math.round(remainingAssetLiquidity * 100) / 100,
           }));
+          remainingAssetLiquidity = Math.max(0, remainingAssetLiquidity - amount);
         }
       }
     }
@@ -3906,6 +3920,12 @@ function setupIpcHandlers() {
     const db = getDb();
     const now = Date.now();
     const id = data.id ?? crypto.randomUUID();
+    if (!Number.isFinite(data.drawdownPercentage) || data.drawdownPercentage <= 0 || data.drawdownPercentage > 100) {
+      throw new Error("La caída del escalón debe estar entre 0 y 100%.");
+    }
+    if (!Number.isFinite(data.usagePercentage) || data.usagePercentage <= 0 || data.usagePercentage >= 100) {
+      throw new Error("El porcentaje de EURC debe ser mayor que 0 y menor que 100%; siempre debe quedar EURC residual.");
+    }
     db.insert(schema.cycleRebuyTiers)
       .values({
         id, cycleId: data.cycleId,
@@ -3960,7 +3980,7 @@ function setupIpcHandlers() {
     const tiers = tierRows.map(mapRebuyTier).filter(t => t.status === "activa");
 
     const treasurySummary = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance());
-    const availableLiquidityEur = Math.max(0, (treasurySummary?.eurcBalance ?? 0) - (treasurySummary?.fiscalReserveBalance ?? 0));
+    const availableLiquidityEur = Math.max(0, treasurySummary?.freeRebuyLiquidity ?? ((treasurySummary?.eurcBalance ?? 0) - (treasurySummary?.fiscalReserveBalance ?? 0)));
 
     const allocations = await getPortfolioService().getAllocation();
     const prices: Record<string, number | null> = {};
@@ -4039,18 +4059,20 @@ function setupIpcHandlers() {
   }));
 
   ipcMain.handle("partialSaleRules:update", withResult(async (_, id: string, data: import("@crypto-control/core").UpdatePartialSaleRuleInput) => {
+    const { UpdatePartialSaleRuleSchema } = require("@crypto-control/core") as typeof import("@crypto-control/core");
+    const parsed = UpdatePartialSaleRuleSchema.parse(data);
     const db = getDb();
     const now = Date.now();
     const updates: Record<string, unknown> = { updatedAt: now };
-    if (data.name !== undefined) updates.name = data.name;
-    if (data.conditionType !== undefined) updates.conditionType = data.conditionType;
-    if (data.conditionValue !== undefined) updates.conditionValue = data.conditionValue;
-    if (data.conditionValue2 !== undefined) updates.conditionValue2 = data.conditionValue2;
-    if (data.sellPercentage !== undefined) updates.sellPercentage = data.sellPercentage;
-    if (data.priority !== undefined) updates.priority = data.priority;
-    if (data.status !== undefined) updates.status = data.status;
-    if (data.effectiveDate !== undefined) updates.effectiveDate = data.effectiveDate;
-    if (data.notes !== undefined) updates.notes = data.notes;
+    if (parsed.name !== undefined) updates.name = parsed.name;
+    if (parsed.conditionType !== undefined) updates.conditionType = parsed.conditionType;
+    if (parsed.conditionValue !== undefined) updates.conditionValue = parsed.conditionValue;
+    if (parsed.conditionValue2 !== undefined) updates.conditionValue2 = parsed.conditionValue2;
+    if (parsed.sellPercentage !== undefined) updates.sellPercentage = parsed.sellPercentage;
+    if (parsed.priority !== undefined) updates.priority = parsed.priority;
+    if (parsed.status !== undefined) updates.status = parsed.status;
+    if (parsed.effectiveDate !== undefined) updates.effectiveDate = parsed.effectiveDate;
+    if (parsed.notes !== undefined) updates.notes = parsed.notes;
     db.update(schema.partialSaleRules).set(updates).where(eq(schema.partialSaleRules.id, id)).run();
     const row = db.select().from(schema.partialSaleRules).where(eq(schema.partialSaleRules.id, id)).get();
     if (!row) throw new Error("Regla no encontrada");

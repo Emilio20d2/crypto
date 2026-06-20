@@ -94,7 +94,9 @@ function AutomaticProposals({ report, loading }: { report: CycleStrategyReport |
                         <span className={`badge ${RISK_BADGE[proposal.riskLevel] ?? ""}`}>{proposal.riskLevel}</span>
                       </div>
                       <p className="substitution-meta">
-                        {proposal.percentageSuggested != null ? `Sugerido: vender ${proposal.percentageSuggested}%` : "Sin venta directa; vigilar"}
+                        {proposal.percentageSuggested != null
+                          ? `Sugerido: vender ${proposal.percentageSuggested}% y mantener ${Math.max(0, 100 - proposal.percentageSuggested).toFixed(2)}%`
+                          : "Sin venta directa; vigilar"}
                         {proposal.estimatedProceedsEur != null ? ` · Estimado: ${formatEur(proposal.estimatedProceedsEur)}` : ""}
                       </p>
                       <p className="substitution-notes">{proposal.reason}</p>
@@ -120,7 +122,11 @@ function AutomaticProposals({ report, loading }: { report: CycleStrategyReport |
                           {proposal.proposedAmountEur > 0 ? formatEur(proposal.proposedAmountEur) : "Pendiente de EURC"}
                         </span>
                       </div>
-                      <p className="substitution-meta">Liquidez asignada: {formatEur(proposal.availableLiquidityEur)}</p>
+                      <p className="substitution-meta">
+                        Liquidez libre: {formatEur(proposal.availableLiquidityEur)}
+                        {" · "}Propuesta: {formatEur(proposal.proposedAmountEur)}
+                        {" · "}Quedará: {formatEur(Math.max(0, proposal.availableLiquidityEur - proposal.proposedAmountEur))}
+                      </p>
                       <p className="substitution-notes">{proposal.reason}</p>
                     </article>
                   ))}
@@ -179,7 +185,7 @@ function NuevaReglaVentaForm({ cycleId, onSuccess }: { cycleId: string; onSucces
     if (!name.trim()) { setError("El nombre es obligatorio."); return; }
     const pct = parseFloat(sellPercentage.replace(",", "."));
     const val = conditionValue ? parseFloat(conditionValue.replace(",", ".")) : null;
-    if (isNaN(pct) || pct <= 0 || pct > 100) { setError("Porcentaje de venta entre 0.01 y 100."); return; }
+    if (isNaN(pct) || pct <= 0 || pct >= 100) { setError("El porcentaje debe ser mayor que 0 y menor que 100 para mantener una posición residual."); return; }
     await create.mutateAsync({ cycleId, assetId, name: name.trim(), conditionType: conditionType as any, conditionValue: val, sellPercentage: pct, notes: notes || null });
   }
 
@@ -222,7 +228,7 @@ function NuevaReglaVentaForm({ cycleId, onSuccess }: { cycleId: string; onSucces
           )}
           <label className="form-group">
             <span>% a vender *</span>
-            <Input type="number" step="0.01" min="0.01" max="100" value={sellPercentage} onChange={e => setSellPercentage(e.target.value)} />
+            <Input type="number" step="0.01" min="0.01" max="99.99" value={sellPercentage} onChange={e => setSellPercentage(e.target.value)} />
           </label>
           <label className="form-group investment-wide">
             <span>Notas</span>
@@ -279,6 +285,8 @@ function ReglaVentaCard({ rule, onDelete }: { rule: PartialSaleRule; onDelete: (
                 <span>Impuesto est.: {formatEur(evaluation.preview.estimatedTaxEur)}</span>
                 <span>Reserva fiscal: {formatEur(evaluation.preview.fiscalReserveEur)}</span>
                 <span>EURC neto: {formatEur(evaluation.preview.netEurcEur)}</span>
+                <span>Queda: {evaluation.preview.remainingBalance.toFixed(6)}</span>
+                <span>Permanece: {evaluation.preview.remainingPercentage.toFixed(2)}%</span>
               </div>
             )}
             <Button size="sm" style={{ marginTop: 8 }} onClick={() => alert("Preparar venta: funcionalidad en Operaciones")}>
@@ -335,7 +343,7 @@ function NuevaTierRecompraForm({ cycleId, onSuccess }: { cycleId: string; onSucc
     const u = parseFloat(usage.replace(",", "."));
     const rv = refValue ? parseFloat(refValue.replace(",", ".")) : null;
     if (isNaN(dd) || dd <= 0 || dd > 100) { setError("Caída entre 0 y 100."); return; }
-    if (isNaN(u) || u <= 0 || u > 100) { setError("% EURC entre 0 y 100."); return; }
+    if (isNaN(u) || u <= 0 || u >= 100) { setError("El % de EURC debe ser mayor que 0 y menor que 100 para mantener liquidez residual."); return; }
     await create.mutateAsync({ cycleId, assetId, name: name || null, drawdownPercentage: dd, usagePercentage: u, referenceType: refType, referenceValue: rv, notes: notes || null });
   }
 
@@ -370,7 +378,7 @@ function NuevaTierRecompraForm({ cycleId, onSuccess }: { cycleId: string; onSucc
           </label>
           <label className="form-group">
             <span>% EURC a usar *</span>
-            <Input type="number" step="0.1" min="1" max="100" value={usage} onChange={e => setUsage(e.target.value)} />
+            <Input type="number" step="0.1" min="0.1" max="99.9" value={usage} onChange={e => setUsage(e.target.value)} />
           </label>
           <label className="form-group">
             <span>Tipo de referencia</span>
@@ -550,7 +558,7 @@ export function PlanBeneficiosCaidas({ cycleId }: { cycleId: string }) {
                       </span>
                     </div>
                     <p className="substitution-meta">
-                      Caída ≥ {tier.drawdownPercentage}% → usar {tier.usagePercentage}% del EURC
+                      Caída ≥ {tier.drawdownPercentage}% → usar {tier.usagePercentage}% del EURC libre y mantener {Math.max(0, 100 - tier.usagePercentage).toFixed(2)}%
                       {tier.referenceType ? ` · Ref: ${tier.referenceType}` : ""}
                       {tier.referenceValue != null ? ` (${formatEur(tier.referenceValue)})` : ""}
                     </p>

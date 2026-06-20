@@ -613,7 +613,7 @@ function RebuyTiersConfig({ cycleId }: { cycleId: string }) {
     const u = parseFloat(usage.replace(",", "."));
     if (isNaN(d) || isNaN(u)) { setTierError("Introduce valores numéricos válidos."); return; }
     if (d >= 0) { setTierError("El drawdown debe ser negativo (ej: -15)."); return; }
-    if (u <= 0 || u > 100) { setTierError("El uso debe estar entre 1% y 100%."); return; }
+    if (u <= 0 || u >= 100) { setTierError("El uso debe ser mayor que 0% y menor que 100% para mantener liquidez residual."); return; }
     await upsert.mutateAsync({ cycleId, drawdownPercentage: d, usagePercentage: u });
     setDrawdown("-15");
     setUsage("30");
@@ -636,7 +636,7 @@ function RebuyTiersConfig({ cycleId }: { cycleId: string }) {
               <div className="investment-contribution-header">
                 <div>
                   <strong>Caída {tier.drawdownPercentage}%</strong>
-                  <span>Desplegar {tier.usagePercentage}% de liquidez libre</span>
+                  <span>Desplegar {tier.usagePercentage}% de liquidez libre y mantener {Math.max(0, 100 - tier.usagePercentage).toFixed(2)}%</span>
                 </div>
                 <Button
                   type="button"
@@ -949,7 +949,7 @@ function CycleEditor({
     if (!psTransactionId) return;
     const pct = parseNumber(psPercentage);
     const proceeds = parseNumber(psProceeds);
-    if (!pct || !proceeds) return;
+    if (!pct || pct >= 100 || !proceeds) return;
     await createPS.mutateAsync({
       cycleId: cycle.id,
       transactionId: psTransactionId,
@@ -1305,7 +1305,9 @@ function CycleEditor({
                       <div className="investment-contribution-header">
                         <div>
                           <strong>{p.assetId}</strong>
-                          {p.percentageSuggested !== null ? <span>{p.percentageSuggested}% sugerido</span> : null}
+                          {p.percentageSuggested !== null
+                            ? <span>{p.percentageSuggested}% sugerido · permanece {Math.max(0, 100 - p.percentageSuggested).toFixed(2)}%</span>
+                            : null}
                         </div>
                         <span className={`badge ${SALE_PROPOSAL_BADGE[p.type] ?? ""}`}>{SALE_PROPOSAL_LABEL[p.type] ?? p.type}</span>
                       </div>
@@ -1329,7 +1331,9 @@ function CycleEditor({
                       <div className="investment-contribution-header">
                         <div>
                           <strong>{r.assetId}</strong>
-                          <span>Corrección {r.triggerDropPercentage}%</span>
+                          <span>
+                            Corrección {r.triggerDropPercentage}% · quedará {Math.max(0, r.availableLiquidityEur - r.proposedAmountEur).toLocaleString("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 })}
+                          </span>
                         </div>
                         <span className="badge badge-success">{r.proposedAmountEur.toLocaleString("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 })}</span>
                       </div>

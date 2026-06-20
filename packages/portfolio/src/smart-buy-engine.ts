@@ -104,6 +104,7 @@ export interface SmartBuyResult {
 }
 
 const ELIGIBLE_STATUSES = new Set(["active"]);
+const MIN_PROGRESSIVE_REMAINDER_EUR = 0.01;
 const MODE_LABELS: Record<SmartBuyMode, string> = {
   plan: "Cumplir el Plan",
   equilibrar: "Equilibrar cartera",
@@ -452,6 +453,17 @@ export function calculateSmartBuyAllocation(
       assetRestrictions.push(`Desviación limitada al ${maxDeviationPct}% del importe base`);
     }
     recommendedAmountEur = Math.min(recommendedAmountEur, remaining);
+
+    if (
+      eligibleCandidates.length === 1 &&
+      eligibility.eligible &&
+      asset.isInPlan !== false &&
+      recommendedAmountEur >= spendableAmount &&
+      spendableAmount > MIN_PROGRESSIVE_REMAINDER_EUR
+    ) {
+      recommendedAmountEur = Math.max(0, Math.round((spendableAmount - MIN_PROGRESSIVE_REMAINDER_EUR) * 100) / 100);
+      assetRestrictions.push("Compra única limitada para mantener capital sin utilizar");
+    }
 
     if (!eligibility.eligible) {
       recommendedAmountEur = 0;

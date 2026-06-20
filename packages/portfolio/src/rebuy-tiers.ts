@@ -20,7 +20,11 @@ export function evaluateRebuyTiers(
   availableLiquidityEur: number
 ): RebuyEvaluation {
   const applicable = tiers
-    .filter((tier) => currentDrawdownPercentage >= tier.drawdownPercentage)
+    .filter((tier) =>
+      currentDrawdownPercentage >= tier.drawdownPercentage &&
+      tier.usagePercentage > 0 &&
+      tier.usagePercentage < 100
+    )
     .sort((a, b) => b.drawdownPercentage - a.drawdownPercentage)[0] ?? null;
 
   if (!applicable) {
@@ -29,7 +33,7 @@ export function evaluateRebuyTiers(
       suggestedAmountEur: 0,
       reasoning: tiers.length === 0
         ? "No hay niveles de recompra configurados para este ciclo."
-        : `La caída actual (${currentDrawdownPercentage.toFixed(1)}%) no alcanza ningún umbral configurado.`
+        : `La caída actual (${currentDrawdownPercentage.toFixed(1)}%) no alcanza ningún umbral configurado o los porcentajes configurados no dejan EURC residual.`
     };
   }
 

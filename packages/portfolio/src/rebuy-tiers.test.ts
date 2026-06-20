@@ -43,4 +43,10 @@ describe("evaluateRebuyTiers", () => {
     const result = evaluateRebuyTiers(tiers, 20, -50);
     expect(result.suggestedAmountEur).toBe(0);
   });
+
+  test("un nivel del 100% no produce compra masiva", () => {
+    const result = evaluateRebuyTiers([{ drawdownPercentage: 15, usagePercentage: 100 }], 20, 1000);
+    expect(result.applicableTier).toBeNull();
+    expect(result.suggestedAmountEur).toBe(0);
+  });
 });

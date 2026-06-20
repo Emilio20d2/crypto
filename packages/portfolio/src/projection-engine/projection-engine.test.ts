@@ -5,6 +5,7 @@ import { buildDefaultHypotheses } from "./asset-simulator";
 import { computeEffectiveAllocation } from "./contribution-simulator";
 import { computeTaxOnGain } from "./tax-simulator";
 import { simulateSaleRules } from "./sale-simulator";
+import { simulateRebuyTiers } from "./rebuy-simulator";
 import type { PlanConsolidatedSnapshot, ProjectionInput } from "./types";
 
 const DAY = 24 * 3600 * 1000;
@@ -303,6 +304,27 @@ describe("runProjection — EURC y tesorería", () => {
     expect(last.eurcAvailableEur).toBe(0);
   });
 
+  test("dos recompras en el mismo periodo usan porcentajes sobre EURC restante", () => {
+    let lotId = 0;
+    const results = simulateRebuyTiers(
+      "cycle-1",
+      Date.now(),
+      [
+        { id: "tier-1", cycleId: "cycle-1", assetId: "BTC", drawdownPercentage: 15, usagePercentage: 20, priority: 1, status: "activa", referenceType: "manual", referenceValue: 100_000, lastTriggeredAt: null },
+        { id: "tier-2", cycleId: "cycle-1", assetId: "BTC", drawdownPercentage: 25, usagePercentage: 30, priority: 2, status: "activa", referenceType: "manual", referenceValue: 100_000, lastTriggeredAt: null },
+      ],
+      { BTC: 70_000 },
+      1_000,
+      new Set(),
+      { next: () => `lot-${++lotId}` },
+    );
+
+    const triggered = results.filter(result => result.triggered);
+    expect(triggered).toHaveLength(2);
+    expect(triggered[0].eurcConsumedEur).toBeCloseTo(200);
+    expect(triggered[1].eurcConsumedEur).toBeCloseTo(240);
+  });
+
   test("patrimonio bruto cuadra con suma de componentes", () => {
     const snap = makeSnapshot({
       treasury: { cashEur: 100, eurcEur: 200, eurcAvailableEur: 150, fiscalReserveEur: 50, totalLiquidityEur: 300 },
@@ -497,6 +519,34 @@ describe("runProjection — ventas parciales", () => {
     expect(triggered).toBeDefined();
     expect(triggered.quantitySold).toBeCloseTo(0.025); // 25% de 0.1
     expect(triggered.grossEur).toBeGreaterThan(0);
+  });
+
+  test("dos tramos de venta alcanzados en un mes se aplican sobre la posición restante", () => {
+    const rules = [
+      {
+        id: "rule-1", cycleId: "cycle-1", assetId: "BTC", name: "Beneficio 50%",
+        conditionType: "gain_percentage", conditionValue: 50, conditionValue2: null,
+        sellPercentage: 10, priority: 1, status: "activa",
+      },
+      {
+        id: "rule-2", cycleId: "cycle-1", assetId: "BTC", name: "Beneficio 100%",
+        conditionType: "gain_percentage", conditionValue: 100, conditionValue2: null,
+        sellPercentage: 15, priority: 2, status: "activa",
+      },
+    ];
+    const results = simulateSaleRules(
+      "cycle-1", Date.now(), rules,
+      { BTC: 1 }, { BTC: 50_000 }, { BTC: 110_000 },
+      [{ lotId: "lot-1", assetId: "BTC", acquiredAt: 0, quantity: 1, costPerUnitEur: 50_000, remaining: 1, source: "historical" }],
+      SPANISH_FISCAL_CONFIG_2024,
+      new Set(),
+    );
+    const triggered = results.filter((r: any) => r.triggered);
+    expect(triggered).toHaveLength(2);
+    expect(triggered[0].quantitySold).toBeCloseTo(0.1);
+    expect(triggered[1].quantitySold).toBeCloseTo(0.135);
+    expect(triggered[0].lotsConsumed[0].quantity).toBeCloseTo(0.1);
+    expect(triggered[1].lotsConsumed[0].quantity).toBeCloseTo(0.135);
   });
 
   test("beneficio no realizado no genera impuesto", () => {

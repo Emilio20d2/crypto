@@ -34,7 +34,7 @@ export function simulateRebuyTiers(
   const activeTiers = tiers
     .filter(t => t.status === "activa" && t.cycleId === cycleId)
     .filter(t => !usedTierIdsThisPeriod.has(t.id))
-    .sort((a, b) => b.drawdownPercentage - a.drawdownPercentage);
+    .sort((a, b) => (a.drawdownPercentage - b.drawdownPercentage) || (a.priority - b.priority));
 
   let remainingEurc = eurcAvailableEur;
 
@@ -59,6 +59,11 @@ export function simulateRebuyTiers(
 
     if (drawdownPct < tier.drawdownPercentage) {
       results.push({ tierId: tier.id, assetId: tier.assetId, triggered: false, drawdownPct, eurcConsumedEur: 0, quantityBought: 0, priceEur: price, newLot: null, event: null, notTriggeredReason: `Caída ${drawdownPct.toFixed(1)}% < umbral ${tier.drawdownPercentage}%` });
+      continue;
+    }
+
+    if (tier.usagePercentage <= 0 || tier.usagePercentage >= 100) {
+      results.push({ tierId: tier.id, assetId: tier.assetId, triggered: false, drawdownPct, eurcConsumedEur: 0, quantityBought: 0, priceEur: price, newLot: null, event: null, notTriggeredReason: `Porcentaje de EURC inválido: ${tier.usagePercentage}%` });
       continue;
     }
 

@@ -73,6 +73,14 @@ describe("calculateSmartBuyAllocation — modo plan", () => {
     expect(r.mode).toBe("plan");
     expect(r.originType).toBe("cash");
   });
+
+  test("una única compra no consume el 100% del importe analizado", () => {
+    const r = calculateSmartBuyAllocation([makeAsset()], { BTC: makePosition() }, 100, 5_000, "plan", "cash", null);
+    expect(r.recommendations[0].recommendedAmountEur).toBeLessThan(100);
+    expect(r.recommendations[0].recommendedPercentage).toBeLessThan(100);
+    expect(r.pendingAmountEur).toBeGreaterThan(0);
+    expect(r.recommendations[0].restrictionsApplied.some(x => /capital sin utilizar/i.test(x))).toBe(true);
+  });
 });
 
 // ── modo equilibrar ───────────────────────────────────────────────────────────

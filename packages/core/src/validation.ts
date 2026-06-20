@@ -379,7 +379,7 @@ export const CryptoControlIndexSchema = z.object({
 export const CreatePartialSaleSchema = z.object({
   cycleId: z.string().min(1),
   transactionId: z.string().min(1),
-  percentageOfHolding: z.number().positive().max(100),
+  percentageOfHolding: z.number().positive().max(99.99),
   proceedsEur: z.number().positive(),
   notes: OptionalTextSchema
 });
@@ -672,7 +672,7 @@ export const PartialSaleProposalTypeEnum = z.enum(["mantener", "vigilar", "venta
 export const PartialSaleProposalSchema = z.object({
   assetId: z.string(),
   type: PartialSaleProposalTypeEnum,
-  percentageSuggested: z.number().nullable(),
+  percentageSuggested: z.number().min(0.01).max(99.99).nullable(),
   reason: z.string(),
   riskLevel: z.enum(["bajo", "moderado", "alto", "muy_alto"]),
   estimatedProceedsEur: z.number().nullable(),
@@ -816,7 +816,7 @@ export const CycleRebuyTierSchema = z.object({
   assetId: z.string().nullable(),
   name: z.string().nullable(),
   drawdownPercentage: z.number(),
-  usagePercentage: z.number(),
+  usagePercentage: z.number().min(0.01).max(99.99),
   priority: z.number().int().nullable(),
   status: z.string().nullable(),
   effectiveDate: TimestampSchema.nullable(),
@@ -857,7 +857,7 @@ export const PartialSaleRuleSchema = z.object({
   conditionType: PartialSaleConditionTypeEnum,
   conditionValue: z.number().nullable(),
   conditionValue2: z.number().nullable(),
-  sellPercentage: z.number().min(0.01).max(100),
+  sellPercentage: z.number().min(0.01).max(99.99),
   priority: z.number().int(),
   status: PartialSaleRuleStatusEnum,
   effectiveDate: TimestampSchema.nullable(),
@@ -877,7 +877,7 @@ export const CreatePartialSaleRuleSchema = z.object({
   conditionType: PartialSaleConditionTypeEnum,
   conditionValue: z.number().nullable().optional(),
   conditionValue2: z.number().nullable().optional(),
-  sellPercentage: z.number().min(0.01).max(100),
+  sellPercentage: z.number().min(0.01).max(99.99),
   priority: z.number().int().min(0).optional(),
   status: PartialSaleRuleStatusEnum.optional(),
   effectiveDate: TimestampSchema.nullable().optional(),
@@ -906,6 +906,7 @@ export const PartialSaleEvaluationSchema = z.object({
     fiscalReserveEur: z.number(),
     netEurcEur: z.number(),
     remainingBalance: z.number(),
+    remainingPercentage: z.number(),
     remainingValueEur: z.number(),
   }).nullable(),
 });

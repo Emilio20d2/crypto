@@ -52,6 +52,7 @@ export interface SalePreview {
   fiscalReserveEur: number;
   netEurcEur: number;
   remainingBalance: number;
+  remainingPercentage: number;
   remainingValueEur: number;
 }
 
@@ -100,6 +101,7 @@ function buildPreview(
   const fiscalReserveEur = estimatedTaxEur;
   const netEurcEur = Math.max(0, grossProceedsEur - estimatedTaxEur);
   const remainingBalance = position.balance - quantityToSell;
+  const remainingPercentage = position.balance > 0 ? (remainingBalance / position.balance) * 100 : 0;
   const remainingValueEur = remainingBalance * currentPrice;
 
   return {
@@ -113,7 +115,25 @@ function buildPreview(
     fiscalReserveEur: Math.round(fiscalReserveEur * 100) / 100,
     netEurcEur: Math.round(netEurcEur * 100) / 100,
     remainingBalance: Math.round(remainingBalance * 1e8) / 1e8,
+    remainingPercentage: Math.round(remainingPercentage * 100) / 100,
     remainingValueEur: Math.round(remainingValueEur * 100) / 100,
+  };
+}
+
+function comparePartialSaleRules(a: PartialSaleRule, b: PartialSaleRule): number {
+  if (a.assetId === b.assetId && a.conditionType === b.conditionType) {
+    const aThreshold = a.conditionValue ?? Number.POSITIVE_INFINITY;
+    const bThreshold = b.conditionValue ?? Number.POSITIVE_INFINITY;
+    if (aThreshold !== bThreshold) return aThreshold - bThreshold;
+  }
+  return a.priority - b.priority;
+}
+
+function applyPreviewToPosition(position: PositionData, preview: SalePreview): PositionData {
+  return {
+    ...position,
+    balance: preview.remainingBalance,
+    totalInvestedEur: Math.max(0, position.totalInvestedEur - preview.costBasisProportion),
   };
 }
 
@@ -137,8 +157,13 @@ export function evaluatePartialSaleRule(
     return { ...base, isTriggered: false, triggeredReason: null, notTriggeredReason: "Sin posición disponible", preview: null };
   }
 
-  if (rule.sellPercentage <= 0 || rule.sellPercentage > 100) {
+  if (rule.sellPercentage <= 0 || rule.sellPercentage >= 100) {
     return { ...base, isTriggered: false, triggeredReason: null, notTriggeredReason: `Porcentaje de venta inválido: ${rule.sellPercentage}%`, preview: null };
+  }
+
+  const remainingAfterSale = position.balance * (1 - rule.sellPercentage / 100);
+  if (remainingAfterSale <= 0) {
+    return { ...base, isTriggered: false, triggeredReason: null, notTriggeredReason: "La regla liquidaría la posición completa; debe quedar una posición residual", preview: null };
   }
 
   const price = market.currentPriceEur;
@@ -236,12 +261,21 @@ export function evaluatePartialSaleRules(
   markets: Record<string, MarketData>,
   now = Date.now()
 ): PartialSaleEvaluation[] {
+  const workingPositions: Record<string, PositionData> = Object.fromEntries(
+    Object.entries(positions).map(([assetId, position]) => [assetId, { ...position }])
+  );
+
   return rules
-    .sort((a, b) => a.priority - b.priority)
+    .slice()
+    .sort(comparePartialSaleRules)
     .map(rule => {
-      const position = positions[rule.assetId] ?? null;
+      const position = workingPositions[rule.assetId] ?? null;
       const market = markets[rule.assetId] ?? { currentPriceEur: null, marketPhase: null, isEuphoria: false };
-      return evaluatePartialSaleRule(rule, position, market, now);
+      const evaluation = evaluatePartialSaleRule(rule, position, market, now);
+      if (position && evaluation.isTriggered && evaluation.preview) {
+        workingPositions[rule.assetId] = applyPreviewToPosition(position, evaluation.preview);
+      }
+      return evaluation;
     });
 }
 

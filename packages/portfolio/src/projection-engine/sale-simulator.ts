@@ -46,6 +46,15 @@ function ruleConditionMet(
   }
 }
 
+function compareSaleRules(a: SnapshotSaleRule, b: SnapshotSaleRule): number {
+  if (a.assetId === b.assetId && a.conditionType === b.conditionType) {
+    const aThreshold = a.conditionValue ?? Number.POSITIVE_INFINITY;
+    const bThreshold = b.conditionValue ?? Number.POSITIVE_INFINITY;
+    if (aThreshold !== bThreshold) return aThreshold - bThreshold;
+  }
+  return a.priority - b.priority;
+}
+
 export function simulateSaleRules(
   cycleId: string,
   periodDate: number,
@@ -58,14 +67,16 @@ export function simulateSaleRules(
   triggeredRuleIds: Set<string>,
 ): SaleSimulationResult[] {
   const results: SaleSimulationResult[] = [];
+  const workingBalances: Record<string, number> = { ...balances };
+  const workingLotRemaining = new Map(fifoLots.map(lot => [lot.lotId, lot.remaining]));
 
   const activeRules = rules
     .filter(r => r.status === "activa" && r.cycleId === cycleId)
     .filter(r => !triggeredRuleIds.has(r.id))
-    .sort((a, b) => b.priority - a.priority);
+    .sort(compareSaleRules);
 
   for (const rule of activeRules) {
-    const balance = balances[rule.assetId] ?? 0;
+    const balance = workingBalances[rule.assetId] ?? 0;
     const price = prices[rule.assetId] ?? null;
     const avgCost = avgCosts[rule.assetId] ?? null;
 
@@ -79,13 +90,23 @@ export function simulateSaleRules(
       continue;
     }
 
-    const sellPct = Math.min(100, Math.max(0, rule.sellPercentage)) / 100;
+    if (rule.sellPercentage <= 0 || rule.sellPercentage >= 100) {
+      results.push({ ruleId: rule.id, assetId: rule.assetId, triggered: false, quantitySold: 0, grossEur: 0, gainEur: 0, taxEur: 0, fiscalReserveEur: 0, netEurcEur: 0, event: null, lotsConsumed: [] });
+      continue;
+    }
+
+    const sellPct = rule.sellPercentage / 100;
     const quantitySold = balance * sellPct;
+    const remainingBalance = balance - quantitySold;
+    if (remainingBalance <= 0) {
+      results.push({ ruleId: rule.id, assetId: rule.assetId, triggered: false, quantitySold: 0, grossEur: 0, gainEur: 0, taxEur: 0, fiscalReserveEur: 0, netEurcEur: 0, event: null, lotsConsumed: [] });
+      continue;
+    }
     const grossEur = quantitySold * price;
 
     // FIFO: consume lots in order for this asset
     const assetLots = fifoLots
-      .filter(l => l.assetId === rule.assetId && l.remaining > 0)
+      .filter(l => l.assetId === rule.assetId && (workingLotRemaining.get(l.lotId) ?? 0) > 0)
       .sort((a, b) => a.acquiredAt - b.acquiredAt);
 
     let toSell = quantitySold;
@@ -94,9 +115,11 @@ export function simulateSaleRules(
 
     for (const lot of assetLots) {
       if (toSell <= 0) break;
-      const fromLot = Math.min(toSell, lot.remaining);
+      const lotRemaining = workingLotRemaining.get(lot.lotId) ?? 0;
+      const fromLot = Math.min(toSell, lotRemaining);
       costBasis += fromLot * lot.costPerUnitEur;
       lotsConsumed.push({ lotId: lot.lotId, quantity: fromLot, costPerUnitEur: lot.costPerUnitEur });
+      workingLotRemaining.set(lot.lotId, Math.max(0, lotRemaining - fromLot));
       toSell -= fromLot;
     }
 
@@ -108,6 +131,7 @@ export function simulateSaleRules(
     const gainEur = Math.max(0, grossEur - costBasis);
     const taxEur = computeTaxOnGain(gainEur, fiscalConfig);
     const netEurcEur = Math.max(0, grossEur - taxEur);
+    workingBalances[rule.assetId] = remainingBalance;
 
     results.push({
       ruleId: rule.id,
