@@ -17,7 +17,7 @@
     "rebuild-electron": "npx @electron/rebuild -f -w better-sqlite3",
     "typecheck": "tsc --noEmit",
     "build": "tsc",
-    "dist:mac": "npm run build -w web && npm run build -w @crypto-control/desktop && electron-builder --mac --config.directories.output=dist-packaged"
+    "dist:mac": "npm run build -w web && npm run build -w @crypto-control/desktop && npx @electron/rebuild -f -w better-sqlite3 --version 30.5.1 && electron-builder --mac --config.directories.output=dist-packaged"
   },
   "build": {
     "appId": "com.cryptocontrol.app",
