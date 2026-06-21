@@ -1,6 +1,6 @@
 // ── Escenarios ────────────────────────────────────────────────────────────────
 
-export type ProjectionScenario = "conservador" | "base" | "optimista" | "dinamico";
+export type ProjectionScenario = "conservador" | "moderado" | "base" | "optimista" | "dinamico";
 
 // ── Configuración fiscal (versionada, sin hardcodear) ─────────────────────────
 

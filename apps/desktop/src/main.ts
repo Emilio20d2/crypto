@@ -4006,10 +4006,10 @@ function setupIpcHandlers() {
       .all();
 
     const LABELS: Record<string, string> = {
-      conservador: "Conservador", base: "Base", optimista: "Optimista", dinamico: "Dinámico",
+      conservador: "Conservador", moderado: "Moderado", base: "Base", optimista: "Optimista", dinamico: "Dinámico",
     };
 
-    const scenarios = (["conservador", "base", "optimista", "dinamico"] as const).map(s => {
+    const scenarios = (["conservador", "moderado", "base", "optimista", "dinamico"] as const).map(s => {
       const out = scenarioSet[s];
       const hypothesisByAsset = new Map(out.scenarioHypotheses.assetRates.map(rate => [rate.assetId, rate]));
       let priorityTargetBefore = 0;

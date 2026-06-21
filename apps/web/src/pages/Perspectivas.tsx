@@ -38,6 +38,7 @@ function tsToDate(ts: number | null): string {
 
 const SCENARIO_COLORS: Record<string, string> = {
   conservador: "var(--color-muted-fg)",
+  moderado: "var(--color-info, #60a5fa)",
   base: "var(--color-primary)",
   optimista: "var(--color-success)",
   dinamico: "var(--color-warning)",
@@ -74,7 +75,7 @@ export function Perspectivas() {
   const currentYear = new Date().getFullYear();
   const [targetYear, setTargetYear] = useState(currentYear + 10);
   const horizonYears = Math.max(1, targetYear - currentYear);
-  const [activeScenario, setActiveScenario] = useState<"conservador" | "base" | "optimista" | "dinamico">("base");
+  const [activeScenario, setActiveScenario] = useState<"conservador" | "moderado" | "base" | "optimista" | "dinamico">("base");
 
   const [showGoalForm, setShowGoalForm] = useState(false);
   const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
@@ -178,7 +179,7 @@ export function Perspectivas() {
         <CardHeader>
           <CardTitle>
             <ChartNoAxesCombined size={16} />
-            Proyección — 4 escenarios
+            Proyección — 5 escenarios
           </CardTitle>
           <div className="flex gap-2 items-center">
             <label className="text-sm text-muted">Año:</label>
@@ -212,7 +213,7 @@ export function Perspectivas() {
                   <span className="sub">Tesorería: {fmt(projection.snapshot.treasury.totalLiquidityEur)}</span>
                   <span className="sub">Invertido: {fmt(projection.snapshot.historicalCapitalEur)}</span>
                 </div>
-                {(["conservador", "base", "optimista", "dinamico"] as const).map(s => {
+                {(["conservador", "moderado", "base", "optimista", "dinamico"] as const).map(s => {
                   const sc = projection.scenarios.find(x => x.scenario === s);
                   if (!sc) return null;
                   return (

@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { PlusCircle, TrendingDown, TrendingUp, Trash2 } from "lucide-react";
 import { Button } from "../../components/Button";
@@ -250,6 +251,7 @@ function NuevaReglaVentaForm({ cycleId, onSuccess }: { cycleId: string; onSucces
 // ── Regla de venta card ───────────────────────────────────────────────────────
 
 function ReglaVentaCard({ rule, onDelete }: { rule: PartialSaleRule; onDelete: () => void }) {
+  const navigate = useNavigate();
   const evalQ = useQuery({
     queryKey: ["partial-sale-rules-eval", rule.cycleId, rule.id],
     queryFn: () => unwrap(window.cryptoControl.partialSaleRules.evaluate({ cycleId: rule.cycleId, assetId: rule.assetId })),
@@ -289,7 +291,17 @@ function ReglaVentaCard({ rule, onDelete }: { rule: PartialSaleRule; onDelete: (
                 <span>Permanece: {evaluation.preview.remainingPercentage.toFixed(2)}%</span>
               </div>
             )}
-            <Button size="sm" style={{ marginTop: 8 }} onClick={() => alert("Preparar venta: funcionalidad en Operaciones")}>
+            <Button
+              size="sm"
+              style={{ marginTop: 8 }}
+              onClick={() => {
+                const params = new URLSearchParams({ type: "sell", asset: rule.assetId, source: "plan-sell" });
+                if (evaluation.preview?.quantityToSell) {
+                  params.set("baseAmount", evaluation.preview.quantityToSell.toFixed(8));
+                }
+                navigate(`/operaciones?${params.toString()}`);
+              }}
+            >
               Preparar venta
             </Button>
           </div>

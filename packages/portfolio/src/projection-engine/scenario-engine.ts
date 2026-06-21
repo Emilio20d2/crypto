@@ -5,6 +5,7 @@ import { runProjection } from "./projection-engine";
 
 export interface ScenarioSet {
   conservador: ProjectionOutput;
+  moderado: ProjectionOutput;
   base: ProjectionOutput;
   optimista: ProjectionOutput;
   dinamico: ProjectionOutput;
@@ -56,7 +57,7 @@ export function runAllScenarios(
   now: number = Date.now(),
   dynamicFactors?: { fearAndGreedIndex: number | null; btcDominance: number | null },
 ): ScenarioSet {
-  const scenarios: ProjectionScenario[] = ["conservador", "base", "optimista", "dinamico"];
+  const scenarios: ProjectionScenario[] = ["conservador", "moderado", "base", "optimista", "dinamico"];
   const results: Partial<ScenarioSet> = {};
 
   for (const s of scenarios) {
@@ -70,12 +71,13 @@ export function runAllScenarios(
 export function compareScenarios(set: ScenarioSet): ScenarioComparison[] {
   const LABELS: Record<ProjectionScenario, string> = {
     conservador: "Conservador",
+    moderado: "Moderado",
     base: "Base",
     optimista: "Optimista",
     dinamico: "Dinámico",
   };
 
-  return (["conservador", "base", "optimista", "dinamico"] as ProjectionScenario[]).map(s => ({
+  return (["conservador", "moderado", "base", "optimista", "dinamico"] as ProjectionScenario[]).map(s => ({
     scenario: s,
     label: LABELS[s],
     finalGrossWealthEur: set[s].summary.finalGrossWealthEur,

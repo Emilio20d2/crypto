@@ -91,17 +91,20 @@ export function Operaciones() {
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const preparedFromSmartBuy = searchParams.get("source") === "smart-buy";
+  const preparedFromPlanSell = searchParams.get("source") === "plan-sell";
+  const preparedType = searchParams.get("type") as OperationType | null;
   const preparedAsset = searchParams.get("asset")?.toUpperCase() ?? "BTC";
   const preparedAmount = searchParams.get("quoteAmount") ?? "100";
+  const preparedBaseAmount = searchParams.get("baseAmount") ?? "";
 
   const [activeTab, setActiveTab] = useState<OperationsTab>("new");
-  const [operationType, setOperationType] = useState<OperationType>("buy");
+  const [operationType, setOperationType] = useState<OperationType>(preparedType ?? "buy");
   const [mode, setMode] = useState<OperationMode>(preparedFromSmartBuy ? "real" : "simulation");
   const [assetId, setAssetId] = useState(preparedAsset);
   const [fromAssetId, setFromAssetId] = useState("BTC");
   const [toAssetId, setToAssetId] = useState("ETH");
   const [quoteAmount, setQuoteAmount] = useState(preparedAmount);
-  const [baseAmount, setBaseAmount] = useState("");
+  const [baseAmount, setBaseAmount] = useState(preparedFromPlanSell ? preparedBaseAmount : "");
   const [plannedAt, setPlannedAt] = useState("");
   const [frequency, setFrequency] = useState("una_vez");
   const [maxExecutions, setMaxExecutions] = useState("1");

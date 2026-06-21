@@ -27,24 +27,25 @@ export function getAssetAnnualRate(assetId: string, hypotheses: ScenarioHypothes
 // Deterministic methodology: rates are fixed by scenario and asset class.
 // BTC and ETH have class-specific rates; others use the default.
 export function buildDefaultHypotheses(
-  scenario: "conservador" | "base" | "optimista" | "dinamico",
+  scenario: "conservador" | "moderado" | "base" | "optimista" | "dinamico",
   assetIds: string[],
   dynamicFactors?: { fearAndGreedIndex: number | null; btcDominance: number | null },
 ): ScenarioHypotheses {
-  const RATES: Record<string, { conservador: number; base: number; optimista: number }> = {
-    BTC:  { conservador: 0.08, base: 0.15, optimista: 0.35 },
-    ETH:  { conservador: 0.07, base: 0.18, optimista: 0.45 },
-    SOL:  { conservador: 0.06, base: 0.20, optimista: 0.60 },
-    SUI:  { conservador: 0.05, base: 0.22, optimista: 0.70 },
-    BNB:  { conservador: 0.06, base: 0.15, optimista: 0.40 },
-    ADA:  { conservador: 0.04, base: 0.12, optimista: 0.45 },
-    DOT:  { conservador: 0.04, base: 0.13, optimista: 0.50 },
-    AVAX: { conservador: 0.05, base: 0.18, optimista: 0.55 },
-    LINK: { conservador: 0.06, base: 0.17, optimista: 0.50 },
+  const RATES: Record<string, { conservador: number; moderado: number; base: number; optimista: number }> = {
+    BTC:  { conservador: 0.08, moderado: 0.115, base: 0.15, optimista: 0.35 },
+    ETH:  { conservador: 0.07, moderado: 0.125, base: 0.18, optimista: 0.45 },
+    SOL:  { conservador: 0.06, moderado: 0.130, base: 0.20, optimista: 0.60 },
+    SUI:  { conservador: 0.05, moderado: 0.135, base: 0.22, optimista: 0.70 },
+    BNB:  { conservador: 0.06, moderado: 0.105, base: 0.15, optimista: 0.40 },
+    ADA:  { conservador: 0.04, moderado: 0.080, base: 0.12, optimista: 0.45 },
+    DOT:  { conservador: 0.04, moderado: 0.085, base: 0.13, optimista: 0.50 },
+    AVAX: { conservador: 0.05, moderado: 0.115, base: 0.18, optimista: 0.55 },
+    LINK: { conservador: 0.06, moderado: 0.115, base: 0.17, optimista: 0.50 },
   };
 
   const DEFAULTS: Record<string, number> = {
     conservador: 0.05,
+    moderado: 0.085,
     base: 0.12,
     optimista: 0.40,
   };
@@ -68,13 +69,13 @@ export function buildDefaultHypotheses(
     if (scenario === "dinamico") {
       annualGrowthRate = getDynamicRate(assetId);
     } else {
-      annualGrowthRate = RATES[assetId]?.[scenario] ?? DEFAULTS[scenario];
+      annualGrowthRate = RATES[assetId]?.[scenario as keyof typeof RATES[string]] ?? DEFAULTS[scenario] ?? DEFAULTS.base;
     }
     return {
       assetId,
       annualGrowthRate,
-      volatility: scenario === "conservador" ? 0.3 : scenario === "optimista" ? 0.8 : 0.5,
-      correctionDepth: scenario === "conservador" ? 0.5 : scenario === "optimista" ? 0.3 : 0.4,
+      volatility: scenario === "conservador" ? 0.3 : scenario === "optimista" ? 0.8 : scenario === "moderado" ? 0.4 : 0.5,
+      correctionDepth: scenario === "conservador" ? 0.5 : scenario === "optimista" ? 0.3 : scenario === "moderado" ? 0.45 : 0.4,
       source: RATES[assetId] ? "crypto-control:asset-profile-v1" : "crypto-control:default-altcoin-profile-v1",
       hypothesis: RATES[assetId]
         ? `Perfil propio ${assetId} para escenario ${scenario}; no se reutiliza BTC como proxy.`
@@ -85,8 +86,9 @@ export function buildDefaultHypotheses(
   });
 
   const PROBS: Record<string, number | null> = {
-    conservador: 0.25,
-    base: 0.45,
+    conservador: 0.20,
+    moderado: 0.30,
+    base: 0.35,
     optimista: 0.15,
     dinamico: null,
   };
@@ -97,6 +99,7 @@ export function buildDefaultHypotheses(
 
   const CONFS: Record<string, number> = {
     conservador: 0.7,
+    moderado: 0.65,
     base: 0.6,
     optimista: 0.4,
     dinamico: DYNAMIC_CONFIDENCE,
@@ -104,6 +107,7 @@ export function buildDefaultHypotheses(
 
   const LABELS: Record<string, string> = {
     conservador: "Conservador",
+    moderado: "Moderado",
     base: "Base",
     optimista: "Optimista",
     dinamico: "Dinámico actual",
@@ -111,6 +115,7 @@ export function buildDefaultHypotheses(
 
   const DESCS: Record<string, string> = {
     conservador: "Crecimiento moderado, correcciones frecuentes, acumulación constante.",
+    moderado: "Crecimiento sostenido con correcciones contenidas; ciclo de expansión gradual.",
     base: "Ciclo alcista de intensidad media con correcciones habituales.",
     optimista: "Ciclo alcista fuerte con máximos históricos superados.",
     dinamico: "Proyección recalculada con los datos de mercado actuales disponibles.",
@@ -118,6 +123,7 @@ export function buildDefaultHypotheses(
 
   const PHASES: Record<string, "bull" | "bear" | "sideways" | "unknown"> = {
     conservador: "sideways",
+    moderado: "bull",
     base: "bull",
     optimista: "bull",
     dinamico: "unknown",
@@ -130,7 +136,7 @@ export function buildDefaultHypotheses(
     probability: PROBS[scenario] ?? null,
     confidence: CONFS[scenario],
     assetRates,
-    defaultAnnualGrowthRate: DEFAULTS[scenario === "dinamico" ? "base" : scenario],
+    defaultAnnualGrowthRate: DEFAULTS[scenario === "dinamico" ? "base" : scenario] ?? DEFAULTS.base,
     marketPhase: PHASES[scenario],
     dynamicFactors: dynamicFactors
       ? {
