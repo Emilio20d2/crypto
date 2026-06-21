@@ -3002,7 +3002,7 @@ function setupIpcHandlers() {
       if (!item.condicion || item.status === "condicion_cumplida") return item;
       try {
         const assetId = item.condicion.assetId;
-        const priceResult = await marketService.getCurrentPrice(assetId, "EUR");
+        const priceResult = await marketService.getCurrentPriceEur(assetId);
         const currentPrice = priceResult?.price ?? null;
         if (currentPrice == null) return item;
         const met = item.condicion.type === "price_lte"
