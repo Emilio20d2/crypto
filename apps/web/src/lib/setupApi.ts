@@ -64,6 +64,10 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
       getPortfolioSnapshots:  (uuid: unknown) =>            ipc("coinbase:get-portfolio-snapshots", uuid),
       previewOrder:           (input: unknown) =>           ipc("coinbase:preview-order", input),
       submitOrder:            (input: unknown) =>           ipc("coinbase:submit-order", input),
+      listPendingOrders:      () =>                         ipc("coinbase:list-pending-orders"),
+      listScheduledOperations: () =>                        ipc("coinbase:list-scheduled-operations"),
+      createScheduledOperation: (input: unknown) =>          ipc("coinbase:create-scheduled-operation", input),
+      deleteScheduledOperation: (id: unknown) =>             ipc("coinbase:delete-scheduled-operation", id),
     },
     sentiment: {
       getGlobal: (i: unknown) => ipc("sentiment:get-global", i),

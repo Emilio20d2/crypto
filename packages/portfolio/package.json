@@ -10,6 +10,7 @@
   },
   "private": true,
   "devDependencies": {
+    "electron-builder": "^24.13.3",
     "typescript": "^5.5.0",
     "vitest": "^4.1.8"
   },

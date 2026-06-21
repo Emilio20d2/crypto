@@ -2,5 +2,8 @@
   "name": "@crypto-control/ui",
   "version": "0.1.0",
   "main": "index.ts",
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "electron-builder": "^24.13.3"
+  }
 }

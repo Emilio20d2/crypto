@@ -2238,15 +2238,128 @@ dd {
 
 .operations-layout {
   display: grid;
-  grid-template-columns: 310px minmax(0, 1fr) 290px;
+  grid-template-columns: minmax(0, 1fr) 320px;
   gap: var(--panel-gap);
   align-items: start;
 }
 
-.operation-form-panel,
+.operation-form-panel {
+  min-width: 0;
+}
+
 .operation-detail {
   position: sticky;
   top: 0;
+}
+
+.operations-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.operations-tabs button {
+  min-height: var(--control-height);
+  padding: 0 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.operations-tabs button:hover,
+.operations-tabs button:focus-visible {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+  background: var(--bg-row-hover);
+}
+
+.operations-tabs button.active {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 10%, var(--bg-surface));
+}
+
+.operation-funds-rule {
+  display: flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
+  font-size: 13px;
+}
+
+.operation-preview {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.operation-preview-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.operation-preview-header > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.operation-preview-header strong,
+.operation-preview-header span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operation-preview-header > div > span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.operation-route-list {
+  display: grid;
+  gap: 8px;
+}
+
+.operation-route-step {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) minmax(120px, 0.8fr) minmax(130px, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  font-size: 12px;
+}
+
+.operation-route-step span,
+.operation-route-step strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operation-route-step span {
+  color: var(--text-secondary);
 }
 
 .filter-control {
@@ -2788,6 +2901,7 @@ dd {
 .responsive-table td {
   padding: 10px var(--panel-padding-md);
   border-bottom: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
   background: var(--bg-surface);
   text-align: left;
   vertical-align: middle;
@@ -2851,6 +2965,7 @@ dd {
 .data-table td {
   padding: 10px var(--panel-padding-md);
   border-bottom: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
   background: var(--bg-surface);
   vertical-align: middle;
 }
@@ -3441,12 +3556,7 @@ dd {
   }
 
   .operations-layout {
-    grid-template-columns: 300px minmax(0, 1fr);
-  }
-
-  .operation-detail {
-    grid-column: 1 / -1;
-    position: static;
+    grid-template-columns: minmax(0, 1fr) 300px;
   }
 
 }
@@ -5130,6 +5240,7 @@ dd {
 .perspectives-cycle-table td {
   padding: 10px var(--panel-padding-md);
   border-bottom: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
   background: var(--bg-surface);
   text-align: left;
   vertical-align: middle;

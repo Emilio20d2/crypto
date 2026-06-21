@@ -15,6 +15,7 @@
     "@crypto-control/market-data": "*"
   },
   "devDependencies": {
+    "electron-builder": "^24.13.3",
     "typescript": "^5.4.5",
     "vitest": "^2.0.0"
   }

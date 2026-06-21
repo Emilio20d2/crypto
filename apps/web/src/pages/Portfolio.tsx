@@ -19,9 +19,9 @@ import type { Period } from "../components/PeriodSelector";
 import { formatDateTime } from "../lib/format";
 
 const PRICE_REFRESH_MS = 5_000;
-const COINBASE_SYNC_REFRESH_MS = 60_000;
-const PORTFOLIO_CHART_REFRESH_MS = 30_000;
-const PORTFOLIO_LONG_CHART_REFRESH_MS = 120_000;
+const COINBASE_SYNC_REFRESH_MS = 30_000;
+const PORTFOLIO_CHART_REFRESH_MS = 5_000;
+const PORTFOLIO_LONG_CHART_REFRESH_MS = 60_000;
 
 function chartRefreshMs(period: Period) {
   return period === "1h" || period === "24h" ? PORTFOLIO_CHART_REFRESH_MS : PORTFOLIO_LONG_CHART_REFRESH_MS;
@@ -261,8 +261,31 @@ export function Portfolio() {
   );
   const chartData = useMemo((): ChartPoint[] => {
     const reconstructed = toChartPoints(reconstructedSeries);
-    return reconstructed.length >= 2 ? reconstructed : [];
-  }, [reconstructedSeries]);
+    if (reconstructed.length < 2) return [];
+
+    // Pin the chart's right edge to the live breakdown value (refreshes every
+    // 5 s) so price changes are visible immediately without waiting for the
+    // heavier historical-series fetch interval.
+    const liveBreakdown = breakdownRes?.ok && breakdownRes.data.state === "live" ? breakdownRes.data : null;
+    if (liveBreakdown) {
+      const liveValue = liveBreakdown.positions.reduce(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (sum: number, p: any) =>
+          !p.isCash && p.asset !== "EURC" && typeof p.totalBalanceFiat === "number" && Number.isFinite(p.totalBalanceFiat)
+            ? sum + p.totalBalanceFiat
+            : sum,
+        0,
+      );
+      if (liveValue > 0) {
+        const nowSeconds = Math.floor(Date.now() / 1000) as import("lightweight-charts").Time;
+        const last = reconstructed[reconstructed.length - 1];
+        if ((nowSeconds as number) > (last.time as number)) {
+          return [...reconstructed, { time: nowSeconds, value: liveValue }];
+        }
+      }
+    }
+    return reconstructed;
+  }, [reconstructedSeries, breakdownRes]);
 
   const localPositionMap = useMemo((): Record<string, number> => {
     const rawPositions = localPositionsRes?.ok ? (localPositionsRes.data as any)?.positions : null;

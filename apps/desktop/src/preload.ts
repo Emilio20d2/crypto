@@ -12,7 +12,6 @@ import type {
   UpdateContributionScheduleInput,
   CreateAssetSubstitutionInput,
   UpdateAssetSubstitutionInput,
-  FullCryptoControlAPI,
   InvestmentAssetStateChangeInput,
   MarkGoalReachedInput,
   SetFiscalReserveInput,
@@ -26,7 +25,7 @@ import type {
   UpdatePartialSaleRuleInput,
 } from "@crypto-control/core";
 
-const cryptoControl: FullCryptoControlAPI = {
+const cryptoControl = {
   assets: {
     list: () => ipcRenderer.invoke("assets:list")
   },
@@ -73,12 +72,16 @@ const cryptoControl: FullCryptoControlAPI = {
     getPortfolioSnapshots: (portfolioUuid: string)      => ipcRenderer.invoke("coinbase:get-portfolio-snapshots", portfolioUuid),
     previewOrder:          (input: unknown)             => ipcRenderer.invoke("coinbase:preview-order", input),
     submitOrder:           (input: unknown)             => ipcRenderer.invoke("coinbase:submit-order", input),
+    listPendingOrders:     ()                           => ipcRenderer.invoke("coinbase:list-pending-orders"),
+    listScheduledOperations: ()                         => ipcRenderer.invoke("coinbase:list-scheduled-operations"),
+    createScheduledOperation: (input: unknown)          => ipcRenderer.invoke("coinbase:create-scheduled-operation", input),
+    deleteScheduledOperation: (id: string)              => ipcRenderer.invoke("coinbase:delete-scheduled-operation", id),
   },
   sentiment: {
-    getGlobal: (input) => ipcRenderer.invoke("sentiment:get-global", input),
-    getAsset:  (input) => ipcRenderer.invoke("sentiment:get-asset", input),
-    getHistory:(input) => ipcRenderer.invoke("sentiment:get-history", input),
-    refresh:   (input) => ipcRenderer.invoke("sentiment:refresh", input),
+    getGlobal: (input: unknown) => ipcRenderer.invoke("sentiment:get-global", input),
+    getAsset:  (input: unknown) => ipcRenderer.invoke("sentiment:get-asset", input),
+    getHistory:(input: unknown) => ipcRenderer.invoke("sentiment:get-history", input),
+    refresh:   (input: unknown) => ipcRenderer.invoke("sentiment:refresh", input),
   },
   targets: {
     list:   ()                                                                    => ipcRenderer.invoke("targets:list"),

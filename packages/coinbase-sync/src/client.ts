@@ -336,4 +336,8 @@ export class CoinbaseClient {
       request
     );
   }
+
+  async getOrder(orderId: string): Promise<unknown> {
+    return this.fetchWithRetry<unknown>("GET", `/api/v3/brokerage/orders/historical/${orderId}`);
+  }
 }

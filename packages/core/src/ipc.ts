@@ -324,8 +324,37 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
     listPortfolios: () => Promise<Result<any>>;
     getPortfolioBreakdown: (portfolioUuid: string, currency: string) => Promise<Result<any>>;
     getPortfolioSnapshots: (portfolioUuid: string) => Promise<Result<any>>;
-    previewOrder: (input: { productId?: string; assetId?: string; side?: "BUY" | "SELL"; quoteAmountEur?: number; baseAmount?: number }) => Promise<Result<any>>;
-    submitOrder: (input: { productId?: string; assetId?: string; side?: "BUY" | "SELL"; quoteAmountEur?: number; baseAmount?: number; previewId?: string | null; confirmationText: string }) => Promise<Result<any>>;
+    previewOrder: (input: {
+      operationType?: "buy" | "sell" | "convert" | "rebuy";
+      mode?: "simulation" | "real";
+      productId?: string;
+      assetId?: string;
+      fromAssetId?: string;
+      toAssetId?: string;
+      side?: "BUY" | "SELL";
+      quoteAmountEur?: number;
+      baseAmount?: number;
+      quoteAmount?: number;
+    }) => Promise<Result<any>>;
+    submitOrder: (input: {
+      operationType?: "buy" | "sell" | "convert" | "rebuy";
+      mode?: "simulation" | "real";
+      productId?: string;
+      assetId?: string;
+      fromAssetId?: string;
+      toAssetId?: string;
+      side?: "BUY" | "SELL";
+      quoteAmountEur?: number;
+      baseAmount?: number;
+      quoteAmount?: number;
+      previewId?: string | null;
+      previewToken?: string | null;
+      confirmationText: string;
+    }) => Promise<Result<any>>;
+    listPendingOrders: () => Promise<Result<any[]>>;
+    listScheduledOperations: () => Promise<Result<any[]>>;
+    createScheduledOperation: (input: any) => Promise<Result<any>>;
+    deleteScheduledOperation: (id: string) => Promise<Result<null>>;
   };
   sentiment: {
     getGlobal: (input: { timeframe: MarketSentimentTimeframe }) => Promise<Result<MarketSentiment>>;

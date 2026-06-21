@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "electron-builder": "^24.13.3",
     "vitest": "^4.1.8"
   }
 }

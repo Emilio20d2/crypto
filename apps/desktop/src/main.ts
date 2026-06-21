@@ -2500,31 +2500,191 @@ function setupIpcHandlers() {
     };
   }));
 
+  type OperationType = "buy" | "sell" | "convert" | "rebuy";
+  type OperationMode = "simulation" | "real";
   type CoinbaseTradeInput = {
+    operationType?: OperationType;
+    mode?: OperationMode;
     productId?: string;
     assetId?: string;
+    fromAssetId?: string;
+    toAssetId?: string;
     side?: "BUY" | "SELL";
     quoteAmountEur?: number;
+    quoteAmount?: number;
     baseAmount?: number;
     previewId?: string | null;
+    previewToken?: string | null;
     confirmationText?: string;
   };
+  type CoinbaseOrderRequest = {
+    product_id: string;
+    side: "BUY" | "SELL";
+    order_configuration: {
+      market_market_ioc: {
+        quote_size?: string;
+        base_size?: string;
+      };
+    };
+  };
+  type CoinbaseOrderPreview = Record<string, unknown> & {
+    preview_id?: string;
+    order_total?: unknown;
+    commission_total?: unknown;
+    base_size?: unknown;
+    quote_size?: unknown;
+    slippage?: unknown;
+  };
+  type CoinbaseCreateOrder = CoinbaseOrderRequest & {
+    client_order_id: string;
+    preview_id?: string;
+  };
+  type CoinbaseOrderResult = {
+    success?: boolean;
+    success_response?: { order_id?: string };
+    error_response?: { message?: string; error_details?: string; error?: string };
+    order_id?: string;
+  };
+  type CoinbaseOperationClient = {
+    getProduct(productId: string): Promise<{ trading_disabled?: boolean; cancel_only?: boolean; view_only?: boolean }>;
+    previewOrder(request: CoinbaseOrderRequest): Promise<CoinbaseOrderPreview>;
+    createOrder(request: CoinbaseCreateOrder): Promise<CoinbaseOrderResult>;
+    getOrder(orderId: string): Promise<unknown>;
+  };
+  type OperationRouteStep = {
+    id: string;
+    label: string;
+    productId: string;
+    side: "BUY" | "SELL";
+    request: CoinbaseOrderRequest;
+    sourceAsset: string;
+    destinationAsset: string;
+    preview: CoinbaseOrderPreview | Record<string, unknown>;
+    clientOrderId: string;
+  };
+  type StoredOperationPreview = {
+    token: string;
+    operationType: OperationType;
+    mode: OperationMode;
+    routeType: "direct" | "multi_step";
+    sourceAsset: string;
+    destinationAsset: string;
+    fundingSource: "EUR" | "EURC libre" | "Cripto";
+    generatedAt: number;
+    expiresAt: number;
+    submittedAt: number | null;
+    input: CoinbaseTradeInput;
+    route: OperationRouteStep[];
+    balances: Record<string, number>;
+    warnings: string[];
+    costAnalysis: ReturnType<typeof analyzeCoinbaseCosts>;
+  };
+  type SubmittedOrderRecord = {
+    id: string;
+    token: string;
+    operationType: OperationType;
+    submittedAt: number;
+    routeType: string;
+    orders: CoinbaseOrderResult[];
+  };
+  type ScheduledOperationRecord = {
+    id: string;
+    operationType: OperationType;
+    mode: "review";
+    status: "programada_revision" | "cancelada";
+    createdAt: number;
+    plannedAt: number | null;
+    frequency: string;
+    maxExecutions: number | null;
+    input: CoinbaseTradeInput;
+    note: string;
+  };
 
-  function buildTradeRequest(input: CoinbaseTradeInput) {
-    const assetId = String(input.assetId || "").toUpperCase();
-    const productId = String(input.productId || (assetId ? `${assetId}-EUR` : "")).toUpperCase();
-    const side: "BUY" | "SELL" = input.side === "SELL" ? "SELL" : "BUY";
-    if (!productId || !productId.endsWith("-EUR")) throw new Error("Solo se permiten pares contra EUR en esta operación.");
-    const quoteAmount = Number(input.quoteAmountEur);
-    const baseAmount = Number(input.baseAmount);
-    const market_market_ioc: { quote_size?: string; base_size?: string } = {};
-    if (side === "BUY") {
-      if (!Number.isFinite(quoteAmount) || quoteAmount <= 0) throw new Error("Introduce un importe EUR válido para la compra.");
-      market_market_ioc.quote_size = quoteAmount.toFixed(2);
-    } else {
-      if (!Number.isFinite(baseAmount) || baseAmount <= 0) throw new Error("Introduce una cantidad válida para la venta.");
-      market_market_ioc.base_size = String(baseAmount);
+  const PREVIEW_EXPIRY_MS = 90_000;
+  const PREVIEW_SETTINGS_KEY = "coinbase:operation-previews";
+  const SUBMITTED_SETTINGS_KEY = "coinbase:submitted-orders";
+  const SCHEDULED_SETTINGS_KEY = "coinbase:scheduled-operations";
+
+  function getSettingValue(key: string): string | null {
+    return db.select().from(schema.settings).where(eq(schema.settings.key, key)).get()?.value ?? null;
+  }
+
+  function setSettingValue(key: string, value: string): void {
+    db.insert(schema.settings).values({ key, value })
+      .onConflictDoUpdate({ target: schema.settings.key, set: { value } })
+      .run();
+  }
+
+  function readJsonSetting<T>(key: string, fallback: T): T {
+    const raw = getSettingValue(key);
+    if (!raw) return fallback;
+    try {
+      return JSON.parse(raw) as T;
+    } catch {
+      return fallback;
     }
+  }
+
+  function writeJsonSetting<T>(key: string, value: T): void {
+    setSettingValue(key, JSON.stringify(value));
+  }
+
+  function normalizeAssetId(value: unknown): string {
+    return String(value ?? "").trim().toUpperCase();
+  }
+
+  function finitePositive(value: unknown, label: string): number {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) throw new Error(`${label} debe ser mayor que cero.`);
+    return n;
+  }
+
+  function numberFromCoinbaseMoney(value: unknown): number | null {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    }
+    if (value && typeof value === "object" && "value" in value) {
+      const n = Number((value as { value?: unknown }).value);
+      return Number.isFinite(n) ? n : null;
+    }
+    return null;
+  }
+
+  function getAssetBalance(assetId: string): number {
+    const row = db.select().from(schema.accounts).where(eq(schema.accounts.assetId, assetId)).all()
+      .reduce((sum, account) => sum + (Number.isFinite(account.balance) ? account.balance : 0), 0);
+    return Math.max(0, row);
+  }
+
+  function analyzeCoinbaseCosts(previews: Array<CoinbaseOrderPreview | Record<string, unknown>>, amountHint: number | null) {
+    const commission = previews.reduce((sum, preview) => sum + (numberFromCoinbaseMoney((preview as { commission_total?: unknown }).commission_total) ?? 0), 0);
+    const total = previews.reduce((sum, preview) => sum + (numberFromCoinbaseMoney((preview as { order_total?: unknown }).order_total) ?? 0), 0);
+    const amount = amountHint && amountHint > 0 ? amountHint : total;
+    const slippage = previews.reduce((sum, preview) => sum + Math.abs(Number((preview as { slippage?: unknown }).slippage ?? 0) || 0), 0);
+    const friction = commission + slippage;
+    const feePct = amount > 0 ? (commission / amount) * 100 : 0;
+    const frictionPct = amount > 0 ? (friction / amount) * 100 : 0;
+    const level = frictionPct >= 3 ? "muy_alto" : frictionPct >= 1.5 ? "alto" : frictionPct >= 0.5 ? "moderado" : "bajo";
+    return {
+      amount,
+      commission,
+      slippage,
+      spread: 0,
+      friction,
+      feePct: Math.round(feePct * 100) / 100,
+      frictionPct: Math.round(frictionPct * 100) / 100,
+      level,
+      message: `La comisión representa ${feePct.toFixed(2)}% del importe. Coste operativo ${level.replace("_", " ")}.`,
+    };
+  }
+
+  function marketOrder(productId: string, side: "BUY" | "SELL", size: { quote?: number; base?: number }): CoinbaseOrderRequest {
+    const market_market_ioc: { quote_size?: string; base_size?: string } = {};
+    if (size.quote !== undefined) market_market_ioc.quote_size = String(Math.round(size.quote * 100_000_000) / 100_000_000);
+    if (size.base !== undefined) market_market_ioc.base_size = String(size.base);
+    if (!market_market_ioc.quote_size && !market_market_ioc.base_size) throw new Error("La orden necesita importe o cantidad.");
     return {
       product_id: productId,
       side,
@@ -2532,47 +2692,266 @@ function setupIpcHandlers() {
     };
   }
 
-  ipcMain.handle("coinbase:preview-order", withResult(async (_, input: CoinbaseTradeInput) => {
-    const creds = credsMgr.getCredentials();
-    if (!creds) throw new Error("No hay credenciales de Coinbase. Conecta Coinbase primero.");
-    const client = new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem);
-    const permissions = await client.getKeyPermissions();
-    if (!permissions.can_view) throw new Error("La API Key de Coinbase no tiene permiso de lectura para preparar órdenes.");
-    const request = buildTradeRequest(input);
-    const product = await client.getProduct(request.product_id);
+  function ensureProductTradable(product: { trading_disabled?: boolean; cancel_only?: boolean; view_only?: boolean }, productId: string): void {
     if (product.trading_disabled || product.cancel_only || product.view_only) {
-      throw new Error(`Coinbase no permite operar ahora el par ${request.product_id}.`);
+      throw new Error(`Coinbase no permite operar ahora el par ${productId}.`);
     }
-    const preview = await client.previewOrder(request);
+  }
+
+  async function getTradableProductOrNull(client: CoinbaseOperationClient, productId: string) {
+    try {
+      const product = await client.getProduct(productId);
+      ensureProductTradable(product, productId);
+      return product;
+    } catch {
+      return null;
+    }
+  }
+
+  function inferLegacyOperation(input: CoinbaseTradeInput): OperationType {
+    if (input.operationType) return input.operationType;
+    return input.side === "SELL" ? "sell" : "buy";
+  }
+
+  function syntheticPreview(request: CoinbaseOrderRequest, amount: number, baseAmount: number | null): CoinbaseOrderPreview {
     return {
-      ...preview,
-      productId: request.product_id,
-      side: request.side,
-      requestedQuoteAmountEur: input.quoteAmountEur ?? null,
-      requestedBaseAmount: input.baseAmount ?? null,
-      generatedAt: Date.now(),
+      preview_id: `sim-${crypto.randomUUID()}`,
+      order_total: { value: amount.toFixed(2), currency: request.product_id.split("-")[1] ?? "EUR" },
+      commission_total: { value: "0.00", currency: request.product_id.split("-")[1] ?? "EUR" },
+      base_size: baseAmount !== null ? { value: String(baseAmount), currency: request.product_id.split("-")[0] ?? "" } : undefined,
+      quote_size: { value: amount.toFixed(2), currency: request.product_id.split("-")[1] ?? "EUR" },
+      est_average_filled_price: "simulación",
+      slippage: "0",
     };
+  }
+
+  async function buildOperationPreview(input: CoinbaseTradeInput, client: CoinbaseOperationClient | null): Promise<StoredOperationPreview> {
+    const operationType = inferLegacyOperation(input);
+    const mode: OperationMode = input.mode === "simulation" ? "simulation" : "real";
+    const token = crypto.randomUUID();
+    const now = Date.now();
+    const warnings: string[] = [];
+    const route: OperationRouteStep[] = [];
+    let routeType: "direct" | "multi_step" = "direct";
+    let sourceAsset = "EUR";
+    let destinationAsset = "";
+    let fundingSource: "EUR" | "EURC libre" | "Cripto" = "EUR";
+    let amountForAnalysis: number | null = null;
+
+    const addStep = async (step: Omit<OperationRouteStep, "preview" | "clientOrderId"> & { amountHint: number; baseHint: number | null }) => {
+      const preview = mode === "simulation"
+        ? syntheticPreview(step.request, step.amountHint, step.baseHint)
+        : await client!.previewOrder(step.request);
+      route.push({ ...step, preview, clientOrderId: crypto.randomUUID() });
+      return preview;
+    };
+
+    if (operationType === "buy") {
+      const assetId = normalizeAssetId(input.assetId ?? input.toAssetId);
+      const quoteAmount = finitePositive(input.quoteAmountEur ?? input.quoteAmount, "El importe EUR");
+      if (!assetId) throw new Error("Selecciona el activo a comprar.");
+      sourceAsset = "EUR";
+      destinationAsset = assetId;
+      fundingSource = "EUR";
+      const eurBalance = getAssetBalance("EUR");
+      if (eurBalance > 0 && quoteAmount > eurBalance) throw new Error("Saldo EUR insuficiente para esta compra ordinaria.");
+      const productId = normalizeAssetId(input.productId) || `${assetId}-EUR`;
+      if (mode === "real") {
+        const product = await client!.getProduct(productId);
+        ensureProductTradable(product, productId);
+      }
+      const request = marketOrder(productId, "BUY", { quote: quoteAmount });
+      await addStep({ id: "buy-eur", label: "Compra con EUR", productId, side: "BUY", request, sourceAsset, destinationAsset, amountHint: quoteAmount, baseHint: null });
+      amountForAnalysis = quoteAmount;
+    } else if (operationType === "rebuy") {
+      const assetId = normalizeAssetId(input.assetId ?? input.toAssetId);
+      const quoteAmount = finitePositive(input.quoteAmountEur ?? input.quoteAmount, "El importe EURC libre");
+      if (!assetId) throw new Error("Selecciona el activo de recompra.");
+      const treasury = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance());
+      if (quoteAmount > treasury.freeRebuyLiquidity) throw new Error("EURC libre insuficiente. La reserva fiscal no puede utilizarse.");
+      const eurcBalance = getAssetBalance("EURC");
+      if (eurcBalance > 0 && quoteAmount > eurcBalance) throw new Error("Saldo físico EURC insuficiente para esta recompra.");
+      sourceAsset = "EURC";
+      destinationAsset = assetId;
+      fundingSource = "EURC libre";
+      const productId = normalizeAssetId(input.productId) || `${assetId}-EURC`;
+      if (mode === "real") {
+        const product = await client!.getProduct(productId);
+        ensureProductTradable(product, productId);
+      }
+      const request = marketOrder(productId, "BUY", { quote: quoteAmount });
+      await addStep({ id: "rebuy-eurc", label: "Recompra con EURC libre", productId, side: "BUY", request, sourceAsset, destinationAsset, amountHint: quoteAmount, baseHint: null });
+      amountForAnalysis = quoteAmount;
+    } else if (operationType === "sell") {
+      const assetId = normalizeAssetId(input.assetId ?? input.fromAssetId);
+      const baseAmount = finitePositive(input.baseAmount, "La cantidad a vender");
+      if (!assetId) throw new Error("Selecciona el activo a vender.");
+      const balance = getAssetBalance(assetId);
+      if (balance > 0 && baseAmount >= balance) throw new Error("Venta total bloqueada: debe quedar una posición residual.");
+      sourceAsset = assetId;
+      destinationAsset = "EURC";
+      fundingSource = "Cripto";
+      const directProduct = `${assetId}-EURC`;
+      const directTradable = mode === "real" ? await getTradableProductOrNull(client!, directProduct) : { product_id: directProduct };
+      if (directTradable) {
+        const request = marketOrder(directProduct, "SELL", { base: baseAmount });
+        await addStep({ id: "sell-direct-eurc", label: "Venta directa a EURC", productId: directProduct, side: "SELL", request, sourceAsset, destinationAsset, amountHint: 0, baseHint: baseAmount });
+      } else {
+        routeType = "multi_step";
+        warnings.push("Coinbase no ofrece ruta directa a EURC para este par; se previsualiza ruta multipaso CRIPTO → EUR → EURC.");
+        const sellProduct = `${assetId}-EUR`;
+        const eurcProduct = "EURC-EUR";
+        const sellProductInfo = await client!.getProduct(sellProduct);
+        ensureProductTradable(sellProductInfo, sellProduct);
+        const eurcProductInfo = await client!.getProduct(eurcProduct);
+        ensureProductTradable(eurcProductInfo, eurcProduct);
+        const sellRequest = marketOrder(sellProduct, "SELL", { base: baseAmount });
+        const sellPreview = await addStep({ id: "sell-to-eur", label: "Paso 1: vender cripto a EUR", productId: sellProduct, side: "SELL", request: sellRequest, sourceAsset, destinationAsset: "EUR", amountHint: 0, baseHint: baseAmount });
+        const eurAmount = numberFromCoinbaseMoney(sellPreview.order_total) ?? 0;
+        if (eurAmount <= 0) throw new Error("Coinbase no devolvió importe EUR estimado para preparar el segundo paso.");
+        const eurcRequest = marketOrder(eurcProduct, "BUY", { quote: eurAmount });
+        await addStep({ id: "buy-eurc", label: "Paso 2: comprar EURC con EUR", productId: eurcProduct, side: "BUY", request: eurcRequest, sourceAsset: "EUR", destinationAsset: "EURC", amountHint: eurAmount, baseHint: null });
+        amountForAnalysis = eurAmount;
+      }
+    } else {
+      const fromAssetId = normalizeAssetId(input.fromAssetId ?? input.assetId);
+      const toAssetId = normalizeAssetId(input.toAssetId);
+      const baseAmount = finitePositive(input.baseAmount, "La cantidad origen");
+      if (!fromAssetId || !toAssetId || fromAssetId === toAssetId) throw new Error("Selecciona activo origen y destino distintos.");
+      if (fromAssetId === "EURC" || toAssetId === "EURC") throw new Error("EURC no se usa como intermedio en conversiones ordinarias.");
+      const balance = getAssetBalance(fromAssetId);
+      if (balance > 0 && baseAmount > balance) throw new Error("Saldo insuficiente del activo origen.");
+      sourceAsset = fromAssetId;
+      destinationAsset = toAssetId;
+      fundingSource = "Cripto";
+      const directProduct = `${fromAssetId}-${toAssetId}`;
+      const inverseProduct = `${toAssetId}-${fromAssetId}`;
+      const directTradable = mode === "real" ? await getTradableProductOrNull(client!, directProduct) : { product_id: directProduct };
+      if (directTradable) {
+        const request = marketOrder(directProduct, "SELL", { base: baseAmount });
+        await addStep({ id: "convert-direct", label: "Conversión directa", productId: directProduct, side: "SELL", request, sourceAsset, destinationAsset, amountHint: 0, baseHint: baseAmount });
+      } else {
+        const inverseTradable = mode === "real" ? await getTradableProductOrNull(client!, inverseProduct) : null;
+        if (!inverseTradable) throw new Error(`Coinbase no ofrece conversión directa ${fromAssetId} → ${toAssetId}.`);
+        const request = marketOrder(inverseProduct, "BUY", { quote: baseAmount });
+        await addStep({ id: "convert-inverse", label: "Conversión directa inversa", productId: inverseProduct, side: "BUY", request, sourceAsset, destinationAsset, amountHint: 0, baseHint: baseAmount });
+      }
+    }
+
+    const balances: Record<string, number> = {
+      EUR: getAssetBalance("EUR"),
+      EURC: getAssetBalance("EURC"),
+      [sourceAsset]: getAssetBalance(sourceAsset),
+      [destinationAsset]: getAssetBalance(destinationAsset),
+    };
+    const costAnalysis = analyzeCoinbaseCosts(route.map(step => step.preview), amountForAnalysis);
+    return {
+      token,
+      operationType,
+      mode,
+      routeType,
+      sourceAsset,
+      destinationAsset,
+      fundingSource,
+      generatedAt: now,
+      expiresAt: now + PREVIEW_EXPIRY_MS,
+      submittedAt: null,
+      input,
+      route,
+      balances,
+      warnings,
+      costAnalysis,
+    };
+  }
+
+  function storeOperationPreview(preview: StoredOperationPreview): void {
+    const previews = readJsonSetting<StoredOperationPreview[]>(PREVIEW_SETTINGS_KEY, [])
+      .filter(item => item.expiresAt > Date.now() - 10 * 60_000)
+      .slice(-20);
+    previews.push(preview);
+    writeJsonSetting(PREVIEW_SETTINGS_KEY, previews);
+  }
+
+  function updateStoredPreview(preview: StoredOperationPreview): void {
+    const previews = readJsonSetting<StoredOperationPreview[]>(PREVIEW_SETTINGS_KEY, []);
+    writeJsonSetting(PREVIEW_SETTINGS_KEY, previews.map(item => item.token === preview.token ? preview : item));
+  }
+
+  function appendSubmittedOrder(record: SubmittedOrderRecord): void {
+    const records = readJsonSetting<SubmittedOrderRecord[]>(SUBMITTED_SETTINGS_KEY, []).slice(-100);
+    records.push(record);
+    writeJsonSetting(SUBMITTED_SETTINGS_KEY, records);
+  }
+
+  ipcMain.handle("coinbase:preview-order", withResult(async (_, input: CoinbaseTradeInput) => {
+    const mode: OperationMode = input.mode === "simulation" ? "simulation" : "real";
+    let client: CoinbaseOperationClient | null = null;
+    if (mode === "real") {
+      const creds = credsMgr.getCredentials();
+      if (!creds) throw new Error("No hay credenciales de Coinbase. Conecta Coinbase primero.");
+      const rawClient = new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem);
+      client = rawClient as unknown as CoinbaseOperationClient;
+      const permissions = await rawClient.getKeyPermissions();
+      if (!permissions.can_view) throw new Error("La API Key de Coinbase no tiene permiso de lectura para preparar órdenes.");
+    }
+    const preview = await buildOperationPreview({ ...input, mode }, client);
+    storeOperationPreview(preview);
+    return preview;
   }));
 
   ipcMain.handle("coinbase:submit-order", withResult(async (_, input: CoinbaseTradeInput) => {
+    if (input.mode === "simulation") {
+      return {
+        success: true,
+        simulated: true,
+        message: "SIMULACIÓN — NO SE ENVIÓ NINGUNA ORDEN A COINBASE",
+        submittedAt: Date.now(),
+      };
+    }
     if (input.confirmationText !== "CONFIRMAR") {
       throw new Error("Confirmación requerida: escribe CONFIRMAR antes de enviar una orden real.");
     }
+    const token = input.previewToken ?? null;
+    if (!token) throw new Error("Falta el identificador de preview. Solicita una nueva previsualización.");
+    const previews = readJsonSetting<StoredOperationPreview[]>(PREVIEW_SETTINGS_KEY, []);
+    const stored = previews.find(item => item.token === token);
+    if (!stored) throw new Error("Preview no encontrado o ya descartado. Solicita uno nuevo.");
+    if (stored.submittedAt) throw new Error("Esta previsualización ya fue enviada. Protección frente a doble clic activada.");
+    if (stored.expiresAt <= Date.now()) throw new Error("Cotización caducada. Solicita un nuevo preview antes de confirmar.");
+
     const creds = credsMgr.getCredentials();
     if (!creds) throw new Error("No hay credenciales de Coinbase. Conecta Coinbase primero.");
     const client = new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem);
     const permissions = await client.getKeyPermissions();
     if (!permissions.can_trade) throw new Error("La API Key de Coinbase no tiene permiso de trading.");
-    const request = {
-      ...buildTradeRequest(input),
-      client_order_id: crypto.randomUUID(),
-      preview_id: input.previewId ?? undefined,
-    };
-    const order = await client.createOrder(request);
-    if (!order.success) {
-      const msg = order.error_response?.message || order.error_response?.error_details || order.error_response?.error || "Coinbase rechazó la orden.";
-      throw new Error(msg);
+
+    const orderResults: CoinbaseOrderResult[] = [];
+    for (const step of stored.route) {
+      const product = await client.getProduct(step.productId);
+      ensureProductTradable(product, step.productId);
+      const request: CoinbaseCreateOrder = {
+        ...step.request,
+        client_order_id: step.clientOrderId,
+        preview_id: (step.preview as { preview_id?: string }).preview_id ?? undefined,
+      };
+      const order = await client.createOrder(request);
+      if (!order.success) {
+        const msg = order.error_response?.message || order.error_response?.error_details || order.error_response?.error || "Coinbase rechazó la orden.";
+        throw new Error(msg);
+      }
+      orderResults.push(order);
     }
+
+    stored.submittedAt = Date.now();
+    updateStoredPreview(stored);
+    appendSubmittedOrder({
+      id: crypto.randomUUID(),
+      token: stored.token,
+      operationType: stored.operationType,
+      submittedAt: stored.submittedAt,
+      routeType: stored.routeType,
+      orders: orderResults,
+    });
 
     const syncDb = getDb();
     const syncService = new CoinbaseSyncService(syncDb, schema, client);
@@ -2580,7 +2959,65 @@ function setupIpcHandlers() {
       .then(() => getPortfolioService().recalculateFifo())
       .catch((error: unknown) => console.warn("[Coinbase] Sync tras orden falló:", error instanceof Error ? error.message : String(error)));
 
-    return order;
+    return {
+      success: true,
+      operationType: stored.operationType,
+      routeType: stored.routeType,
+      orders: orderResults,
+      sync: "started",
+    };
+  }));
+
+  ipcMain.handle("coinbase:list-pending-orders", withResult(async () => {
+    const records = readJsonSetting<SubmittedOrderRecord[]>(SUBMITTED_SETTINGS_KEY, []);
+    const creds = credsMgr.getCredentials();
+    if (!creds) return records.map(record => ({ ...record, coinbaseStatus: null, statusSource: "local" }));
+    const client = new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem);
+    return Promise.all(records.slice().reverse().map(async (record) => {
+      const statuses = await Promise.all(record.orders.map(async (order) => {
+        const orderId = order.success_response?.order_id ?? order.order_id ?? null;
+        if (!orderId) return null;
+        try {
+          return await (client as unknown as CoinbaseOperationClient).getOrder(orderId);
+        } catch {
+          return null;
+        }
+      }));
+      return { ...record, coinbaseStatus: statuses, statusSource: "coinbase" };
+    }));
+  }));
+
+  ipcMain.handle("coinbase:list-scheduled-operations", withResult(async () => {
+    return readJsonSetting<ScheduledOperationRecord[]>(SCHEDULED_SETTINGS_KEY, []).filter(item => item.status !== "cancelada");
+  }));
+
+  ipcMain.handle("coinbase:create-scheduled-operation", withResult(async (_, input: CoinbaseTradeInput & { plannedAt?: number | null; frequency?: string; maxExecutions?: number | null; autoExecution?: boolean }) => {
+    if (input.autoExecution) {
+      throw new Error("La ejecución automática real requiere un servicio persistente con límites explícitos. Por seguridad, esta versión programa para revisar.");
+    }
+    const operationType = inferLegacyOperation(input);
+    const record: ScheduledOperationRecord = {
+      id: crypto.randomUUID(),
+      operationType,
+      mode: "review",
+      status: "programada_revision",
+      createdAt: Date.now(),
+      plannedAt: typeof input.plannedAt === "number" ? input.plannedAt : null,
+      frequency: String(input.frequency ?? "una_vez"),
+      maxExecutions: typeof input.maxExecutions === "number" ? input.maxExecutions : null,
+      input,
+      note: "Programada para revisar: al activarse debe obtener un nuevo preview y pedir confirmación. No se ejecuta con React cerrado ni con el backend detenido.",
+    };
+    const records = readJsonSetting<ScheduledOperationRecord[]>(SCHEDULED_SETTINGS_KEY, []);
+    records.push(record);
+    writeJsonSetting(SCHEDULED_SETTINGS_KEY, records);
+    return record;
+  }));
+
+  ipcMain.handle("coinbase:delete-scheduled-operation", withResult(async (_, id: string) => {
+    const records = readJsonSetting<ScheduledOperationRecord[]>(SCHEDULED_SETTINGS_KEY, []);
+    writeJsonSetting(SCHEDULED_SETTINGS_KEY, records.map(record => record.id === id ? { ...record, status: "cancelada" as const } : record));
+    return null;
   }));
 
   ipcMain.handle("coinbase:sync", withResult(async () => {

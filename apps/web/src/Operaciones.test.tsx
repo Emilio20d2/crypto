@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { Operaciones } from "./pages/Operaciones";
@@ -77,6 +77,10 @@ const mockAPI = () => {
       getPortfolioSnapshots: async () => ({ ok: true as const, data: [] }),
       previewOrder: async () => ({ ok: true as const, data: { preview_id: "preview-1" } }),
       submitOrder: async () => ({ ok: true as const, data: { success: true } }),
+      listPendingOrders: async () => ({ ok: true as const, data: [] }),
+      listScheduledOperations: async () => ({ ok: true as const, data: [] }),
+      createScheduledOperation: async () => ({ ok: true as const, data: { id: "scheduled-1" } }),
+      deleteScheduledOperation: async () => ({ ok: true as const, data: null }),
     },
     sentiment: {
       getGlobal: async () => ({ ok: true as const, data: { scope: "global" as const, direction: "neutral" as const, score: 0, confidence: 0, timeframe: "24h" as const, factors: [], sourceSummary: [], calculatedAt: Date.now(), validUntil: null, state: "unavailable" as const } }),
@@ -215,6 +219,7 @@ describe("Operaciones UI", () => {
 
   test("muestra historial vacío cuando no hay operaciones", async () => {
     renderWithQuery(<Operaciones />);
+    fireEvent.click(screen.getByRole("button", { name: /Historial/i }));
     await waitFor(() => {
       expect(screen.getByText(/Sin operaciones de Coinbase/i)).toBeInTheDocument();
     });
@@ -244,6 +249,7 @@ describe("Operaciones UI", () => {
     });
 
     renderWithQuery(<Operaciones />);
+    fireEvent.click(screen.getByRole("button", { name: /Historial/i }));
 
     await waitFor(() => {
       expect(screen.getAllByText("BTC").length).toBeGreaterThan(0);
