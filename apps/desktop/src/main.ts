@@ -2587,17 +2587,23 @@ function setupIpcHandlers() {
     routeType: string;
     orders: CoinbaseOrderResult[];
   };
+  type ScheduledCondition = {
+    type: "price_lte" | "price_gte";
+    assetId: string;
+    value: number;
+  };
   type ScheduledOperationRecord = {
     id: string;
     operationType: OperationType;
     mode: "review";
-    status: "programada_revision" | "cancelada";
+    status: "programada_revision" | "condicion_cumplida" | "cancelada";
     createdAt: number;
     plannedAt: number | null;
     frequency: string;
     maxExecutions: number | null;
     input: CoinbaseTradeInput;
     note: string;
+    condicion?: ScheduledCondition;
   };
 
   const PREVIEW_EXPIRY_MS = 90_000;
@@ -2988,14 +2994,44 @@ function setupIpcHandlers() {
   }));
 
   ipcMain.handle("coinbase:list-scheduled-operations", withResult(async () => {
-    return readJsonSetting<ScheduledOperationRecord[]>(SCHEDULED_SETTINGS_KEY, []).filter(item => item.status !== "cancelada");
+    const records = readJsonSetting<ScheduledOperationRecord[]>(SCHEDULED_SETTINGS_KEY, [])
+      .filter(item => item.status !== "cancelada");
+
+    // Evaluate price conditions for pending records
+    const evaluated = await Promise.all(records.map(async (item) => {
+      if (!item.condicion || item.status === "condicion_cumplida") return item;
+      try {
+        const assetId = item.condicion.assetId;
+        const priceResult = await marketService.getCurrentPrice(assetId, "EUR");
+        const currentPrice = priceResult?.price ?? null;
+        if (currentPrice == null) return item;
+        const met = item.condicion.type === "price_lte"
+          ? currentPrice <= item.condicion.value
+          : currentPrice >= item.condicion.value;
+        if (met) {
+          const updated = { ...item, status: "condicion_cumplida" as const };
+          // Persist updated status
+          const all = readJsonSetting<ScheduledOperationRecord[]>(SCHEDULED_SETTINGS_KEY, []);
+          writeJsonSetting(SCHEDULED_SETTINGS_KEY, all.map(r => r.id === item.id ? updated : r));
+          return updated;
+        }
+      } catch {
+        // Non-fatal: condition evaluation failure doesn't block listing
+      }
+      return item;
+    }));
+
+    return evaluated;
   }));
 
-  ipcMain.handle("coinbase:create-scheduled-operation", withResult(async (_, input: CoinbaseTradeInput & { plannedAt?: number | null; frequency?: string; maxExecutions?: number | null; autoExecution?: boolean }) => {
+  ipcMain.handle("coinbase:create-scheduled-operation", withResult(async (_, input: CoinbaseTradeInput & { plannedAt?: number | null; frequency?: string; maxExecutions?: number | null; autoExecution?: boolean; condicion?: ScheduledCondition }) => {
     if (input.autoExecution) {
       throw new Error("La ejecución automática real requiere un servicio persistente con límites explícitos. Por seguridad, esta versión programa para revisar.");
     }
     const operationType = inferLegacyOperation(input);
+    const condicion: ScheduledCondition | undefined = input.condicion && (input.condicion.type === "price_lte" || input.condicion.type === "price_gte") && typeof input.condicion.value === "number"
+      ? { type: input.condicion.type, assetId: normalizeAssetId(input.condicion.assetId), value: input.condicion.value }
+      : undefined;
     const record: ScheduledOperationRecord = {
       id: crypto.randomUUID(),
       operationType,
@@ -3006,7 +3042,10 @@ function setupIpcHandlers() {
       frequency: String(input.frequency ?? "una_vez"),
       maxExecutions: typeof input.maxExecutions === "number" ? input.maxExecutions : null,
       input,
-      note: "Programada para revisar: al activarse debe obtener un nuevo preview y pedir confirmación. No se ejecuta con React cerrado ni con el backend detenido.",
+      note: condicion
+        ? `Condición: precio ${condicion.type === "price_lte" ? "≤" : "≥"} ${condicion.value} EUR para ${condicion.assetId}. Al cumplirse se requiere nuevo preview y confirmación.`
+        : "Programada para revisar: al activarse debe obtener un nuevo preview y pedir confirmación. No se ejecuta con React cerrado ni con el backend detenido.",
+      condicion,
     };
     const records = readJsonSetting<ScheduledOperationRecord[]>(SCHEDULED_SETTINGS_KEY, []);
     records.push(record);

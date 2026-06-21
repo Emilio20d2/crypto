@@ -108,6 +108,8 @@ export function Operaciones() {
   const [plannedAt, setPlannedAt] = useState("");
   const [frequency, setFrequency] = useState("una_vez");
   const [maxExecutions, setMaxExecutions] = useState("1");
+  const [condicionType, setCondicionType] = useState<"none" | "price_lte" | "price_gte">("none");
+  const [condicionValue, setCondicionValue] = useState("");
   const [confirmationText, setConfirmationText] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [orderLoading, setOrderLoading] = useState(false);
@@ -253,12 +255,16 @@ export function Operaciones() {
   const scheduleOperation = async () => {
     setOperationError("");
     try {
+      const condicion = condicionType !== "none" && condicionValue
+        ? { type: condicionType, assetId: assetId, value: parseFloat(condicionValue) }
+        : undefined;
       const result = await coinbaseOperationsApi().createScheduledOperation({
         ...payload(),
         plannedAt: plannedAt ? new Date(plannedAt).getTime() : null,
         frequency,
         maxExecutions: parsePositive(maxExecutions),
-      });
+        condicion,
+      } as any);
       if (!result.ok) {
         setOperationError(result.error.message);
         return;
@@ -429,6 +435,18 @@ export function Operaciones() {
                   <FormField label="Revisión programada">
                     <Input type="datetime-local" value={plannedAt} onChange={(event) => setPlannedAt(event.target.value)} />
                   </FormField>
+                  <FormField label="Condición de precio">
+                    <Select value={condicionType} onChange={(event) => setCondicionType(event.target.value as "none" | "price_lte" | "price_gte")}>
+                      <option value="none">Sin condición (solo fecha)</option>
+                      <option value="price_lte">Precio ≤ valor (caída)</option>
+                      <option value="price_gte">Precio ≥ valor (subida)</option>
+                    </Select>
+                  </FormField>
+                  {condicionType !== "none" && (
+                    <FormField label={`Precio objetivo (EUR) para ${assetId}`}>
+                      <Input type="number" step="any" min="0" value={condicionValue} onChange={(event) => setCondicionValue(event.target.value)} placeholder="Ej. 80000" />
+                    </FormField>
+                  )}
                   <FormField label="Frecuencia">
                     <Select value={frequency} onChange={(event) => setFrequency(event.target.value)}>
                       <option value="una_vez">Una vez</option>
@@ -547,10 +565,37 @@ export function Operaciones() {
                             <strong>{operationLabel(item.operationType)}</strong>
                             <span>{item.plannedAt ? formatDateTime(item.plannedAt) : "Sin fecha"} · {item.frequency}</span>
                           </div>
-                          <span className="badge badge-warning">Revisión manual</span>
+                          {item.status === "condicion_cumplida" ? (
+                            <span className="badge badge-success">Condición cumplida</span>
+                          ) : (
+                            <span className="badge badge-warning">Revisión manual</span>
+                          )}
                         </div>
+                        {item.condicion && (
+                          <p className="investment-contribution-meta" style={{ fontWeight: 600, fontSize: "0.8rem" }}>
+                            Condición: {item.condicion.assetId} precio {item.condicion.type === "price_lte" ? "≤" : "≥"} {item.condicion.value.toLocaleString("es-ES")} EUR
+                          </p>
+                        )}
                         <p className="investment-contribution-meta">{item.note}</p>
-                        <Button type="button" size="sm" variant="ghost" onClick={async () => { await coinbaseOperationsApi().deleteScheduledOperation(item.id); await refetchScheduled(); }}>Cancelar</Button>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          {item.status === "condicion_cumplida" && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              onClick={() => {
+                                const inp = item.input ?? {};
+                                const params = new URLSearchParams({ source: "scheduled-condition", asset: inp.assetId ?? inp.fromAssetId ?? "" });
+                                if (inp.quoteAmountEur) params.set("quoteAmount", String(inp.quoteAmountEur));
+                                if (inp.baseAmount) params.set("baseAmount", String(inp.baseAmount));
+                                if (inp.operationType) params.set("type", inp.operationType);
+                                navigate(`/operaciones?${params.toString()}`);
+                              }}
+                            >
+                              Revisar y preparar
+                            </Button>
+                          )}
+                          <Button type="button" size="sm" variant="ghost" onClick={async () => { await coinbaseOperationsApi().deleteScheduledOperation(item.id); await refetchScheduled(); }}>Cancelar</Button>
+                        </div>
                       </article>
                     ))}
                   </div>
