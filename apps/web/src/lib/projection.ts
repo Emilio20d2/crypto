@@ -1,4 +1,4 @@
-export type ProjectionScenario = "conservador" | "moderado" | "base" | "optimista" | "personalizado";
+export type ProjectionScenario = "conservador" | "moderado" | "base" | "favorable" | "muy_favorable" | "optimista" | "personalizado";
 
 export interface CycleInput {
   id: string;
@@ -37,10 +37,12 @@ export interface ProjectionResult {
 import { calculateSpanishSavingsTax } from "./taxCalculations";
 
 const ANNUAL_RATES: Record<ProjectionScenario, number> = {
-  conservador: 0.05,
-  moderado: 0.075,
-  base: 0.10,
-  optimista: 0.20,
+  conservador:   0.05,
+  moderado:      0.075,
+  base:          0.10,
+  favorable:     0.14,
+  muy_favorable: 0.18,
+  optimista:     0.22,
   personalizado: 0.10,
 };
 

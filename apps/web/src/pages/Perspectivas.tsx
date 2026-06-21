@@ -37,12 +37,20 @@ function tsToDate(ts: number | null): string {
 }
 
 const SCENARIO_COLORS: Record<string, string> = {
-  conservador: "var(--color-muted-fg)",
-  moderado: "var(--color-info, #60a5fa)",
-  base: "var(--color-primary)",
-  optimista: "var(--color-success)",
-  dinamico: "var(--color-warning)",
+  conservador:   "var(--color-muted-fg)",
+  moderado:      "var(--color-info, #60a5fa)",
+  base:          "var(--color-primary)",
+  favorable:     "#10b981",
+  muy_favorable: "#f59e0b",
+  optimista:     "var(--color-success)",
+  dinamico:      "var(--color-warning)",
 };
+
+const SCENARIO_ORDER = [
+  "conservador", "moderado", "base", "favorable", "muy_favorable", "optimista", "dinamico",
+] as const;
+
+type ActiveScenario = typeof SCENARIO_ORDER[number];
 
 const GOAL_TYPE_LABELS: Record<string, string> = {
   patrimonio: "Patrimonio general",
@@ -75,7 +83,7 @@ export function Perspectivas() {
   const currentYear = new Date().getFullYear();
   const [targetYear, setTargetYear] = useState(currentYear + 10);
   const horizonYears = Math.max(1, targetYear - currentYear);
-  const [activeScenario, setActiveScenario] = useState<"conservador" | "moderado" | "base" | "optimista" | "dinamico">("base");
+  const [activeScenario, setActiveScenario] = useState<ActiveScenario>("base");
 
   const [showGoalForm, setShowGoalForm] = useState(false);
   const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
@@ -174,12 +182,12 @@ export function Perspectivas() {
       {/* ── Sección 1: Estado del plan ── */}
       <PlanSnapshotSection projection={projection} loading={projectionQ.isLoading} error={projectionQ.error} />
 
-      {/* ── Sección 2: 4 escenarios (comparativa) ── */}
+      {/* ── Sección 2: 7 escenarios — selector + tarjeta activa + comparativa ── */}
       <Card>
         <CardHeader>
           <CardTitle>
             <ChartNoAxesCombined size={16} />
-            Proyección — 5 escenarios
+            Proyección — 7 escenarios
           </CardTitle>
           <div className="flex gap-2 items-center">
             <label className="text-sm text-muted">Año:</label>
@@ -206,84 +214,165 @@ export function Perspectivas() {
           )}
           {projection && (
             <>
-              <div className="perspectives-summary-grid">
-                <div className="perspectives-current-card">
-                  <span className="label">Valor actual</span>
-                  <span className="value">{fmt(currentValueEur)}</span>
-                  <span className="sub">Tesorería: {fmt(projection.snapshot.treasury.totalLiquidityEur)}</span>
-                  <span className="sub">Invertido: {fmt(projection.snapshot.historicalCapitalEur)}</span>
-                </div>
-                {(["conservador", "moderado", "base", "optimista", "dinamico"] as const).map(s => {
+              {/* ── Selector de escenario ── */}
+              <div className="perspectives-scenario-selector" role="tablist" aria-label="Escenarios de proyección">
+                {SCENARIO_ORDER.map(s => {
                   const sc = projection.scenarios.find(x => x.scenario === s);
-                  if (!sc) return null;
+                  const color = SCENARIO_COLORS[s];
+                  const isActive = activeScenario === s;
                   return (
-                    <div
+                    <button
                       key={s}
-                      className={`perspectives-scenario-card ${s} ${activeScenario === s ? "active" : ""}`}
+                      role="tab"
+                      aria-selected={isActive}
+                      className={`perspectives-scenario-tab${isActive ? " active" : ""}`}
+                      style={{ "--scenario-color": color } as React.CSSProperties}
                       onClick={() => setActiveScenario(s)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={e => e.key === "Enter" && setActiveScenario(s)}
                     >
-                      <span className="label">{sc.label}</span>
-                      <span className="value">{fmt(sc.summary.finalNetWealthEur)}</span>
-                      <span className="sub">Bruto: {fmt(sc.summary.finalGrossWealthEur)}</span>
-                      <span className="sub">Aportaciones futuras: {fmt(sc.summary.totalFutureCapitalEur)}</span>
-                      <span className="sub">Retorno ponderado: {pct(sc.summary.weightedAnnualReturn)}</span>
-                      {sc.probability != null && (
-                        <span className="sub">Probabilidad: {pct(sc.probability)}</span>
+                      <span className="tab-dot" style={{ background: color }} />
+                      <span className="tab-label">{sc?.label ?? s}</span>
+                      {sc?.probability != null && (
+                        <span className="tab-prob">{pct(sc.probability)}</span>
                       )}
-                    </div>
+                    </button>
                   );
                 })}
               </div>
 
-              {/* Comparison table */}
+              {/* ── Tarjeta del escenario activo ── */}
+              {activeScenarioData && (
+                <div className="perspectives-active-card" style={{ borderLeftColor: SCENARIO_COLORS[activeScenario] }}>
+                  <div className="active-card-header">
+                    <div>
+                      <h3 className="active-card-title">{activeScenarioData.label}</h3>
+                      <p className="text-sm text-muted" style={{ marginTop: 2 }}>
+                        {activeScenarioData.description}
+                      </p>
+                    </div>
+                    <div className="active-card-badges">
+                      {activeScenarioData.probability != null && (
+                        <Badge variant="neutral">Probabilidad: {pct(activeScenarioData.probability)}</Badge>
+                      )}
+                      {activeScenarioData.confidence != null && (
+                        <Badge variant={activeScenarioData.confidence >= 0.6 ? "success" : "warning"}>
+                          Confianza: {pct(activeScenarioData.confidence)}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="active-card-metrics">
+                    <div className="metric-item">
+                      <span className="metric-label">Patrimonio bruto</span>
+                      <span className="metric-value">{fmt(activeScenarioData.summary.finalGrossWealthEur)}</span>
+                    </div>
+                    <div className="metric-item highlight" style={{ borderColor: SCENARIO_COLORS[activeScenario] }}>
+                      <span className="metric-label">Patrimonio neto</span>
+                      <span className="metric-value">{fmt(activeScenarioData.summary.finalNetWealthEur)}</span>
+                    </div>
+                    <div className="metric-item">
+                      <span className="metric-label">Capital histórico</span>
+                      <span className="metric-value">{fmt(activeScenarioData.summary.historicalCapitalEur)}</span>
+                    </div>
+                    <div className="metric-item">
+                      <span className="metric-label">Aportaciones futuras</span>
+                      <span className="metric-value">{fmt(activeScenarioData.summary.totalFutureCapitalEur)}</span>
+                    </div>
+                    <div className="metric-item">
+                      <span className="metric-label">Plusvalía realizada</span>
+                      <span className={`metric-value ${activeScenarioData.summary.totalRealizedGainEur >= 0 ? "text-success" : "text-danger"}`}>
+                        {fmt(activeScenarioData.summary.totalRealizedGainEur)}
+                      </span>
+                    </div>
+                    <div className="metric-item">
+                      <span className="metric-label">Plusvalía no realizada</span>
+                      <span className={`metric-value ${activeScenarioData.summary.totalUnrealizedGainEur >= 0 ? "text-success" : "text-danger"}`}>
+                        {fmt(activeScenarioData.summary.totalUnrealizedGainEur)}
+                      </span>
+                    </div>
+                    <div className="metric-item">
+                      <span className="metric-label">Impuesto generado</span>
+                      <span className="metric-value text-muted">{fmt(activeScenarioData.summary.totalTaxGeneratedEur)}</span>
+                    </div>
+                    <div className="metric-item">
+                      <span className="metric-label">EURC fiscal reserva</span>
+                      <span className="metric-value">{fmt(activeScenarioData.summary.finalFiscalReserveEur)}</span>
+                    </div>
+                    <div className="metric-item">
+                      <span className="metric-label">EURC libre</span>
+                      <span className="metric-value">{fmt(activeScenarioData.summary.finalEurcAvailableEur)}</span>
+                    </div>
+                    <div className="metric-item">
+                      <span className="metric-label">Ventas proyectadas</span>
+                      <span className="metric-value">{fmt(activeScenarioData.cycleResults.reduce((s, c) => s + c.salesEur, 0))}</span>
+                    </div>
+                    <div className="metric-item">
+                      <span className="metric-label">Recompras proyectadas</span>
+                      <span className="metric-value">{fmt(activeScenarioData.cycleResults.reduce((s, c) => s + c.rebuysEur, 0))}</span>
+                    </div>
+                    <div className="metric-item highlight" style={{ borderColor: SCENARIO_COLORS[activeScenario] }}>
+                      <span className="metric-label">Rentabilidad anualizada est.</span>
+                      <span className="metric-value">{activeScenarioData.summary.weightedAnnualReturn != null
+                        ? `${(activeScenarioData.summary.weightedAnnualReturn * 100).toFixed(1)}% / año`
+                        : "—"}</span>
+                      <span className="metric-sub">Horizonte: {horizonYears} años · Neto de impuestos</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Comparativa compacta de todos los escenarios ── */}
               <div className="perspectives-cycle-table-wrapper" style={{ marginTop: "1rem" }}>
                 <table className="perspectives-cycle-table">
                   <thead>
                     <tr>
                       <th>Escenario</th>
-                      <th className="text-right">Capital total</th>
-                      <th className="text-right">Aportaciones futuras</th>
-                      <th className="text-right">Ganancia mercado</th>
-                      <th className="text-right">Retorno ponderado</th>
-                      <th className="text-right">Plusvalía realizada</th>
-                      <th className="text-right">No realizada</th>
+                      <th className="text-right">Patr. neto</th>
+                      <th className="text-right">Rent. anualiz.</th>
+                      <th className="text-right">Probabilidad</th>
                       <th className="text-right">Impuesto</th>
-                      <th className="text-right">Patrimonio neto</th>
+                      <th className="text-right">Ventas</th>
+                      <th className="text-right">Recompras</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {projection.scenarios.map(sc => (
-                      <tr
-                        key={sc.scenario}
-                        className={activeScenario === sc.scenario ? "selected" : ""}
-                        style={{ cursor: "pointer" }}
-                        onClick={() => setActiveScenario(sc.scenario)}
-                      >
-                        <td>
-                          <span
-                            style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: SCENARIO_COLORS[sc.scenario], marginRight: 6 }}
-                          />
-                          {sc.label}
-                        </td>
-                        <td className="text-right">{fmt(sc.summary.totalCapitalEur)}</td>
-                        <td className="text-right">{fmt(sc.summary.totalFutureCapitalEur)}</td>
-                        <td className={`text-right ${sc.summary.estimatedMarketGainEur > 0 ? "text-success" : "text-danger"}`}>
-                          {sc.summary.estimatedMarketGainEur > 0 ? "+" : ""}{fmt(sc.summary.estimatedMarketGainEur)}
-                        </td>
-                        <td className="text-right">{pct(sc.summary.weightedAnnualReturn)}</td>
-                        <td className={`text-right ${sc.summary.totalRealizedGainEur > 0 ? "text-success" : ""}`}>
-                          {sc.summary.totalRealizedGainEur > 0 ? "+" : ""}{fmt(sc.summary.totalRealizedGainEur)}
-                        </td>
-                        <td className={`text-right ${sc.summary.totalUnrealizedGainEur > 0 ? "text-success" : ""}`}>
-                          {sc.summary.totalUnrealizedGainEur > 0 ? "+" : ""}{fmt(sc.summary.totalUnrealizedGainEur)}
-                        </td>
-                        <td className="text-right text-muted">{fmt(sc.summary.totalTaxGeneratedEur)}</td>
-                        <td className="text-right font-medium">{fmt(sc.summary.finalNetWealthEur)}</td>
-                      </tr>
-                    ))}
+                    {SCENARIO_ORDER.map(s => {
+                      const sc = projection.scenarios.find(x => x.scenario === s);
+                      if (!sc) return null;
+                      const isSelected = activeScenario === s;
+                      const totalSales = sc.cycleResults.reduce((a, c) => a + c.salesEur, 0);
+                      const totalRebuys = sc.cycleResults.reduce((a, c) => a + c.rebuysEur, 0);
+                      return (
+                        <tr
+                          key={s}
+                          className={isSelected ? "selected" : ""}
+                          style={{ cursor: "pointer" }}
+                          onClick={() => setActiveScenario(s)}
+                        >
+                          <td>
+                            <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: SCENARIO_COLORS[s], marginRight: 6 }} />
+                            {sc.label}
+                            {s === "dinamico" && sc.confidence != null && (
+                              <span className="text-muted" style={{ fontSize: "0.75em", marginLeft: 4 }}>
+                                conf. {pct(sc.confidence)}
+                              </span>
+                            )}
+                          </td>
+                          <td className="text-right font-medium">{fmt(sc.summary.finalNetWealthEur)}</td>
+                          <td className="text-right">
+                            {sc.summary.weightedAnnualReturn != null
+                              ? `${(sc.summary.weightedAnnualReturn * 100).toFixed(1)}%`
+                              : "—"}
+                          </td>
+                          <td className="text-right text-muted">
+                            {sc.probability != null ? pct(sc.probability) : s === "dinamico" ? `conf. ${pct(sc.confidence)}` : "—"}
+                          </td>
+                          <td className="text-right text-muted">{fmt(sc.summary.totalTaxGeneratedEur)}</td>
+                          <td className="text-right">{fmt(totalSales)}</td>
+                          <td className="text-right">{fmt(totalRebuys)}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

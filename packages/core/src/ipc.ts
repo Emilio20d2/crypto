@@ -134,7 +134,7 @@ export interface DiagnosticsReport {
 }
 
 export interface ProjectionScenarioResult {
-  scenario: "conservador" | "moderado" | "base" | "optimista" | "dinamico";
+  scenario: "conservador" | "moderado" | "base" | "favorable" | "muy_favorable" | "optimista" | "dinamico";
   label: string;
   probability: number | null;
   confidence: number | null;
@@ -288,7 +288,7 @@ export interface ProjectionResult {
   };
   scenarios: ProjectionScenarioResult[];
   comparison: Array<{
-    scenario: "conservador" | "moderado" | "base" | "optimista" | "dinamico";
+    scenario: "conservador" | "moderado" | "base" | "favorable" | "muy_favorable" | "optimista" | "dinamico";
     label: string;
     finalGrossWealthEur: number;
     finalNetWealthEur: number;

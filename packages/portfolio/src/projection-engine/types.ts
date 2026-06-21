@@ -1,6 +1,6 @@
 // ── Escenarios ────────────────────────────────────────────────────────────────
 
-export type ProjectionScenario = "conservador" | "moderado" | "base" | "optimista" | "dinamico";
+export type ProjectionScenario = "conservador" | "moderado" | "base" | "favorable" | "muy_favorable" | "optimista" | "dinamico";
 
 // ── Configuración fiscal (versionada, sin hardcodear) ─────────────────────────
 
@@ -34,9 +34,13 @@ export const SPANISH_FISCAL_CONFIG_2024: FiscalConfig = {
 
 export interface AssetScenarioRates {
   assetId: string;
-  annualGrowthRate: number; // ej. 0.10 = 10%
-  volatility: number;       // 0..1 (informativo, no aleatorio)
-  correctionDepth: number;  // fracción máx de corrección esperada
+  annualGrowthRate: number;   // tasa inicial (fase 1, primeros cycleLengthYears)
+  decayFactor: number;        // multiplicador de tasa por ciclo (0..1); la tasa decrece cada ciclo
+  terminalAnnualRate: number; // suelo de tasa en etapa madura
+  cycleLengthYears: number;   // duración de cada fase/ciclo (ej. 4)
+  maxPriceMultiplier: number; // límite de capitalización: precio máximo = base × este valor
+  volatility: number;         // 0..1 (informativo)
+  correctionDepth: number;    // fracción máx de corrección esperada
   source?: string;
   hypothesis?: string;
   dataQuality?: "alta" | "media" | "baja";

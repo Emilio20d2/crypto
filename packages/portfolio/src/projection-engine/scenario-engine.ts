@@ -4,20 +4,22 @@ import { buildDefaultHypotheses } from "./asset-simulator";
 import { runProjection } from "./projection-engine";
 
 export interface ScenarioSet {
-  conservador: ProjectionOutput;
-  moderado: ProjectionOutput;
-  base: ProjectionOutput;
-  optimista: ProjectionOutput;
-  dinamico: ProjectionOutput;
+  conservador:   ProjectionOutput;
+  moderado:      ProjectionOutput;
+  base:          ProjectionOutput;
+  favorable:     ProjectionOutput;
+  muy_favorable: ProjectionOutput;
+  optimista:     ProjectionOutput;
+  dinamico:      ProjectionOutput;
 }
 
 export interface ScenarioComparison {
-  scenario: ProjectionScenario;
-  label: string;
+  scenario:            ProjectionScenario;
+  label:               string;
   finalGrossWealthEur: number;
-  finalNetWealthEur: number;
-  probability: number | null;
-  confidence: number | null;
+  finalNetWealthEur:   number;
+  probability:         number | null;
+  confidence:          number | null;
 }
 
 export function buildScenarioInput(
@@ -57,12 +59,14 @@ export function runAllScenarios(
   now: number = Date.now(),
   dynamicFactors?: { fearAndGreedIndex: number | null; btcDominance: number | null },
 ): ScenarioSet {
-  const scenarios: ProjectionScenario[] = ["conservador", "moderado", "base", "optimista", "dinamico"];
+  const scenarios: ProjectionScenario[] = [
+    "conservador", "moderado", "base", "favorable", "muy_favorable", "optimista", "dinamico",
+  ];
   const results: Partial<ScenarioSet> = {};
 
   for (const s of scenarios) {
     const input = buildScenarioInput(snapshot, s, horizonDate, options, fiscalConfig, now, dynamicFactors);
-    results[s] = runProjection(input);
+    results[s as keyof ScenarioSet] = runProjection(input);
   }
 
   return results as ScenarioSet;
@@ -70,19 +74,25 @@ export function runAllScenarios(
 
 export function compareScenarios(set: ScenarioSet): ScenarioComparison[] {
   const LABELS: Record<ProjectionScenario, string> = {
-    conservador: "Conservador",
-    moderado: "Moderado",
-    base: "Base",
-    optimista: "Optimista",
-    dinamico: "Dinámico",
+    conservador:   "Conservador",
+    moderado:      "Moderado",
+    base:          "Base",
+    favorable:     "Favorable",
+    muy_favorable: "Muy favorable",
+    optimista:     "Optimista",
+    dinamico:      "Dinámico",
   };
 
-  return (["conservador", "moderado", "base", "optimista", "dinamico"] as ProjectionScenario[]).map(s => ({
-    scenario: s,
-    label: LABELS[s],
-    finalGrossWealthEur: set[s].summary.finalGrossWealthEur,
-    finalNetWealthEur: set[s].summary.finalNetWealthEur,
-    probability: set[s].summary.probability,
-    confidence: set[s].summary.confidence,
+  const order: ProjectionScenario[] = [
+    "conservador", "moderado", "base", "favorable", "muy_favorable", "optimista", "dinamico",
+  ];
+
+  return order.map(s => ({
+    scenario:            s,
+    label:               LABELS[s],
+    finalGrossWealthEur: set[s as keyof ScenarioSet].summary.finalGrossWealthEur,
+    finalNetWealthEur:   set[s as keyof ScenarioSet].summary.finalNetWealthEur,
+    probability:         set[s as keyof ScenarioSet].summary.probability,
+    confidence:          set[s as keyof ScenarioSet].summary.confidence,
   }));
 }
