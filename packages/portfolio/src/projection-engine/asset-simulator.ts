@@ -110,21 +110,39 @@ const TERMINAL_RATES: Record<string, number> = {
   DEFAULT: 0.01,
 };
 
-// Max price multiplier from base price (capitalisation ceiling).
-// BTC ×7: from ≈€93K → max ≈€651K (≈€13T market cap, conceivable but extreme)
-// SOL ×12: from ≈€120  → max ≈€1 440 (≈€600B market cap)
-// SUI ×9:  from ≈€2.8  → max ≈€25   (≈€31B market cap)
-const MAX_PRICE_MULTIPLIERS: Record<string, number> = {
-  BTC:     7,
-  ETH:     8,
-  SOL:    12,
-  SUI:     9,
-  BNB:     8,
-  ADA:     8,
-  DOT:     8,
-  AVAX:   10,
-  LINK:   10,
-  DEFAULT: 5,
+// Max price multiplier from base price (capitalisation ceiling) — SCENARIO-DEPENDENT.
+//
+// Root cause of the 2044 inversion (Favorable > Muy_favorable > Optimista):
+//   With fixed-EUR contributions, higher-scenario prices are higher, so each €200
+//   buys FEWER tokens. If every scenario hits the SAME cap by 2044, the scenario that
+//   accumulated the most tokens (cheapest = Favorable) ends up worth the most.
+//
+// Fix: each scenario gets its own ceiling proportional to the market-cap thesis it implies.
+//   Optimista assumes BTC could reach ≈€1.4M (≈€28T market cap — extreme but self-consistent).
+//   Conservador assumes a lower peak (≈€370K, ≈€7.4T) matching its slow-growth thesis.
+//   This ensures Optimista final price always exceeds Favorable even with fewer tokens.
+//
+// BTC Optimista ×15: €93K → max ≈€1 395K (≈€27.9T market cap)
+// BTC Base ×7      : €93K → max ≈€651K   (≈€13.0T market cap, unchanged vs previous)
+// BTC Conservador ×4: €93K → max ≈€372K  (≈€7.4T market cap)
+
+type ScenarioMultiplierMap = Partial<Record<ScenarioKey, number>> & { default: number };
+
+const MAX_PRICE_MULTIPLIERS: Record<string, ScenarioMultiplierMap> = {
+  BTC:  { conservador: 4, moderado: 5, base: 7, favorable: 9,  muy_favorable: 12, optimista: 15, default: 7  },
+  ETH:  { conservador: 4, moderado: 5, base: 7, favorable: 9,  muy_favorable: 12, optimista: 14, default: 7  },
+  SOL:  { conservador: 5, moderado: 7, base: 10, favorable: 13, muy_favorable: 17, optimista: 20, default: 10 },
+  SUI:  { conservador: 4, moderado: 6, base: 8,  favorable: 11, muy_favorable: 14, optimista: 18, default: 8  },
+  BNB:  { conservador: 4, moderado: 5, base: 7,  favorable: 9,  muy_favorable: 11, optimista: 13, default: 7  },
+  ADA:  { conservador: 3, moderado: 5, base: 7,  favorable: 9,  muy_favorable: 11, optimista: 13, default: 7  },
+  DOT:  { conservador: 3, moderado: 5, base: 7,  favorable: 9,  muy_favorable: 11, optimista: 13, default: 7  },
+  AVAX: { conservador: 4, moderado: 6, base: 9,  favorable: 12, muy_favorable: 15, optimista: 18, default: 9  },
+  LINK: { conservador: 4, moderado: 6, base: 9,  favorable: 12, muy_favorable: 15, optimista: 18, default: 9  },
+};
+
+// Fallback multipliers for unlisted assets (altcoins without a specific profile)
+const DEFAULT_MULTIPLIERS: Record<ScenarioKey | "default", number> = {
+  conservador: 3, moderado: 4, base: 5, favorable: 6, muy_favorable: 8, optimista: 10, default: 5,
 };
 
 // Scenario probabilities — 6 static scenarios sum to 1.00; dynamic is separate
@@ -243,7 +261,11 @@ export function buildDefaultHypotheses(
 
     const decayFactor  = isStatic ? DECAY_FACTORS[sKey] : DECAY_FACTORS.base;
     const terminalRate = TERMINAL_RATES[assetId] ?? TERMINAL_RATES.DEFAULT;
-    const maxMult      = MAX_PRICE_MULTIPLIERS[assetId] ?? MAX_PRICE_MULTIPLIERS.DEFAULT;
+    const assetMults   = MAX_PRICE_MULTIPLIERS[assetId];
+    const effectiveSKey = isStatic ? sKey : "base";
+    const maxMult      = assetMults
+      ? (assetMults[effectiveSKey as ScenarioKey] ?? assetMults.default)
+      : (DEFAULT_MULTIPLIERS[effectiveSKey as ScenarioKey] ?? DEFAULT_MULTIPLIERS.default);
     const vol          = VOLATILITIES[isStatic ? sKey : "base"];
     const corrDepth    = CORRECTION_DEPTHS[isStatic ? sKey : "base"];
 

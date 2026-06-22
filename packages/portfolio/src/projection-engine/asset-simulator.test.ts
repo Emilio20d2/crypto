@@ -55,11 +55,12 @@ describe("projectAssetPrice — phase-based growth", () => {
     expect(phased).toBeLessThan(flatPerpetual);
   });
 
-  test("límite de capitalización aplicado: BTC no supera ×7 precio base", () => {
+  test("límite de capitalización aplicado: BTC optimista no supera ×15 precio base", () => {
     const h = buildDefaultHypotheses("optimista", ["BTC"]);
     const future = BASE + 50 * 365 * DAY; // 50 years
     const price = projectAssetPrice(80_000, "BTC", BASE, future, h)!;
-    expect(price).toBeLessThanOrEqual(80_000 * 7 + 1); // max ×7, +1 for float tolerance
+    // B1: caps are now scenario-scaled. Optimista BTC cap = ×15
+    expect(price).toBeLessThanOrEqual(80_000 * 15 + 1);
   });
 
   test("escenario favorable existe como hipótesis válida", () => {
@@ -71,7 +72,7 @@ describe("projectAssetPrice — phase-based growth", () => {
     expect(r?.annualGrowthRate).toBe(0.20);
     expect(r?.decayFactor).toBe(0.65);
     expect(r?.terminalAnnualRate).toBe(0.04);
-    expect(r?.maxPriceMultiplier).toBe(7);
+    expect(r?.maxPriceMultiplier).toBe(9); // B1: favorable BTC cap = ×9
   });
 
   test("escenario muy_favorable existe como hipótesis válida", () => {
