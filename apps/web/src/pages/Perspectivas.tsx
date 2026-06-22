@@ -909,9 +909,43 @@ export function Perspectivas() {
                         <span className="metric-value">{fmt(activeScenarioData.summary.finalFiscalReserveEur)}</span>
                       </div>
                       <div className="metric-item">
-                        <span className="metric-label">EURC libre</span>
-                        <span className="metric-value">{fmt(activeScenarioData.summary.finalEurcAvailableEur)}</span>
+                        <span className="metric-label">EURC libre (≈0)</span>
+                        <span className={`metric-value ${(activeScenarioData.summary.finalEurcAvailableEur ?? 0) > 10 ? "text-danger" : "text-success"}`}>
+                          {fmt(activeScenarioData.summary.finalEurcAvailableEur)}
+                        </span>
                       </div>
+                      <div className="metric-item">
+                        <span className="metric-label">EURC generado</span>
+                        <span className="metric-value">{fmt((activeScenarioData.summary as any).totalEurcGeneratedEur)}</span>
+                      </div>
+                      <div className="metric-item">
+                        <span className="metric-label">EURC reinvertido</span>
+                        <span className={`metric-value ${((activeScenarioData.summary as any).totalEurcReinvestedEur ?? 0) > 0 ? "text-success" : ""}`}>
+                          {fmt((activeScenarioData.summary as any).totalEurcReinvestedEur)}
+                        </span>
+                      </div>
+                      <div className="metric-item">
+                        <span className="metric-label">Tasa reinversión</span>
+                        <span className={`metric-value ${((activeScenarioData.summary as any).reinvestmentRate ?? 0) >= 0.99 ? "text-success" : ((activeScenarioData.summary as any).reinvestmentRate ?? 0) > 0 ? "" : ""}`}>
+                          {(activeScenarioData.summary as any).reinvestmentRate != null
+                            ? `${(((activeScenarioData.summary as any).reinvestmentRate as number) * 100).toFixed(1)}%`
+                            : "—"}
+                        </span>
+                      </div>
+                      {((activeScenarioData.summary as any).totalLossesEur ?? 0) > 0 && (
+                        <div className="metric-item">
+                          <span className="metric-label">Pérdidas por activos</span>
+                          <span className="metric-value text-danger">-{fmt((activeScenarioData.summary as any).totalLossesEur)}</span>
+                        </div>
+                      )}
+                      {(((activeScenarioData.summary as any).failedAssets as string[] | undefined) ?? []).length > 0 && (
+                        <div className="metric-item" style={{ gridColumn: "1 / -1" }}>
+                          <span className="metric-label">Activos fallidos</span>
+                          <span className="metric-value text-danger">
+                            {((activeScenarioData.summary as any).failedAssets as string[]).join(", ")}
+                          </span>
+                        </div>
+                      )}
                       <div className="metric-item">
                         <span className="metric-label">Ventas proyectadas</span>
                         {(() => {

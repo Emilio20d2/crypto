@@ -20,6 +20,7 @@ import { simulateRebuyTiers, simulateProposedRebuys, buildRebuysZeroExplanation 
 import type { HypotheticalSaleProposal, HypotheticalRebuyProposal, SimulationPolicy } from "./types";
 import { reconcileProjection, validateProjectionOutput } from "./projection-validation";
 import { xirrFromPeriods, twrFromPeriods, computeControlScenario } from "./financial-math";
+import { simulateResidualReinvestment } from "./residual-reinvestment";
 
 const MS_PER_MONTH = (365.25 / 12) * 24 * 3600 * 1000;
 
@@ -162,6 +163,16 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
 
   for (const assetId of Object.keys(snapshot.positions)) initAsset(assetId);
 
+  // ── Asset lifecycle tracking ────────────────────────────────────────────────
+  // Track peak prices to detect deterioration and failure per spec §7-9
+  const peakPrices: Record<string, number> = {};
+  const failedAssets = new Set<string>();      // assets written off (value = 0)
+  const deterioratedAssets = new Set<string>(); // assets with >80% drawdown (stop buying)
+
+  for (const [assetId, p] of Object.entries(snapshot.prices)) {
+    if (p != null && p > 0) peakPrices[assetId] = p;
+  }
+
   // ── Period-level accumulations ──────────────────────────────────────────────
 
   const periods: ProjectionPeriod[] = [];
@@ -172,6 +183,9 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
   let totalRebuysEur = 0;
   let totalTaxGeneratedEur = 0;
   let cumulativeTaxPaid = 0;
+  let totalEurcGeneratedEur = 0;
+  let totalEurcReinvestedEur = 0;
+  let totalLossesEur = 0;
   const cycleResultsMap: Map<string, CycleProjectionResult> = new Map();
 
   // Initialize cycle result accumulators
@@ -217,6 +231,39 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
       }
     }
 
+    // --- Asset lifecycle evaluation (spec §7-9) ---
+    // Update peak prices and detect deterioration/failure
+    for (const [assetId, price] of Object.entries(prices)) {
+      if (price == null || failedAssets.has(assetId)) continue;
+      if (price > (peakPrices[assetId] ?? 0)) peakPrices[assetId] = price;
+      const peak = peakPrices[assetId] ?? price;
+      if (peak > 0) {
+        const drawdownFromPeak = (peak - price) / peak;
+        if (drawdownFromPeak >= 0.95) {
+          // Asset "failed": write off balance to 0, record loss
+          if (!failedAssets.has(assetId)) {
+            failedAssets.add(assetId);
+            deterioratedAssets.add(assetId);
+            const lostValue = (balances[assetId] ?? 0) * price;
+            if (lostValue > 0) {
+              totalLossesEur += lostValue;
+              const lossEvt: ProjectionEvent = {
+                date: currentDate, type: "sale" as const, cycleId: periodCycleId, assetId,
+                description: `Activo fallido (caída >95% desde máximo): pérdida de ${lostValue.toFixed(0)}€`,
+                priceEur: price,
+              };
+              periodEvents.push(lossEvt);
+            }
+            balances[assetId] = 0;
+          }
+        } else if (drawdownFromPeak >= 0.80) {
+          deterioratedAssets.add(assetId); // stop new purchases
+        } else {
+          deterioratedAssets.delete(assetId); // recovery
+        }
+      }
+    }
+
     const usedTierIds = new Set<string>();
 
     for (const cycle of currentCycles) {
@@ -252,6 +299,7 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
           totalTaxGeneratedEur += sr.taxEur;
           if (sr.event?.priceEur) lastSalePriceByAsset[sr.assetId] = sr.event.priceEur;
 
+          totalEurcGeneratedEur += sr.netEurcEur;
           const cr = cycleResultsMap.get(cycleId);
           if (cr) {
             cr.salesEur += sr.grossEur;
@@ -339,8 +387,53 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
         }
       }
 
+      // --- Residual EURC reinvestment (spec §1, §2, §4) ---
+      // After all rebuys, any remaining EURC must go back into the market.
+      // EURC is temporary: it must reach 0 at period close.
+      const eurcAfterRebuys = eurcAvailable(treasury);
+      if (eurcAfterRebuys >= 0.50) {
+        const residualResult = simulateResidualReinvestment(
+          eurcAfterRebuys,
+          cycle.assets,
+          prices,
+          balances,
+          avgCosts,
+          goalReachedAssets,
+          failedAssets,
+          currentDate,
+          lotCounter,
+          cycleId,
+        );
+        if (residualResult.eurSpent > 0) {
+          for (const purchase of residualResult.purchases) {
+            initAsset(purchase.assetId);
+            const prevBal = balances[purchase.assetId] ?? 0;
+            const prevCost = avgCosts[purchase.assetId] ?? purchase.priceEur;
+            const newBal = prevBal + purchase.quantity;
+            const newCost = newBal > 0 ? (prevBal * prevCost + purchase.amountEur) / newBal : purchase.priceEur;
+            balances[purchase.assetId] = newBal;
+            avgCosts[purchase.assetId] = newCost;
+            fifoLots.push(purchase.newLot);
+            assetRebought[purchase.assetId] = (assetRebought[purchase.assetId] ?? 0) + purchase.quantity;
+            assetCostRebuy[purchase.assetId] = (assetCostRebuy[purchase.assetId] ?? 0) + purchase.amountEur;
+          }
+          treasury = consumeEurcForRebuy(treasury, residualResult.eurSpent);
+          totalRebuysEur += residualResult.eurSpent;
+          totalEurcReinvestedEur += residualResult.eurSpent;
+          const cr = cycleResultsMap.get(cycleId);
+          if (cr) {
+            cr.rebuysEur += residualResult.eurSpent;
+            cr.eurcUsedEur += residualResult.eurSpent;
+          }
+        }
+      }
+
       // --- Monthly contribution ---
-      const effectiveAlloc = computeEffectiveAllocation(cycle.assets, goalReachedAssets, currentDate, cycle.monthlyAmountEur);
+      // Exclude deteriorated/failed assets from contribution purchases per spec §8
+      const healthyAssets = cycle.assets.filter(a =>
+        !failedAssets.has(a.assetId) && !deterioratedAssets.has(a.assetId)
+      );
+      const effectiveAlloc = computeEffectiveAllocation(healthyAssets, goalReachedAssets, currentDate, cycle.monthlyAmountEur);
 
       const { allocations, events: contribEvents, totalSpentEur } = simulateMonthlyContribution(
         currentDate, cycleId,
@@ -623,6 +716,10 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
     ? buildRebuysZeroExplanation(eurcAvailable(treasury), lastSalePriceByAsset, prices)
     : undefined;
 
+  const reinvestmentRate = totalEurcGeneratedEur > 0
+    ? Math.round((totalEurcReinvestedEur / totalEurcGeneratedEur) * 10_000) / 10_000
+    : null;
+
   const summary: ProjectionSummary = {
     scenario,
     horizonDate: effectiveHorizon,
@@ -650,6 +747,11 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
     finalEurcAvailableEur: lastPeriod?.eurcAvailableEur ?? 0,
     finalFiscalReserveEur: lastPeriod?.fiscalReserveEur ?? 0,
     finalCashEur: lastPeriod?.cashEur ?? 0,
+    totalEurcGeneratedEur: Math.round(totalEurcGeneratedEur * 100) / 100,
+    totalEurcReinvestedEur: Math.round(totalEurcReinvestedEur * 100) / 100,
+    reinvestmentRate,
+    totalLossesEur: Math.round(totalLossesEur * 100) / 100,
+    failedAssets: Array.from(failedAssets),
     probability: scenarioHypotheses.probability,
     confidence: scenarioHypotheses.confidence,
     confidenceFactors,

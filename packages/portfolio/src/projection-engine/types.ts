@@ -410,7 +410,7 @@ export interface ProjectionLot {
   quantity: number;
   costPerUnitEur: number;
   remaining: number;
-  source: "historical" | "projection_contribution" | "projection_rebuy";
+  source: "historical" | "projection_contribution" | "projection_rebuy" | "projection_residual_reinvestment";
 }
 
 // ── Eventos proyectados ───────────────────────────────────────────────────────
@@ -421,6 +421,8 @@ export type ProjectionEventType =
   | "buy"
   | "partial_sale"
   | "rebuy"
+  | "sale"
+  | "asset_failure"
   | "goal_reached"
   | "redistribution"
   | "substitution"
@@ -614,6 +616,13 @@ export interface ProjectionSummary {
   finalEurcAvailableEur: number;
   finalFiscalReserveEur: number;
   finalCashEur: number;
+
+  // EURC flow tracking (reinversión total)
+  totalEurcGeneratedEur: number;
+  totalEurcReinvestedEur: number;
+  reinvestmentRate: number | null;  // % of EURC reinvested (should be ~100%)
+  totalLossesEur: number;           // losses from failed/written-off assets
+  failedAssets: string[];           // assets that reached 0 value
 
   probability: number | null;
   confidence: number | null;
