@@ -1215,14 +1215,9 @@ function setupIpcHandlers() {
 
     async function loadPricesForAsset(assetId: string): Promise<void> {
       if (assetId === "EURC") {
-        // EURC is EUR-pegged stablecoin: 1 EURC = 1.000 EUR at all times.
-        // No market-price fetch needed; return two anchor points so binary
-        // search in priceAtOrBefore always finds a valid price for any grid ts.
-        const now = Date.now();
-        pricesByAsset[assetId] = [{ time: 0, price: 1.0 }, { time: now, price: 1.0 }];
+        // EURC is EUR-pegged: price handled directly in valueAtMs as 1.0 EUR.
+        // No market-price fetch or anchor points needed here.
         priceSourceByAsset[assetId] = "eur-peg";
-        marketPointCountByAsset[assetId] = 2;
-        totalPricePoints += 2;
         return;
       }
       if (marketPeriod) {
@@ -1349,6 +1344,12 @@ function setupIpcHandlers() {
         const qty = getQtyAt(assetEvents[assetId] ?? [], ts);
         if (qty <= 0) continue;
         hasHolding = true;
+        // EURC is EUR-pegged: 1 EURC = 1.000 EUR at all historical timestamps.
+        // Bypass priceAtOrBefore (which would reject time=0 via maxPriceCarryMs).
+        if (assetId === "EURC") {
+          totalValue += qty * 1.0;
+          continue;
+        }
         const prices = pricesByAsset[assetId];
         if (!prices || prices.length === 0) {
           complete = false;

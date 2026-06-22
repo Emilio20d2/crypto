@@ -23,8 +23,10 @@ export function formatCrypto(value: number | null | undefined, fallback = "No di
 
 export function formatPercent(value: number | null | undefined, fallback = "No disponible en Coinbase") {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
-  const normalized = Math.abs(value) <= 1 ? value * 100 : value;
-  return `${normalized >= 0 ? "+" : ""}${normalized.toLocaleString("es-ES", { maximumFractionDigits: 2 })}%`;
+  // Value is always in percentage points (e.g. 3.49 = +3.49%) as supplied
+  // by Coinbase's price_percentage_change_24h or by pointChange().
+  // No ×100 normalization: that would corrupt values between -1 % and +1 %.
+  return `${value >= 0 ? "+" : ""}${value.toLocaleString("es-ES", { maximumFractionDigits: 2 })}%`;
 }
 
 export function formatAllocation(value: number | null | undefined) {

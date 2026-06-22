@@ -1106,7 +1106,7 @@ dd {
 
 .portfolio-metrics {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: var(--panel-gap);
 }
 
@@ -1168,6 +1168,14 @@ dd {
 .portfolio-metric--hero strong {
   font-size: 28px;
   letter-spacing: -0.03em;
+}
+
+/* Scope annotation inside metric label ("Sólo criptomonedas") */
+.portfolio-metric-scope {
+  font-style: normal;
+  opacity: 0.65;
+  font-size: 10px;
+  font-weight: 500;
 }
 
 /* Sub-line inside hero card (e.g. variation 24h below the balance) */
@@ -3591,6 +3599,7 @@ dd {
     grid-template-columns: 1fr;
   }
 
+  /* 5 secondary metrics → 3 + 2: better than auto-fill 4+1 at this width */
   .portfolio-metrics {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -4021,8 +4030,9 @@ dd {
     grid-template-columns: 1fr 1fr;
   }
 
+  /* 5 secondary metrics → 3 + 2 at small screens; avoids 2+2+1 (Activos alone) */
   .portfolio-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .portfolio-metric--hero {
@@ -4159,6 +4169,16 @@ dd {
 
   .portfolio-metric--hero strong {
     font-size: 20px;
+  }
+
+  /* At 430px, 3 columns are too cramped — switch to 2 columns.
+     The 6th child (5th secondary = Activos) spans both columns so no
+     card sits alone in a row with wasted space. */
+  .portfolio-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .portfolio-metrics > .portfolio-metric:nth-child(6) {
+    grid-column: 1 / -1;
   }
 
   /* 2 columns get too narrow for labels like "Dominancia BTC" below 430px —

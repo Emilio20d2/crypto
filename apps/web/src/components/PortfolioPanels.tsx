@@ -126,24 +126,27 @@ export function PortfolioMetrics({
   const secondaryMetrics = [
     {
       label: "Beneficio / Pérdida",
+      sublabel: "Sólo criptomonedas",
       value: formatMoneyCompact(performance),
       tone: performance != null && performance < 0 ? "negative" : "positive",
       icon: TrendingUp,
     },
     {
       label: "Variación 24 h",
+      sublabel: undefined as string | undefined,
       value: formatPercentPoints(variation24hPercent, "En cálculo"),
       tone: variation24h != null && variation24h < 0 ? "negative" : "positive",
       icon: TrendingUp,
     },
-    { label: "Total invertido", value: formatMoneyCompact(totalInvested), icon: Database },
+    { label: "Total invertido", sublabel: undefined as string | undefined, value: formatMoneyCompact(totalInvested), icon: Database },
     {
       label: "Reserva EURC",
+      sublabel: undefined as string | undefined,
       value: eurcTotalEur != null ? formatMoneyCompact(eurcTotalEur) : "Sin reserva",
       tone: undefined as string | undefined,
       icon: Database,
     },
-    { label: "Activos", value: positionsCount.toLocaleString("es-ES"), icon: ShieldCheck },
+    { label: "Activos", sublabel: undefined as string | undefined, value: positionsCount.toLocaleString("es-ES"), icon: ShieldCheck },
   ];
 
   return (
@@ -161,11 +164,11 @@ export function PortfolioMetrics({
         )}
       </div>
 
-      {/* Secondary metrics — auto-fill grid, compact format */}
-      {secondaryMetrics.map(({ label, value, tone, icon: Icon }) => (
+      {/* Secondary metrics — explicit 5-column grid, compact format */}
+      {secondaryMetrics.map(({ label, sublabel, value, tone, icon: Icon }) => (
         <div className="portfolio-metric" key={label}>
           <Icon size={15} />
-          <span>{label}</span>
+          <span>{label}{sublabel ? <em className="portfolio-metric-scope"> · {sublabel}</em> : null}</span>
           <strong className={tone ? `text-${tone}` : ""}>{value}</strong>
         </div>
       ))}
