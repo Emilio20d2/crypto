@@ -4,6 +4,13 @@ export const eurFormatter = new Intl.NumberFormat("es-ES", {
   maximumFractionDigits: 2,
 });
 
+const eurFormatter4 = new Intl.NumberFormat("es-ES", {
+  style: "currency",
+  currency: "EUR",
+  minimumFractionDigits: 4,
+  maximumFractionDigits: 4,
+});
+
 export const compactEurFormatter = new Intl.NumberFormat("es-ES", {
   style: "currency",
   currency: "EUR",
@@ -12,7 +19,8 @@ export const compactEurFormatter = new Intl.NumberFormat("es-ES", {
 });
 
 export function formatMoney(value: number | null | undefined, fallback = "No disponible en Coinbase") {
-  return typeof value === "number" && Number.isFinite(value) ? eurFormatter.format(value) : fallback;
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.abs(value) < 100 ? eurFormatter4.format(value) : eurFormatter.format(value);
 }
 
 export function formatCrypto(value: number | null | undefined, fallback = "No disponible en Coinbase") {

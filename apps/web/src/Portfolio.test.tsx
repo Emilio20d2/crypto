@@ -316,7 +316,7 @@ describe("Cartera Coinbase", () => {
     expect(screen.getAllByText(/^Invertido$/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/^Coste medio$/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/^Precio actual/i).length).toBeGreaterThan(0);
-    expect(screen.getByText("0,32 €")).toBeInTheDocument();
+    expect(screen.getByText("0,3210 €")).toBeInTheDocument();
     expect(screen.getByText("55.340,00 €")).toBeInTheDocument();
     expect(screen.queryByText(/FIFO/i)).not.toBeInTheDocument();
   });
