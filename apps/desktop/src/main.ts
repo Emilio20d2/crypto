@@ -4162,6 +4162,58 @@ function setupIpcHandlers() {
           cashEur: p.cashEur,
           eurcAvailableEur: p.eurcAvailableEur,
         })),
+        annualBreakdown: (() => {
+          // Group periods by calendar year and compute per-year deltas.
+          // Each row verifies: endWealthEur[Y] = inheritedWealthEur[Y+1]
+          const rows: {
+            year: number;
+            inheritedWealthEur: number;
+            contributionsEur: number;
+            salesEur: number;
+            rebuysEur: number;
+            taxEur: number;
+            marketGainEur: number;
+            endWealthEur: number;
+          }[] = [];
+          if (out.periods.length === 0) return rows;
+
+          // last period of each calendar year
+          const byYear = new Map<number, typeof out.periods[0]>();
+          for (const p of out.periods) {
+            const y = new Date(p.date).getUTCFullYear();
+            byYear.set(y, p); // keeps last period of each year
+          }
+
+          let prevWealth = out.summary.initialGrossWealthEur;
+          let prevFutureCapital = 0;
+          let prevSales = 0;
+          let prevRebuys = 0;
+          let prevTax = 0;
+
+          for (const [year, last] of [...byYear.entries()].sort((a, b) => a[0] - b[0])) {
+            const contributions = last.futureCapitalEur - prevFutureCapital;
+            const sales = last.totalSalesEur - prevSales;
+            const rebuys = last.totalRebuysEur - prevRebuys;
+            const tax = last.taxGeneratedEur - prevTax;
+            const marketGain = last.grossWealthEur - prevWealth - contributions;
+            rows.push({
+              year,
+              inheritedWealthEur: Math.round(prevWealth * 100) / 100,
+              contributionsEur: Math.round(contributions * 100) / 100,
+              salesEur: Math.round(sales * 100) / 100,
+              rebuysEur: Math.round(rebuys * 100) / 100,
+              taxEur: Math.round(tax * 100) / 100,
+              marketGainEur: Math.round(marketGain * 100) / 100,
+              endWealthEur: Math.round(last.grossWealthEur * 100) / 100,
+            });
+            prevWealth = last.grossWealthEur;
+            prevFutureCapital = last.futureCapitalEur;
+            prevSales = last.totalSalesEur;
+            prevRebuys = last.totalRebuysEur;
+            prevTax = last.taxGeneratedEur;
+          }
+          return rows;
+        })(),
         assetResults: out.assetResults.map(a => ({
           assetId: a.assetId,
           initialBalance: a.initialBalance,

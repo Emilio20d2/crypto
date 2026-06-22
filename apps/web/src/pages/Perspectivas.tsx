@@ -475,6 +475,79 @@ export function Perspectivas() {
                 </div>
               )}
 
+              {/* ── Evolución anual acumulada ── */}
+              {activeScenarioData && (activeScenarioData as any).annualBreakdown?.length > 0 && (
+                <details style={{ marginTop: "1rem" }}>
+                  <summary style={{ cursor: "pointer", fontSize: "0.85rem", fontWeight: 600, color: "var(--text-muted)", marginBottom: "0.5rem" }}>
+                    Evolución año a año — {activeScenarioData.label}
+                    <span className="text-muted" style={{ fontWeight: 400, marginLeft: "0.5rem" }}>
+                      (capital inicial heredado + ganancias acumuladas)
+                    </span>
+                  </summary>
+                  <div className="perspectives-cycle-table-wrapper">
+                    <table className="perspectives-cycle-table">
+                      <thead>
+                        <tr>
+                          <th>Año</th>
+                          <th className="text-right">Capital heredado</th>
+                          <th className="text-right">Aportaciones</th>
+                          <th className="text-right">Ganancia mercado</th>
+                          <th className="text-right">Ventas</th>
+                          <th className="text-right">Recompras</th>
+                          <th className="text-right">Impuestos</th>
+                          <th className="text-right" style={{ fontWeight: 700 }}>Capital final</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {((activeScenarioData as any).annualBreakdown as Array<{
+                          year: number;
+                          inheritedWealthEur: number;
+                          contributionsEur: number;
+                          salesEur: number;
+                          rebuysEur: number;
+                          taxEur: number;
+                          marketGainEur: number;
+                          endWealthEur: number;
+                        }>).map(row => (
+                          <tr key={row.year}>
+                            <td style={{ fontWeight: 600 }}>{row.year}</td>
+                            <td className="text-right text-muted">{fmt(row.inheritedWealthEur)}</td>
+                            <td className="text-right">{fmt(row.contributionsEur)}</td>
+                            <td className="text-right" style={{ color: row.marketGainEur >= 0 ? "var(--color-success, #10b981)" : "var(--color-negative, #ef4444)", fontWeight: 500 }}>
+                              {row.marketGainEur >= 0 ? "+" : ""}{fmt(row.marketGainEur)}
+                            </td>
+                            <td className="text-right text-muted">{row.salesEur > 0 ? fmt(row.salesEur) : "—"}</td>
+                            <td className="text-right text-muted">{row.rebuysEur > 0 ? fmt(row.rebuysEur) : "—"}</td>
+                            <td className="text-right text-muted">{row.taxEur > 0 ? fmt(row.taxEur) : "—"}</td>
+                            <td className="text-right" style={{ fontWeight: 700, color: SCENARIO_COLORS[activeScenario] }}>{fmt(row.endWealthEur)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr style={{ borderTop: "2px solid var(--color-border)", fontWeight: 700 }}>
+                          <td>Total</td>
+                          <td className="text-right text-muted">—</td>
+                          <td className="text-right">{fmt(activeScenarioData.summary.totalFutureCapitalEur)}</td>
+                          <td className="text-right" style={{ color: activeScenarioData.summary.estimatedMarketGainEur >= 0 ? "var(--color-success, #10b981)" : "var(--color-negative, #ef4444)" }}>
+                            {activeScenarioData.summary.estimatedMarketGainEur >= 0 ? "+" : ""}{fmt(activeScenarioData.summary.estimatedMarketGainEur)}
+                          </td>
+                          <td className="text-right text-muted">{fmt(activeScenarioData.cycleResults.reduce((a: number, c: any) => a + c.salesEur, 0))}</td>
+                          <td className="text-right text-muted">{fmt(activeScenarioData.cycleResults.reduce((a: number, c: any) => a + c.rebuysEur, 0))}</td>
+                          <td className="text-right text-muted">{fmt(activeScenarioData.summary.totalTaxGeneratedEur)}</td>
+                          <td className="text-right" style={{ color: SCENARIO_COLORS[activeScenario] }}>{fmt(activeScenarioData.summary.finalGrossWealthEur)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                    <p style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: "0.4rem" }}>
+                      Capital heredado de cada año = Capital final del año anterior · La ganancia de mercado incluye apreciación de posiciones históricas y nuevas aportaciones ·
+                      {simulationPolicy === "confirmed_plus_proposals" || simulationPolicy === "full_strategy"
+                        ? " Ventas/recompras incluyen propuestas según analistas."
+                        : " Política actual no incluye propuestas hipotéticas."}
+                    </p>
+                  </div>
+                </details>
+              )}
+
               {/* ── Comparativa compacta de todos los escenarios ── */}
               <div className="perspectives-cycle-table-wrapper" style={{ marginTop: "1rem" }}>
                 <table className="perspectives-cycle-table">
