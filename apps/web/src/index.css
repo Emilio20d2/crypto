@@ -5579,3 +5579,93 @@ dd {
 }
 
 /* ─── End Perspectivas ─── */
+
+/* ═══ Trade Alerts Banner ═══════════════════════════════════════════════════ */
+.trade-alerts-banner {
+  margin: 0 0 1rem 0;
+  border: 1.5px solid var(--color-warning, #f59e0b);
+  border-radius: var(--radius-card, 10px);
+  background: color-mix(in srgb, var(--color-warning, #f59e0b) 8%, var(--bg-surface));
+  overflow: hidden;
+  font-size: 0.85rem;
+}
+.trade-alerts-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: color-mix(in srgb, var(--color-warning, #f59e0b) 15%, var(--bg-surface));
+  border-bottom: 1px solid color-mix(in srgb, var(--color-warning, #f59e0b) 30%, transparent);
+}
+.trade-alerts-title {
+  font-weight: 700;
+  font-size: 0.88rem;
+  flex: 1;
+}
+.trade-alerts-time {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.trade-alerts-dismiss {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1.1rem;
+  color: var(--text-muted);
+  padding: 0 0.25rem;
+  line-height: 1;
+}
+.trade-alerts-dismiss:hover { color: var(--text-primary); }
+
+.trade-alerts-section { padding: 0.6rem 0.75rem; }
+.trade-alerts-section + .trade-alerts-section {
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+}
+.trade-alerts-section-title {
+  font-weight: 700;
+  font-size: 0.82rem;
+  margin-bottom: 0.4rem;
+}
+.trade-alerts-sell-title  { color: var(--color-success, #10b981); }
+.trade-alerts-rebuy-title { color: var(--color-primary, #6366f1); }
+
+.trade-alerts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.trade-alerts-table th {
+  font-weight: 600;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  padding: 0.2rem 0.4rem;
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+.trade-alerts-table td {
+  padding: 0.3rem 0.4rem;
+  vertical-align: middle;
+}
+.trade-alerts-table tbody tr:hover { background: color-mix(in srgb, var(--color-warning, #f59e0b) 6%, transparent); }
+
+.trade-alerts-asset { display: flex; align-items: center; gap: 0.35rem; }
+.trade-alerts-tier {
+  font-size: 0.68rem;
+  font-weight: 700;
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+.trade-alerts-tier-sell  { background: color-mix(in srgb, var(--color-success, #10b981) 15%, transparent); color: var(--color-success, #10b981); }
+.trade-alerts-tier-rebuy { background: color-mix(in srgb, var(--color-primary, #6366f1) 15%, transparent); color: var(--color-primary, #6366f1); }
+.trade-alerts-gain   { color: var(--color-success, #10b981); font-weight: 600; }
+.trade-alerts-drop   { color: var(--color-negative, #ef4444); font-weight: 600; }
+.trade-alerts-amount { font-weight: 700; }
+.trade-alerts-pct    { font-size: 0.72rem; color: var(--text-muted); }
+.trade-alerts-note {
+  font-size: 0.70rem;
+  color: var(--text-muted);
+  margin-top: 0.3rem;
+}
+/* ═══ End Trade Alerts ═══════════════════════════════════════════════════════ */

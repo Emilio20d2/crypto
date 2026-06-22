@@ -2,6 +2,7 @@ import { useState, type ComponentType, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { Menu, X } from "lucide-react";
 import logoUrl from "../assets/logo.png";
+import { TradeAlerts } from "./TradeAlerts";
 
 export type NavigationItem = {
   to: string;
@@ -94,7 +95,10 @@ export function AppShell({ items, children }: { items: NavigationItem[]; childre
       <NativeSidebar items={items} />
       <MobileTopbar activeLabel={activeItem?.label ?? "Crypto Control"} onOpen={() => setSidebarOpen(true)} />
       <main className="app-main">
-        <div className="content-frame">{children}</div>
+        <div className="content-frame">
+          <TradeAlerts />
+          {children}
+        </div>
       </main>
       <MobileSidebarDrawer items={items} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       {isElectron && <MobileNavigation items={items} />}

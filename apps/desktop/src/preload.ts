@@ -177,6 +177,14 @@ const cryptoControl = {
   planMonitoring: {
     getSummary: (input: unknown) => ipcRenderer.invoke("planMonitoring:getSummary", input),
   },
+  trade: {
+    getAlerts: () => ipcRenderer.invoke("trade:get-alerts"),
+    onNewAlerts: (cb: (alerts: unknown) => void) => {
+      const handler = (_: unknown, alerts: unknown) => cb(alerts);
+      ipcRenderer.on("trade:new-alerts", handler);
+      return () => ipcRenderer.removeListener("trade:new-alerts", handler);
+    },
+  },
   treasury: {
     getSummary:           ()                                      => ipcRenderer.invoke("treasury:getSummary"),
     listMovements:        ()                                      => ipcRenderer.invoke("treasury:listMovements"),

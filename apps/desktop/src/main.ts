@@ -4974,6 +4974,193 @@ function setupIpcHandlers() {
   });
   app.on("will-quit", () => apiServer.close());
 
+  // ── Trade alerts ──────────────────────────────────────────────────────────
+
+  interface SellAlert {
+    assetId: string;
+    currentPriceEur: number;
+    avgCostEur: number;
+    gainPct: number;
+    suggestedSellPct: number;   // fraction of position (e.g. 0.10)
+    suggestedQtyUnits: number;
+    suggestedAmountEur: number;
+    tier: 50 | 100 | 200;
+  }
+  interface RebuyAlert {
+    assetId: string;
+    currentPriceEur: number;
+    lastSalePriceEur: number;
+    drawdownPct: number;
+    eurcToUseEur: number;       // EUR to deploy in this tier
+    suggestedQtyUnits: number;
+    tier: 15 | 25 | 40;
+  }
+  interface TradeAlertsResult {
+    sellAlerts: SellAlert[];
+    rebuyAlerts: RebuyAlert[];
+    eurcAvailableEur: number;
+    checkedAt: number;
+  }
+
+  const SELL_TIERS: { gainPct: number; sellPct: number; tier: 50 | 100 | 200 }[] = [
+    { gainPct: 200, sellPct: 0.20, tier: 200 },
+    { gainPct: 100, sellPct: 0.15, tier: 100 },
+    { gainPct:  50, sellPct: 0.10, tier:  50 },
+  ];
+  const REBUY_TIERS: { drawdownPct: number; eurcPct: number; tier: 15 | 25 | 40 }[] = [
+    { drawdownPct: 40, eurcPct: 0.50, tier: 40 },
+    { drawdownPct: 25, eurcPct: 0.30, tier: 25 },
+    { drawdownPct: 15, eurcPct: 0.20, tier: 15 },
+  ];
+
+  async function computeTradeAlerts(): Promise<TradeAlertsResult> {
+    const db = getDb();
+    const now = Date.now();
+
+    // 1. Portfolio positions (balance + avg cost)
+    const posResult = await getPortfolioService().getPositions().catch(() => ({ positions: {} }));
+    const positions = posResult.positions as Record<string, { balance: number; averagePriceEur: number | null }>;
+
+    // 2. Current prices (fast cached)
+    const assetIds = Object.keys(positions).filter(id => (positions[id].balance ?? 0) > 1e-12 && id !== "EURC");
+    const priceMap: Record<string, number | null> = {};
+    await Promise.all(
+      assetIds.map(async id => {
+        const r = await getCurrentPriceFast(id).catch(() => null);
+        priceMap[id] = r?.price ?? null;
+      })
+    );
+
+    // 3. Last sale price per asset (from realizedGains, most recent per assetId)
+    const allGains = db.select().from(schema.realizedGains).orderBy(desc(schema.realizedGains.date)).all();
+    const lastSalePriceByAsset: Record<string, number> = {};
+    for (const g of allGains) {
+      if (!lastSalePriceByAsset[g.assetId] && g.amountSold > 0) {
+        lastSalePriceByAsset[g.assetId] = g.saleValueEur / g.amountSold;
+      }
+    }
+
+    // 4. EURC available (from treasury)
+    const coinbaseEurc = getCoinbaseEurcBalance?.() ?? 0;
+    const treasurySummary = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), coinbaseEurc);
+    const eurcAvailableEur = Math.max(0, (treasurySummary as any).eurcAvailableEur ?? 0);
+
+    const sellAlerts: SellAlert[] = [];
+    const rebuyAlerts: RebuyAlert[] = [];
+
+    for (const assetId of assetIds) {
+      const pos = positions[assetId];
+      const price = priceMap[assetId];
+      if (price == null || price <= 0) continue;
+      const avgCost = pos.averagePriceEur;
+      if (avgCost == null || avgCost <= 0) continue;
+      const balance = pos.balance;
+      if (balance < 1e-12) continue;
+
+      // Sell alerts
+      const gainPct = (price / avgCost - 1) * 100;
+      for (const t of SELL_TIERS) {
+        if (gainPct >= t.gainPct) {
+          const qty = balance * t.sellPct;
+          sellAlerts.push({
+            assetId,
+            currentPriceEur: price,
+            avgCostEur: avgCost,
+            gainPct,
+            suggestedSellPct: t.sellPct,
+            suggestedQtyUnits: qty,
+            suggestedAmountEur: qty * price,
+            tier: t.tier,
+          });
+          break; // only highest tier per asset
+        }
+      }
+
+      // Rebuy alerts
+      const lastSalePrice = lastSalePriceByAsset[assetId] ?? null;
+      if (lastSalePrice != null && lastSalePrice > 0 && price < lastSalePrice && eurcAvailableEur > 0) {
+        const drawdownPct = (lastSalePrice - price) / lastSalePrice * 100;
+        for (const t of REBUY_TIERS) {
+          if (drawdownPct >= t.drawdownPct) {
+            const eurcToUse = eurcAvailableEur * t.eurcPct;
+            rebuyAlerts.push({
+              assetId,
+              currentPriceEur: price,
+              lastSalePriceEur: lastSalePrice,
+              drawdownPct,
+              eurcToUseEur: eurcToUse,
+              suggestedQtyUnits: eurcToUse / price,
+              tier: t.tier,
+            });
+            break; // only highest tier per asset
+          }
+        }
+      }
+    }
+
+    return { sellAlerts, rebuyAlerts, eurcAvailableEur, checkedAt: now };
+  }
+
+  ipcMain.handle("trade:get-alerts", withResult(async () => computeTradeAlerts()));
+
+  // Background checker: every 15 minutes; OS notification + IPC push on new alerts
+  const { Notification } = require("electron") as typeof import("electron");
+  const notifiedSellKeys = new Set<string>();
+  const notifiedRebuyKeys = new Set<string>();
+
+  async function runTradeAlertCheck() {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    try {
+      const result = await computeTradeAlerts();
+
+      for (const a of result.sellAlerts) {
+        const key = `sell-${a.assetId}-${a.tier}`;
+        if (!notifiedSellKeys.has(key)) {
+          notifiedSellKeys.add(key);
+          new Notification({
+            title: `📈 Venta parcial recomendada: ${a.assetId}`,
+            body: `+${a.gainPct.toFixed(0)}% de ganancia → vender ${(a.suggestedSellPct * 100).toFixed(0)}% (${a.suggestedQtyUnits.toFixed(6)} ${a.assetId} ≈ ${a.suggestedAmountEur.toFixed(2)} €)`,
+            silent: false,
+          }).show();
+        }
+      }
+
+      for (const a of result.rebuyAlerts) {
+        const key = `rebuy-${a.assetId}-${a.tier}`;
+        if (!notifiedRebuyKeys.has(key)) {
+          notifiedRebuyKeys.add(key);
+          new Notification({
+            title: `📉 Recompra recomendada: ${a.assetId}`,
+            body: `-${a.drawdownPct.toFixed(0)}% desde última venta → usar ${a.eurcToUseEur.toFixed(2)} € EURC (${a.suggestedQtyUnits.toFixed(6)} ${a.assetId})`,
+            silent: false,
+          }).show();
+        }
+      }
+
+      // Clear "notified" keys when the condition is no longer active, so future alerts fire again
+      for (const key of [...notifiedSellKeys]) {
+        const [, assetId, tierStr] = key.split("-");
+        const still = result.sellAlerts.some(a => a.assetId === assetId && String(a.tier) === tierStr);
+        if (!still) notifiedSellKeys.delete(key);
+      }
+      for (const key of [...notifiedRebuyKeys]) {
+        const parts = key.split("-"); // rebuy-ASSETID-TIER
+        const assetId = parts[1];
+        const tierStr = parts[2];
+        const still = result.rebuyAlerts.some(a => a.assetId === assetId && String(a.tier) === tierStr);
+        if (!still) notifiedRebuyKeys.delete(key);
+      }
+
+      mainWindow.webContents.send("trade:new-alerts", result);
+    } catch (e) {
+      console.error("[TradeAlerts] check failed:", e);
+    }
+  }
+
+  // Run immediately on startup (delayed 30s to let prices load) then every 15 min
+  setTimeout(() => runTradeAlertCheck(), 30_000);
+  setInterval(() => runTradeAlertCheck(), 15 * 60 * 1000);
+
 }
 
 function createWindow() {
