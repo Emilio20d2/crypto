@@ -136,6 +136,7 @@ export interface DiagnosticsReport {
 export interface ProjectionScenarioResult {
   scenario: "conservador" | "moderado" | "base" | "favorable" | "muy_favorable" | "optimista" | "dinamico";
   label: string;
+  description?: string;
   probability: number | null;
   confidence: number | null;
   summary: {
@@ -435,7 +436,7 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
     updateGoal: (id: string, data: Partial<CreatePerspectivesGoalInput>) => Promise<Result<PerspectivesGoal>>;
     deleteGoal: (id: string) => Promise<Result<null>>;
     getConsolidatedSnapshot: () => Promise<Result<PlanConsolidatedSnapshot>>;
-    getProjection: (input?: { horizonYears?: number; complianceRate?: number }) => Promise<Result<ProjectionResult>>;
+    getProjection: (input?: { horizonYears?: number; complianceRate?: number; simulationPolicy?: string }) => Promise<Result<ProjectionResult>>;
   };
   smartBuy: {
     getRecommendation: (input: { cycleId: string; amount: number; mode?: SmartBuyMode; originType?: "cash" | "eurc"; weights?: { planPct?: number; balancePct?: number; opportunityPct?: number; potentialPct?: number }; horizon?: "1-3y" | "3-5y" | "5y+" }) => Promise<Result<SmartBuyRecommendation>>;

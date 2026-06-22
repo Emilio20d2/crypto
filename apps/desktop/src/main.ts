@@ -4022,19 +4022,21 @@ function setupIpcHandlers() {
     return await buildPerspectivesSnapshot();
   }));
 
-  ipcMain.handle("perspectives:getProjection", withResult(async (_, input?: { horizonYears?: number; complianceRate?: number }) => {
+  ipcMain.handle("perspectives:getProjection", withResult(async (_, input?: { horizonYears?: number; complianceRate?: number; simulationPolicy?: string }) => {
     const { runAllScenarios, compareScenarios, SPANISH_FISCAL_CONFIG_2024 } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
     const now = Date.now();
     const horizonYears = Math.min(Math.max(input?.horizonYears ?? 10, 1), 30);
     const horizonDate = now + horizonYears * 365.25 * 24 * 3600 * 1000;
     const complianceRate = Math.min(Math.max(input?.complianceRate ?? 1.0, 0), 1);
+    const VALID_POLICIES = new Set(["plan_base", "confirmed_only", "confirmed_plus_proposals", "full_strategy"]);
+    const simulationPolicy = VALID_POLICIES.has(input?.simulationPolicy ?? "") ? input!.simulationPolicy! : "confirmed_plus_proposals";
     const snapshot = await buildPerspectivesSnapshot(now);
     const dynamicFactors = await getProjectionDynamicFactors();
 
     const scenarioSet = runAllScenarios(
       snapshot,
       horizonDate,
-      { complianceRate, projectExtraordinaryContributions: true },
+      { complianceRate, projectExtraordinaryContributions: true, simulationPolicy: simulationPolicy as any },
       SPANISH_FISCAL_CONFIG_2024,
       now,
       dynamicFactors,
