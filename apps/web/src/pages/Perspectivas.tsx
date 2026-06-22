@@ -489,13 +489,14 @@ export function Perspectivas() {
                       <thead>
                         <tr>
                           <th>Año</th>
-                          <th className="text-right">Capital heredado</th>
+                          <th className="text-right">Capital inicial ↓</th>
                           <th className="text-right">Aportaciones</th>
                           <th className="text-right">Ganancia mercado</th>
+                          <th className="text-right">% año</th>
                           <th className="text-right">Ventas</th>
                           <th className="text-right">Recompras</th>
                           <th className="text-right">Impuestos</th>
-                          <th className="text-right" style={{ fontWeight: 700 }}>Capital final</th>
+                          <th className="text-right" style={{ fontWeight: 700 }}>Capital final ↓</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -508,6 +509,7 @@ export function Perspectivas() {
                           taxEur: number;
                           marketGainEur: number;
                           endWealthEur: number;
+                          annualGrowthPct: number | null;
                           scope?: "plan" | "extrapol";
                         }>).map((row, idx, arr) => {
                           const prevScope = idx > 0 ? arr[idx - 1].scope : undefined;
@@ -534,6 +536,16 @@ export function Perspectivas() {
                                 <td className="text-right" style={{ color: row.marketGainEur >= 0 ? "var(--color-success, #10b981)" : "var(--color-negative, #ef4444)", fontWeight: 500 }}>
                                   {row.marketGainEur >= 0 ? "+" : ""}{fmt(row.marketGainEur)}
                                 </td>
+                                <td className="text-right" style={{
+                                  fontWeight: 700,
+                                  color: row.annualGrowthPct == null ? "var(--text-muted)"
+                                    : row.annualGrowthPct >= 0 ? "var(--color-success, #10b981)"
+                                    : "var(--color-negative, #ef4444)",
+                                }}>
+                                  {row.annualGrowthPct != null
+                                    ? `${row.annualGrowthPct >= 0 ? "+" : ""}${row.annualGrowthPct.toFixed(1)}%`
+                                    : "—"}
+                                </td>
                                 <td className="text-right text-muted">{row.salesEur > 0 ? fmt(row.salesEur) : "—"}</td>
                                 <td className="text-right text-muted">{row.rebuysEur > 0 ? fmt(row.rebuysEur) : "—"}</td>
                                 <td className="text-right text-muted">{row.taxEur > 0 ? fmt(row.taxEur) : "—"}</td>
@@ -551,6 +563,11 @@ export function Perspectivas() {
                           <td className="text-right" style={{ color: activeScenarioData.summary.estimatedMarketGainEur >= 0 ? "var(--color-success, #10b981)" : "var(--color-negative, #ef4444)" }}>
                             {activeScenarioData.summary.estimatedMarketGainEur >= 0 ? "+" : ""}{fmt(activeScenarioData.summary.estimatedMarketGainEur)}
                           </td>
+                          <td className="text-right text-muted" title="XIRR del escenario">
+                            {(activeScenarioData.summary as any).xirrAnnual != null
+                              ? `${((activeScenarioData.summary as any).xirrAnnual * 100).toFixed(1)}%`
+                              : "—"}
+                          </td>
                           <td className="text-right text-muted">{fmt(activeScenarioData.cycleResults.reduce((a: number, c: any) => a + c.salesEur, 0))}</td>
                           <td className="text-right text-muted">{fmt(activeScenarioData.cycleResults.reduce((a: number, c: any) => a + c.rebuysEur, 0))}</td>
                           <td className="text-right text-muted">{fmt(activeScenarioData.summary.totalTaxGeneratedEur)}</td>
@@ -559,14 +576,17 @@ export function Perspectivas() {
                       </tfoot>
                     </table>
                     <p style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: "0.4rem" }}>
-                      Capital heredado de cada año = Capital final del año anterior · La ganancia de mercado incluye apreciación de posiciones históricas y nuevas aportaciones ·
+                      <strong>↓ Capital inicial = Capital final del año anterior</strong> (compounding explícito) ·
+                      La columna <strong>% año</strong> es el rendimiento total del patrimonio acumulado ese año
+                      (ganancia mercado + recompras − impuestos sobre capital inicial) ·
+                      El escenario modela fases de ciclo de halving: bulls (+) y correcciones (−) ·
                       {simulationPolicy === "confirmed_plus_proposals" || simulationPolicy === "full_strategy"
                         ? " Ventas/recompras incluyen propuestas según analistas."
-                        : " Política actual no incluye propuestas hipotéticas."}
+                        : " Política sin propuestas hipotéticas."}
                       {activeScenario === "dinamico"
-                        ? " El escenario Dinámico usa sentimiento real por activo (tendencia 7d/30d + Fear & Greed) para calibrar las tasas de mercado."
+                        ? " Dinámico: tasas calibradas con sentimiento real por activo (7d/30d + Fear & Greed)."
                         : ""}
-                      {" › indica años fuera del horizonte del plan configurado (extrapolación libre)."}
+                      {" › = extrapolación libre fuera del plan configurado."}
                     </p>
                   </div>
                 </details>

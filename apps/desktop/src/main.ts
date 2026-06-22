@@ -4205,7 +4205,8 @@ function setupIpcHandlers() {
             taxEur: number;
             marketGainEur: number;
             endWealthEur: number;
-            scope: "plan" | "extrapol"; // within configured plan vs open projection
+            annualGrowthPct: number | null; // (endWealth - inheritedWealth) / inheritedWealth × 100
+            scope: "plan" | "extrapol";
           }[] = [];
           if (out.periods.length === 0) return rows;
 
@@ -4229,6 +4230,13 @@ function setupIpcHandlers() {
             const tax = last.taxGeneratedEur - prevTax;
             const marketGain = last.grossWealthEur - prevWealth - contributions;
             const yearEndMs = new Date(Date.UTC(year, 11, 31)).getTime();
+            // annualGrowthPct = total return on starting capital for the year
+            // = (endWealth - inheritedWealth) / inheritedWealth × 100
+            // This makes compounding explicit: each row's % is the return
+            // the accumulated portfolio earned IN THAT YEAR.
+            const annualGrowthPct = prevWealth > 0
+              ? Math.round(((last.grossWealthEur - prevWealth) / prevWealth) * 10000) / 100
+              : null;
             rows.push({
               year,
               inheritedWealthEur: Math.round(prevWealth * 100) / 100,
@@ -4238,6 +4246,7 @@ function setupIpcHandlers() {
               taxEur: Math.round(tax * 100) / 100,
               marketGainEur: Math.round(marketGain * 100) / 100,
               endWealthEur: Math.round(last.grossWealthEur * 100) / 100,
+              annualGrowthPct,
               scope: lastCycleEndMs > 0 && yearEndMs > lastCycleEndMs ? "extrapol" : "plan",
             });
             prevWealth = last.grossWealthEur;
