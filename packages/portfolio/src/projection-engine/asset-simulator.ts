@@ -15,6 +15,55 @@ import type { ScenarioHypotheses, AssetScenarioRates, ProjectionScenario } from 
 //   Total multiplier: 6.26× (cap 7× → no ceiling hit)
 //   vs old model:     1.35^10  = 20.1× ← was the root cause
 
+// ── Halving-cycle phase modulation ───────────────────────────────────────────
+//
+// Crypto prices don't rise smoothly — they follow a 4-year halving cycle with
+// a bull run followed by a bear correction. Without this modulation the price
+// path is monotonically increasing, which means rebuy tiers (which trigger on
+// drawdown from last sale price) would NEVER fire.
+//
+// Phase model (48-month cycle):
+//   Months  0-13: accumulation — price at trend (phase = 1.0)
+//   Months 13-30: bull run      — price rises to trend × (1 + corrDepth)
+//   Months 30-42: correction    — price falls to trend × (1 - corrDepth)
+//   Months 42-48: recovery      — price returns to trend × 1.0
+//
+// For base scenario (corrDepth=0.40):
+//   Peak = trend × 1.40, bottom = trend × 0.60 → realistic ~57% peak-to-trough.
+// The long-run average multiplier ≈ 1.0 (corrections balance out bull gains over
+// many full cycles), so the terminal wealth is not inflated.
+function cyclePhaseMultiplier(
+  totalMonthsElapsed: number,
+  cycleLen: number,   // years per cycle (default 4)
+  corrDepth: number,  // CORRECTION_DEPTHS value, 0.25-0.55
+): number {
+  const cycleMonths = Math.round(cycleLen * 12);
+  const m = Math.round(totalMonthsElapsed) % cycleMonths;
+
+  // Phase boundaries expressed as integer months:
+  const BULL_START = Math.round(cycleMonths * 0.27);  // ~13 months
+  const BULL_PEAK  = Math.round(cycleMonths * 0.63);  // ~30 months
+  const CORR_END   = Math.round(cycleMonths * 0.88);  // ~42 months
+
+  if (m <= BULL_START) {
+    // Accumulation: at trend
+    return 1.0;
+  }
+  if (m <= BULL_PEAK) {
+    // Bull run: rises sinusoidally from 1.0 to (1 + corrDepth)
+    const t = (m - BULL_START) / (BULL_PEAK - BULL_START);
+    return 1.0 + corrDepth * Math.sin(t * Math.PI / 2);
+  }
+  if (m <= CORR_END) {
+    // Correction: falls linearly from (1 + corrDepth) to (1 - corrDepth)
+    const t = (m - BULL_PEAK) / (CORR_END - BULL_PEAK);
+    return (1 + corrDepth) - 2 * corrDepth * t;
+  }
+  // Recovery: rises linearly from (1 - corrDepth) to 1.0
+  const t = (m - CORR_END) / (cycleMonths - CORR_END);
+  return (1 - corrDepth) + corrDepth * t;
+}
+
 export function projectAssetPrice(
   basePrice: number,
   assetId: string,
@@ -26,30 +75,38 @@ export function projectAssetPrice(
   if (targetDateMs <= baseDateMs) return basePrice;
 
   const rates = hypotheses.assetRates.find(r => r.assetId === assetId);
-  const initialRate  = rates?.annualGrowthRate   ?? hypotheses.defaultAnnualGrowthRate;
-  const decayFactor  = rates?.decayFactor         ?? 0.70;
-  const terminalRate = rates?.terminalAnnualRate   ?? 0.03;
-  const cycleLen     = rates?.cycleLengthYears     ?? 4;
-  const maxMult      = rates?.maxPriceMultiplier   ?? 5;
+  const initialRate    = rates?.annualGrowthRate   ?? hypotheses.defaultAnnualGrowthRate;
+  const decayFactor    = rates?.decayFactor         ?? 0.70;
+  const terminalRate   = rates?.terminalAnnualRate   ?? 0.03;
+  const cycleLen       = rates?.cycleLengthYears     ?? 4;
+  const maxMult        = rates?.maxPriceMultiplier   ?? 5;
+  const corrDepth      = rates?.correctionDepth      ?? 0.35;
 
   const yearsTotal = (targetDateMs - baseDateMs) / (365.25 * 24 * 3600 * 1000);
-  let price = basePrice;
+
+  // Compute fundamental trend price (same formula as before)
+  let trend = basePrice;
   let yearsLeft = yearsTotal;
   let cycleIndex = 0;
-
   while (yearsLeft > 1e-9) {
     const cycleYears = Math.min(cycleLen, yearsLeft);
     const decayed = initialRate * Math.pow(decayFactor, cycleIndex);
-    // Terminal floor only applies when initial rate is positive (decay toward maturity).
-    // Negative rates (explicitly set for stress-tests) are not clamped upward.
     const rate = initialRate > 0 ? Math.max(decayed, terminalRate) : decayed;
-    price *= Math.pow(1 + rate, cycleYears);
+    trend *= Math.pow(1 + rate, cycleYears);
     yearsLeft -= cycleYears;
     cycleIndex++;
   }
 
+  // Apply halving-cycle phase modulation only for meaningful projections.
+  // Scenario "cero" uses corrDepth=0 by convention (set in buildZeroGrowthHypotheses).
+  const phase = corrDepth > 0
+    ? cyclePhaseMultiplier(yearsTotal * 12, cycleLen, corrDepth)
+    : 1.0;
+
+  const price = trend * phase;
+
   // Hard capitalisation ceiling
-  return Math.min(price, basePrice * maxMult);
+  return Math.min(Math.max(price, basePrice * 0.01), basePrice * maxMult);
 }
 
 export function getAssetAnnualRate(assetId: string, hypotheses: ScenarioHypotheses): number {

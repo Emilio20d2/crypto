@@ -31,7 +31,7 @@
       "node_modules/better-sqlite3/**/*"
     ],
     "mac": {
-      "icon": "../../assets/brand/logo-1024.png",
+      "icon": "../../assets/brand/logo.icns",
       "target": [
         "dmg"
       ],
