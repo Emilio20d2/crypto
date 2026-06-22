@@ -1,4 +1,4 @@
-import type { ProjectionInput, ProjectionOutput, ProjectionScenario, PlanConsolidatedSnapshot, FiscalConfig, ProjectionOptions } from "./types";
+import type { ProjectionInput, ProjectionOutput, ProjectionScenario, PlanConsolidatedSnapshot, FiscalConfig, ProjectionOptions, ScenarioOrderingViolation } from "./types";
 import { SPANISH_FISCAL_CONFIG_2024 } from "./types";
 import { buildDefaultHypotheses } from "./asset-simulator";
 import { runProjection } from "./projection-engine";
@@ -70,6 +70,28 @@ export function runAllScenarios(
   }
 
   return results as ScenarioSet;
+}
+
+export function validateScenarioOrdering(set: ScenarioSet): ScenarioOrderingViolation[] {
+  const order: Array<keyof ScenarioSet> = [
+    "conservador", "moderado", "base", "favorable", "muy_favorable", "optimista",
+  ];
+  const violations: ScenarioOrderingViolation[] = [];
+  for (let i = 0; i < order.length - 1; i++) {
+    const lower  = set[order[i]].summary.finalGrossWealthEur;
+    const higher = set[order[i + 1]].summary.finalGrossWealthEur;
+    if (higher < lower - 1.0) {
+      violations.push({
+        date: set[order[i + 1]].horizonDate,
+        lowerScenario: order[i + 1],
+        lowerValue: higher,
+        higherScenario: order[i],
+        higherValue: lower,
+        explanation: `${order[i+1]} (${higher.toFixed(0)}€) < ${order[i]} (${lower.toFixed(0)}€) — inversión injustificada`,
+      });
+    }
+  }
+  return violations;
 }
 
 export function compareScenarios(set: ScenarioSet): ScenarioComparison[] {
