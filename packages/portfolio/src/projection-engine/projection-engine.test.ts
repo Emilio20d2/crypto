@@ -76,6 +76,7 @@ function makeSnapshot(overrides: Partial<PlanConsolidatedSnapshot> = {}): PlanCo
     saleRules: [],
     rebuyTiers: [],
     substitutions: [],
+    strategyRevisions: [],
     treasury: {
       cashEur: 0,
       eurcEur: 0,

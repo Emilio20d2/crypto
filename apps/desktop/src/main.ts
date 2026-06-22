@@ -1001,12 +1001,25 @@ function setupIpcHandlers() {
       .map(([id]) => id);
     const totalAssets = assetIds.length || 1;
 
-    const lastRevision = cycleIds.length > 0
+    const strategyRevisionRows = cycleIds.length > 0
       ? db.select().from(schema.strategyRevisions)
         .where(inArray(schema.strategyRevisions.cycleId, cycleIds))
-        .orderBy(desc(schema.strategyRevisions.createdAt))
-        .get()
-      : null;
+        .orderBy(asc(schema.strategyRevisions.effectiveDate))
+        .all()
+      : [];
+    const strategyRevisions: import("@crypto-control/portfolio").SnapshotStrategyRevision[] =
+      strategyRevisionRows
+        .filter(r => r.effectiveDate != null && r.effectiveDate > now)
+        .map(r => ({
+          id: r.id,
+          cycleId: r.cycleId,
+          effectiveDate: r.effectiveDate!,
+          title: r.title,
+          notes: r.notes ?? null,
+          changesJson: r.changesJson ?? "{}",
+        }));
+
+    const lastRevision = strategyRevisionRows[strategyRevisionRows.length - 1] ?? null;
     const strategyVersion = lastRevision
       ? `multi-rev-${lastRevision.id.slice(0, 8)}`
       : `multi-${planIds.map(id => id.slice(0, 8)).join("-")}`;
@@ -1032,6 +1045,7 @@ function setupIpcHandlers() {
       saleRules,
       rebuyTiers,
       substitutions,
+      strategyRevisions,
       treasury: { cashEur, eurcEur, eurcAvailableEur, fiscalReserveEur, totalLiquidityEur: cashEur + eurcEur },
       prices,
       dataQuality: {
@@ -4281,12 +4295,14 @@ function setupIpcHandlers() {
           hypothesis: hypothesisByAsset.has(a.assetId)
             ? {
               annualGrowthRate: hypothesisByAsset.get(a.assetId)!.annualGrowthRate,
+              terminalAnnualRate: hypothesisByAsset.get(a.assetId)!.terminalAnnualRate ?? 0,
               source: hypothesisByAsset.get(a.assetId)!.source ?? null,
               hypothesis: hypothesisByAsset.get(a.assetId)!.hypothesis ?? null,
               dataQuality: hypothesisByAsset.get(a.assetId)!.dataQuality ?? null,
               confidence: hypothesisByAsset.get(a.assetId)!.confidence ?? null,
             }
             : null,
+          annualPriceTrajectory: a.annualPriceTrajectory ?? null,
         })),
         cycleResults: out.cycleResults.map(cycle => ({
           cycleId: cycle.cycleId,

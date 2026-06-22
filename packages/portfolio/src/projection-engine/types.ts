@@ -200,6 +200,15 @@ export interface SnapshotSubstitution {
   transferMode: string;
 }
 
+export interface SnapshotStrategyRevision {
+  id: string;
+  cycleId: string;
+  effectiveDate: number;
+  title: string;
+  notes: string | null;
+  changesJson: string; // JSON: { assets?: Record<string, number>, monthlyAmount?: number }
+}
+
 export interface SnapshotTreasury {
   cashEur: number;
   eurcEur: number;
@@ -235,6 +244,7 @@ export interface PlanConsolidatedSnapshot {
   saleRules: SnapshotSaleRule[];
   rebuyTiers: SnapshotRebuyTier[];
   substitutions: SnapshotSubstitution[];        // status=programada, fecha > projectionStartDate
+  strategyRevisions: SnapshotStrategyRevision[]; // future revisions ordered by effectiveDate
 
   treasury: SnapshotTreasury;
   prices: Record<string, number | null>;        // precios en EUR en projectionStartDate

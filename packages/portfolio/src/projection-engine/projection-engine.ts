@@ -127,6 +127,7 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
   const allHypotheticalSales: HypotheticalSaleProposal[] = [];
   const allHypotheticalRebuys: HypotheticalRebuyProposal[] = [];
   const planId = snapshot.planId ?? "unknown";
+  const appliedRevisionIds = new Set<string>();
 
   // Pre-populate goals already reached in snapshot
   for (const cycle of snapshot.cycles) {
@@ -315,6 +316,32 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
               : `Retirada de activo: ${sub.fromAssetId}`,
           });
         }
+      }
+
+      // --- Apply strategy revisions that become effective this month ---
+      for (const rev of snapshot.strategyRevisions ?? []) {
+        if (rev.cycleId !== cycleId || rev.effectiveDate > currentDate) continue;
+        if (appliedRevisionIds.has(rev.id)) continue;
+        appliedRevisionIds.add(rev.id);
+        try {
+          const changes = JSON.parse(rev.changesJson) as {
+            assets?: Record<string, number>;
+            monthlyAmount?: number;
+          };
+          const cycleAssets = mutableCycleAssets[cycleId];
+          if (changes.assets && cycleAssets) {
+            for (const [assetId, newPct] of Object.entries(changes.assets)) {
+              const asset = cycleAssets.find(a => a.assetId === assetId);
+              if (asset) asset.allocationPercentage = newPct;
+            }
+          }
+          periodEvents.push({
+            date: currentDate,
+            type: "redistribution" as const,
+            cycleId,
+            description: `Revisión de estrategia: ${rev.title}`,
+          });
+        } catch { /* malformed JSON — skip silently */ }
       }
 
       // --- Sale rules ---

@@ -1,7 +1,89 @@
-import type { ProjectionInput, ProjectionOutput, ProjectionScenario, PlanConsolidatedSnapshot, FiscalConfig, ProjectionOptions, ScenarioOrderingViolation, WealthFloorViolation } from "./types";
-import { SPANISH_FISCAL_CONFIG_2024 } from "./types";
+import type { ProjectionInput, ProjectionOutput, ProjectionScenario, PlanConsolidatedSnapshot, FiscalConfig, ProjectionOptions, ScenarioOrderingViolation, WealthFloorViolation, ProjectionSummary, ProjectionPeriod } from "./types";
+import { SPANISH_FISCAL_CONFIG_2024, buildCacheKey } from "./types";
 import { buildDefaultHypotheses, buildZeroGrowthHypotheses } from "./asset-simulator";
 import { runProjection } from "./projection-engine";
+
+// ── Trajectory invariance cache ───────────────────────────────────────────────
+//
+// Each scenario is run ONCE to the maximum horizon (2044 by default).
+// Sub-horizon queries (e.g. 2036) slice the cached full trajectory.
+// This guarantees: state-at-2036 is identical whether horizon=2036 or horizon=2044.
+
+interface TrajectoryCache {
+  key: string;
+  maxHorizon: number;
+  output: ProjectionOutput;
+  builtAt: number;
+}
+
+const trajectoryCache = new Map<string, TrajectoryCache>();
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+function makeTrajCacheKey(input: Omit<ProjectionInput, "now">, maxHorizon: number): string {
+  return buildCacheKey({ ...input, horizonDate: maxHorizon });
+}
+
+function rebuildSummaryForHorizon(full: ProjectionOutput, cutPeriods: ProjectionPeriod[]): ProjectionSummary {
+  const last = cutPeriods[cutPeriods.length - 1];
+  const first = cutPeriods[0];
+  if (!last || !first) return full.summary;
+
+  const totalRealizedGain = cutPeriods.reduce((s, p) => s + p.realizedGainEur, 0);
+  const totalTax = cutPeriods.reduce((s, p) => s + p.taxGeneratedEur, 0);
+  const totalSales = cutPeriods.reduce((s, p) => s + p.totalSalesEur, 0);
+  const totalRebuys = cutPeriods.reduce((s, p) => s + p.totalRebuysEur, 0);
+  const futureCapital = cutPeriods.reduce((s, p) => s + (p.futureCapitalEur - (cutPeriods[cutPeriods.indexOf(p) - 1]?.futureCapitalEur ?? 0)), 0);
+
+  return {
+    ...full.summary,
+    horizonDate: last.date,
+    finalGrossWealthEur: last.grossWealthEur,
+    finalNetWealthEur: last.netWealthEur,
+    totalFutureCapitalEur: last.futureCapitalEur,
+    totalCapitalEur: last.totalCapitalEur,
+    estimatedMarketGainEur: last.netWealthEur - first.grossWealthEur - last.futureCapitalEur + totalTax,
+    totalRealizedGainEur: totalRealizedGain,
+    totalUnrealizedGainEur: Object.values(last.positions).reduce((s, p) => s + (p.unrealizedGainEur ?? 0), 0),
+    totalTaxGeneratedEur: totalTax,
+    totalTaxPendingEur: last.taxPendingEur,
+    finalEurcAvailableEur: last.eurcAvailableEur,
+    finalFiscalReserveEur: last.fiscalReserveEur,
+    finalCashEur: last.cashEur,
+  };
+}
+
+function extractSubHorizon(full: ProjectionOutput, horizonDate: number): ProjectionOutput {
+  if (horizonDate >= full.horizonDate) return full;
+  const cutPeriods = full.periods.filter(p => p.date <= horizonDate);
+  if (cutPeriods.length === 0) return { ...full, horizonDate };
+  return {
+    ...full,
+    horizonDate,
+    periods: cutPeriods,
+    summary: rebuildSummaryForHorizon(full, cutPeriods),
+  };
+}
+
+/** Run scenario to maxHorizon (cached), then extract the sub-horizon slice. */
+export function getProjectionForHorizon(
+  input: ProjectionInput,
+  maxHorizon: number,
+): ProjectionOutput {
+  const key = makeTrajCacheKey(input, maxHorizon);
+  const now = Date.now();
+  const cached = trajectoryCache.get(key);
+  if (cached && now - cached.builtAt < CACHE_TTL_MS) {
+    return extractSubHorizon(cached.output, input.horizonDate);
+  }
+  const fullOutput = runProjection({ ...input, horizonDate: maxHorizon });
+  trajectoryCache.set(key, { key, maxHorizon, output: fullOutput, builtAt: now });
+  return extractSubHorizon(fullOutput, input.horizonDate);
+}
+
+/** Clear the trajectory cache (call when snapshot changes). */
+export function clearTrajectoryCache(): void {
+  trajectoryCache.clear();
+}
 
 export interface ScenarioSet {
   conservador:   ProjectionOutput;
@@ -59,6 +141,10 @@ export function buildScenarioInput(
   };
 }
 
+// Maximum horizon used for the invariance cache — all scenarios run to this date.
+// Sub-horizons (e.g. 2036) are extracted by slicing the cached trajectory.
+const MAX_CACHE_HORIZON_YEAR = 2044;
+
 export function runAllScenarios(
   snapshot: PlanConsolidatedSnapshot,
   horizonDate: number,
@@ -71,6 +157,13 @@ export function runAllScenarios(
     assetSentiment?: Record<string, { score: number; direction: string; confidence: number }>;
   },
 ): ScenarioSet {
+  // Use the later of the requested horizon and the cache horizon so that
+  // extracting any sub-horizon always works from the same trajectory.
+  const maxHorizon = Math.max(
+    horizonDate,
+    new Date(Date.UTC(MAX_CACHE_HORIZON_YEAR, 11, 31)).getTime(),
+  );
+
   const scenarios: ProjectionScenario[] = [
     "conservador", "moderado", "base", "favorable", "muy_favorable", "optimista", "dinamico",
   ];
@@ -78,10 +171,10 @@ export function runAllScenarios(
 
   for (const s of scenarios) {
     const input = buildScenarioInput(snapshot, s, horizonDate, options, fiscalConfig, now, dynamicFactors);
-    results[s as keyof ScenarioSet] = runProjection(input);
+    results[s as keyof ScenarioSet] = getProjectionForHorizon(input, maxHorizon);
   }
 
-  // CERO control: plan_base policy + 0% growth — independent of user policy selection
+  // CERO control: plan_base policy + 0% growth — independent of user policy
   results.cero = runControlCeroScenario(snapshot, horizonDate, fiscalConfig, now);
 
   return results as ScenarioSet;

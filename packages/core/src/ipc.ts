@@ -206,11 +206,13 @@ export interface ProjectionScenarioResult {
     goalReachedProjectedAt: number | null;
     hypothesis: {
       annualGrowthRate: number;
+      terminalAnnualRate: number;
       source: string | null;
       hypothesis: string | null;
       dataQuality: "alta" | "media" | "baja" | null;
       confidence: number | null;
     } | null;
+    annualPriceTrajectory: Array<{ year: number; priceEur: number }> | null;
   }>;
   cycleResults: Array<{
     cycleId: string;
