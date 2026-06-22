@@ -183,6 +183,16 @@ export function Perspectivas() {
       {/* ── Sección 1: Estado del plan ── */}
       <PlanSnapshotSection projection={projection} loading={projectionQ.isLoading} error={projectionQ.error} />
 
+      {/* ── Sección 1b: Libro Mayor de aportaciones ── */}
+      {projection && (
+        <ContributionLedgerSection
+          ledger={projection.contributionLedger}
+          ceroScenario={projection.scenarios.find(s => s.scenario === "cero") ?? null}
+          wealthFloorViolations={projection.wealthFloorViolations ?? []}
+          orderingViolations={projection.orderingViolations ?? []}
+        />
+      )}
+
       {/* ── Sección 2: 7 escenarios — selector + tarjeta activa + comparativa ── */}
       <Card>
         <CardHeader>
@@ -445,6 +455,26 @@ export function Perspectivas() {
                         </tr>
                       );
                     })}
+                    {/* CERO control row — separator */}
+                    {(() => {
+                      const cero = projection.scenarios.find(x => x.scenario === "cero");
+                      if (!cero) return null;
+                      return (
+                        <tr key="cero" style={{ borderTop: "2px dashed var(--color-border)", opacity: 0.7 }}>
+                          <td>
+                            <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "var(--color-muted-fg)", marginRight: 6 }} />
+                            {cero.label}
+                            <span className="text-muted" style={{ fontSize: "0.7em", marginLeft: 4 }}>(suelo mínimo)</span>
+                          </td>
+                          <td className="text-right text-muted">{fmt(cero.summary.finalNetWealthEur)}</td>
+                          <td className="text-right text-muted">0%</td>
+                          <td className="text-right text-muted">—</td>
+                          <td className="text-right text-muted">0</td>
+                          <td className="text-right text-muted">0</td>
+                          <td className="text-right text-muted">0</td>
+                        </tr>
+                      );
+                    })()}
                   </tbody>
                 </table>
               </div>
@@ -590,6 +620,130 @@ export function Perspectivas() {
       {/* ── Sección 5: Calidad de datos e hipótesis ── */}
       <DataQualitySection projection={projection} activeScenario={activeScenarioData} dataScore={dataScore} />
     </section>
+  );
+}
+
+// ─── Sección 1b: Libro Mayor + Control CERO ─────────────────────────────────
+
+function ContributionLedgerSection({
+  ledger,
+  ceroScenario,
+  wealthFloorViolations,
+  orderingViolations,
+}: {
+  ledger: ProjectionResult["contributionLedger"] | undefined;
+  ceroScenario: ProjectionScenarioResult | null;
+  wealthFloorViolations: ProjectionResult["wealthFloorViolations"];
+  orderingViolations: ProjectionResult["orderingViolations"];
+}) {
+  const fmtDate = (ts: number | null) =>
+    ts ? new Date(ts).toLocaleDateString("es-ES", { year: "numeric", month: "short" }) : "—";
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <Info size={16} />
+          Libro Mayor de aportaciones
+        </CardTitle>
+        {ledger && (
+          <Badge variant={ledger.cyclesIncluded === ledger.cyclesTotal ? "success" : "warning"}>
+            {ledger.cyclesIncluded}/{ledger.cyclesTotal} ciclos incluidos
+          </Badge>
+        )}
+      </CardHeader>
+      <CardContent>
+        {/* Alertas de violaciones */}
+        {orderingViolations?.length > 0 && (
+          <div className="empty-state-inline" style={{ marginBottom: "0.75rem", background: "var(--color-warning-bg, #fef3c7)", padding: "8px 12px", borderRadius: "var(--radius)" }}>
+            <AlertTriangle size={14} style={{ color: "var(--color-warning)" }} />
+            <span className="text-sm">
+              <strong>Inversión de escenarios:</strong>{" "}
+              {orderingViolations.map(v => v.explanation).join(" · ")}
+            </span>
+          </div>
+        )}
+        {wealthFloorViolations?.length > 0 && (
+          <div className="empty-state-inline" style={{ marginBottom: "0.75rem", background: "var(--color-danger-bg, #fee2e2)", padding: "8px 12px", borderRadius: "var(--radius)" }}>
+            <AlertCircle size={14} style={{ color: "var(--color-danger)" }} />
+            <span className="text-sm">
+              <strong>Suelo mínimo no alcanzado:</strong>{" "}
+              {wealthFloorViolations.map(v => v.explanation).join(" · ")}
+            </span>
+          </div>
+        )}
+
+        {/* Control CERO */}
+        {ceroScenario && (
+          <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", marginBottom: "1rem" }}>
+            <div className="perspectives-current-card" style={{ flex: "1 1 160px" }}>
+              <span className="label">Control 0% — patrimonio bruto</span>
+              <span className="value">{fmt(ceroScenario.summary.finalGrossWealthEur)}</span>
+              <span className="sub">Inicial + aportaciones · sin crecimiento de mercado</span>
+            </div>
+            <div className="perspectives-current-card" style={{ flex: "1 1 160px" }}>
+              <span className="label">Aportaciones futuras (motor)</span>
+              <span className="value">{fmt(ceroScenario.summary.totalFutureCapitalEur)}</span>
+              <span className="sub">Capital desplegado en el horizonte</span>
+            </div>
+            <div className="perspectives-current-card" style={{ flex: "1 1 160px" }}>
+              <span className="label">Cobertura de ciclos</span>
+              <span className="value">{ledger?.cyclesIncluded ?? "?"} / {ledger?.cyclesTotal ?? "?"}</span>
+              <span className="sub">{ledger?.coverageNote ?? "Todos los ciclos incluidos"}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Tabla del libro mayor */}
+        {ledger && ledger.cycles.length > 0 && (
+          <div className="perspectives-cycle-table-wrapper">
+            <table className="perspectives-cycle-table">
+              <thead>
+                <tr>
+                  <th>Ciclo</th>
+                  <th className="text-right">Inicio ciclo</th>
+                  <th className="text-right">Fin ciclo</th>
+                  <th className="text-right">€/mes</th>
+                  <th className="text-right">1er mes incl.</th>
+                  <th className="text-right">Último mes incl.</th>
+                  <th className="text-right">Meses</th>
+                  <th className="text-right">Total futuro</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ledger.cycles.map(c => (
+                  <tr key={c.cycleId} style={{ opacity: c.monthsIncluded === 0 ? 0.4 : 1 }}>
+                    <td>
+                      {c.cycleName}
+                      {c.monthsIncluded === 0 && <span className="text-muted" style={{ fontSize: "0.75em", marginLeft: 4 }}>(fuera del horizonte)</span>}
+                    </td>
+                    <td className="text-right text-muted">{fmtDate(c.startDate)}</td>
+                    <td className="text-right text-muted">{c.endDate ? fmtDate(c.endDate) : "abierto"}</td>
+                    <td className="text-right">{fmt(c.monthlyAmountEur)}</td>
+                    <td className="text-right text-muted">{fmtDate(c.firstMonthIncluded)}</td>
+                    <td className="text-right text-muted">{fmtDate(c.lastMonthIncluded)}</td>
+                    <td className="text-right">{c.monthsIncluded}</td>
+                    <td className="text-right font-medium">{fmt(c.totalFutureEur)}</td>
+                  </tr>
+                ))}
+                <tr style={{ borderTop: "2px solid var(--color-border)", fontWeight: 600 }}>
+                  <td colSpan={6}>TOTAL aportaciones futuras</td>
+                  <td className="text-right">{ledger.cycles.reduce((s, c) => s + c.monthsIncluded, 0)}</td>
+                  <td className="text-right">{fmt(ledger.totalFutureEur)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {ledger?.coverageNote && (
+          <p className="text-sm text-muted" style={{ marginTop: "0.5rem" }}>
+            <Info size={12} style={{ display: "inline", marginRight: 4 }} />
+            {ledger.coverageNote}
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

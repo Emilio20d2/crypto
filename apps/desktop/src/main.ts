@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import * as path from "path";
-import { initializeDatabase, runMigrations, getDb, schema } from "@crypto-control/database";
+import { initializeDatabase, runMigrations, ensureEssentialTables, getDb, schema } from "@crypto-control/database";
 import {
   CreateInvestmentAssetSchema,
   CreateInvestmentCycleSchema,
@@ -188,8 +188,15 @@ function setupDatabase() {
     }
   } catch (e: unknown) {
     console.error("[DB] Fallo en migración:", e instanceof Error ? e.message : String(e));
-    // Un fallo en migración detendría la ejecución si es destructiva, 
-    // pero idealmente deberíamos hacer un backup del SQLite antes (implementación de backup requerida)
+  }
+
+  // Ensure plan/cycle tables exist even if the migration above failed on a legacy DB.
+  // Uses CREATE TABLE IF NOT EXISTS — safe to run multiple times.
+  try {
+    ensureEssentialTables();
+    console.log("[DB] Tablas esenciales verificadas");
+  } catch (e: unknown) {
+    console.error("[DB] Error al verificar tablas esenciales:", e instanceof Error ? e.message : String(e));
   }
 }
 
@@ -1080,13 +1087,12 @@ function setupIpcHandlers() {
 
     const assetRows = db.select({ id: schema.assets.id, type: schema.assets.type }).from(schema.assets).all();
     const assetTypeById = new Map(assetRows.map((asset) => [asset.id, asset.type]));
+    // EUR (fiat) excluded; EURC (stablecoin reserve) included at price 1.0 EUR.
     const isPortfolioChartAsset = (assetId: string) =>
       assetId !== "EUR" &&
-      assetId !== "EURC" &&
       assetTypeById.get(assetId) !== "fiat";
 
-    // Collect all unique crypto assets from legs. EUR/EURC are liquidity and
-    // are excluded from the portfolio price curve; they live in Tesorería.
+    // Collect all unique crypto + EURC assets from legs. EUR fiat excluded.
     const heldAssets = new Set<string>();
     for (const tx of txs) {
       for (const leg of tx.legs) {
@@ -1208,6 +1214,17 @@ function setupIpcHandlers() {
     }
 
     async function loadPricesForAsset(assetId: string): Promise<void> {
+      if (assetId === "EURC") {
+        // EURC is EUR-pegged stablecoin: 1 EURC = 1.000 EUR at all times.
+        // No market-price fetch needed; return two anchor points so binary
+        // search in priceAtOrBefore always finds a valid price for any grid ts.
+        const now = Date.now();
+        pricesByAsset[assetId] = [{ time: 0, price: 1.0 }, { time: now, price: 1.0 }];
+        priceSourceByAsset[assetId] = "eur-peg";
+        marketPointCountByAsset[assetId] = 2;
+        totalPricePoints += 2;
+        return;
+      }
       if (marketPeriod) {
         const cachedExact = loadCachedPricesForAsset(assetId, marketPeriod);
         const cleanedCachedExact = cleanPricePoints(cachedExact.map((point) => ({ time: point.time, price: point.price })));
@@ -4023,7 +4040,7 @@ function setupIpcHandlers() {
   }));
 
   ipcMain.handle("perspectives:getProjection", withResult(async (_, input?: { horizonYears?: number; complianceRate?: number; simulationPolicy?: string }) => {
-    const { runAllScenarios, compareScenarios, SPANISH_FISCAL_CONFIG_2024 } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    const { runAllScenarios, compareScenarios, validateWealthFloor, validateScenarioOrdering, buildContributionLedger, SPANISH_FISCAL_CONFIG_2024 } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
     const now = Date.now();
     const horizonYears = Math.min(Math.max(input?.horizonYears ?? 10, 1), 30);
     const horizonDate = now + horizonYears * 365.25 * 24 * 3600 * 1000;
@@ -4042,6 +4059,15 @@ function setupIpcHandlers() {
       dynamicFactors,
     );
     const comparison = compareScenarios(scenarioSet);
+    const wealthFloorViolations = validateWealthFloor(scenarioSet);
+    const orderingViolations = validateScenarioOrdering(scenarioSet);
+    const contributionLedger = buildContributionLedger(
+      snapshot.cycles,
+      snapshot.planName,
+      now,
+      horizonDate,
+      snapshot.plans?.length ?? 1,
+    );
     const goalRows = db.select().from(schema.perspectivesGoals)
       .orderBy(asc(schema.perspectivesGoals.priority), asc(schema.perspectivesGoals.createdAt))
       .all();
@@ -4049,10 +4075,10 @@ function setupIpcHandlers() {
     const LABELS: Record<string, string> = {
       conservador: "Conservador", moderado: "Moderado", base: "Base",
       favorable: "Favorable", muy_favorable: "Muy favorable",
-      optimista: "Optimista", dinamico: "Dinámico actual",
+      optimista: "Optimista", dinamico: "Dinámico actual", cero: "Control 0%",
     };
 
-    const scenarios = (["conservador", "moderado", "base", "favorable", "muy_favorable", "optimista", "dinamico"] as const).map(s => {
+    const scenarios = (["conservador", "moderado", "base", "favorable", "muy_favorable", "optimista", "dinamico", "cero"] as const).map(s => {
       const out = scenarioSet[s];
       const hypothesisByAsset = new Map(out.scenarioHypotheses.assetRates.map(rate => [rate.assetId, rate]));
       let priorityTargetBefore = 0;
@@ -4103,6 +4129,13 @@ function setupIpcHandlers() {
           finalEurcAvailableEur: out.summary.finalEurcAvailableEur,
           finalCashEur: out.summary.finalCashEur,
           finalFiscalReserveEur: out.summary.finalFiscalReserveEur,
+          simulationPolicy: out.summary.simulationPolicy,
+          salesZeroExplanation: out.summary.salesZeroExplanation ?? null,
+          rebuysZeroExplanation: out.summary.rebuysZeroExplanation ?? null,
+          hypotheticalSalesCount: out.summary.hypotheticalSales.length,
+          hypotheticalRebuysCount: out.summary.hypotheticalRebuys.length,
+          hypotheticalSales: out.summary.hypotheticalSales.slice(0, 5),
+          hypotheticalRebuys: out.summary.hypotheticalRebuys.slice(0, 5),
         },
         hypotheses: out.scenarioHypotheses.assetRates.map(rate => ({
           assetId: rate.assetId,
@@ -4205,6 +4238,9 @@ function setupIpcHandlers() {
       },
       scenarios,
       comparison,
+      contributionLedger,
+      wealthFloorViolations,
+      orderingViolations,
       horizonYears,
       generatedAt: now,
     };

@@ -95,6 +95,8 @@ export function DataStatus({ state, reason }: { state?: string; reason?: string 
 
 export function PortfolioMetrics({
   totalBalance,
+  cryptoTotalEur,
+  eurcTotalEur,
   totalInvested,
   performance,
   variation24h,
@@ -102,6 +104,8 @@ export function PortfolioMetrics({
   positionsCount,
 }: {
   totalBalance?: number | null;
+  cryptoTotalEur?: number | null;
+  eurcTotalEur?: number | null;
   totalInvested?: number | null;
   performance?: number | null;
   variation24h?: number | null;
@@ -111,6 +115,12 @@ export function PortfolioMetrics({
   const variationTone = variation24h != null && variation24h < 0 ? "text-negative" : "text-positive";
   const variationSub = variation24h != null
     ? `${formatMoneyCompact(variation24h)} · ${formatPercentPoints(variation24hPercent, "—")} (24 h)`
+    : null;
+
+  // Compact breakdown shown when EURC reserve is present: "Cripto X€ · EURC Y€"
+  const hasBothComponents = cryptoTotalEur != null && eurcTotalEur != null && eurcTotalEur > 0;
+  const breakdownSub = hasBothComponents
+    ? `Cripto ${formatMoneyCompact(cryptoTotalEur)} · EURC ${formatMoneyCompact(eurcTotalEur)}`
     : null;
 
   const secondaryMetrics = [
@@ -127,6 +137,12 @@ export function PortfolioMetrics({
       icon: TrendingUp,
     },
     { label: "Total invertido", value: formatMoneyCompact(totalInvested), icon: Database },
+    {
+      label: "Reserva EURC",
+      value: eurcTotalEur != null ? formatMoneyCompact(eurcTotalEur) : "Sin reserva",
+      tone: undefined as string | undefined,
+      icon: Database,
+    },
     { label: "Activos", value: positionsCount.toLocaleString("es-ES"), icon: ShieldCheck },
   ];
 
@@ -135,14 +151,17 @@ export function PortfolioMetrics({
       {/* Hero card — full-width, unabridged balance */}
       <div className="portfolio-metric portfolio-metric--hero">
         <Wallet size={15} />
-        <span>Valor total</span>
+        <span>Valor total de activos</span>
         <strong>{formatMoney(totalBalance, "En cálculo")}</strong>
+        {breakdownSub !== null && (
+          <small className="portfolio-metric-sub">{breakdownSub}</small>
+        )}
         {variationSub !== null && (
           <small className={`portfolio-metric-sub ${variationTone}`}>{variationSub}</small>
         )}
       </div>
 
-      {/* Secondary metrics — 2-col grid, compact format */}
+      {/* Secondary metrics — auto-fill grid, compact format */}
       {secondaryMetrics.map(({ label, value, tone, icon: Icon }) => (
         <div className="portfolio-metric" key={label}>
           <Icon size={15} />

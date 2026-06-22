@@ -1,11 +1,13 @@
 import { describe, test, expect } from "vitest";
 import { runProjection } from "./projection-engine";
 import { SPANISH_FISCAL_CONFIG_2024, buildCacheKey } from "./types";
-import { buildDefaultHypotheses } from "./asset-simulator";
+import { buildDefaultHypotheses, buildZeroGrowthHypotheses } from "./asset-simulator";
 import { computeEffectiveAllocation } from "./contribution-simulator";
 import { computeTaxOnGain } from "./tax-simulator";
 import { simulateSaleRules } from "./sale-simulator";
 import { simulateRebuyTiers } from "./rebuy-simulator";
+import { runAllScenarios, runControlCeroScenario, validateWealthFloor } from "./scenario-engine";
+import { buildContributionLedger } from "./contribution-ledger";
 import type { PlanConsolidatedSnapshot, ProjectionInput } from "./types";
 
 const DAY = 24 * 3600 * 1000;

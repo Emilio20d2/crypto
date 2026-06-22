@@ -3,6 +3,7 @@ export * from "./tax-simulator";
 export * from "./treasury-simulator";
 export * from "./asset-simulator";
 export * from "./contribution-simulator";
+export * from "./contribution-ledger";
 export * from "./sale-simulator";
 export * from "./rebuy-simulator";
 export * from "./projection-validation";

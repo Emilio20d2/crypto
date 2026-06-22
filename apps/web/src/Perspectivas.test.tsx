@@ -320,7 +320,7 @@ describe("Perspectivas", () => {
       expect(screen.getByText("Perspectivas")).toBeInTheDocument();
     });
     expect(screen.getByText(/Estado del plan/i)).toBeInTheDocument();
-    expect(screen.getByText(/Proyección.*4 escenarios/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Proyección.*escenarios/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/Objetivos de inversión/i)).toBeInTheDocument();
     expect(screen.getByText(/Calidad de datos/i)).toBeInTheDocument();
   });

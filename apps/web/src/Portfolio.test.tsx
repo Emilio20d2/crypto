@@ -69,9 +69,9 @@ beforeEach(() => {
       getPortfolioBreakdown: () => ok({
         portfolio: { uuid: "portfolio-1", name: "Default", type: "default", deleted: false },
         balances: {
-          totalBalance: { value: 344.79, currency: "EUR" },
-          totalCryptoBalance: { value: 344.75, currency: "EUR" },
-          totalCashEquivalentBalance: { value: 0.04, currency: "EUR" },
+          totalBalance: { value: 380.29, currency: "EUR" },
+          totalCryptoBalance: { value: 309.24, currency: "EUR" },
+          totalCashEquivalentBalance: { value: 71.05, currency: "EUR" },
           totalFuturesBalance: null,
           futuresUnrealizedPnl: null,
           perpUnrealizedPnl: null,
@@ -147,6 +147,31 @@ beforeEach(() => {
             isCash: false,
             accountType: "exchange",
             market: { productId: "BTC-EUR", price: 55340, pricePercentageChange24h: 0.8, volume24h: null, volumePercentageChange24h: null, marketCap: null, baseName: "Bitcoin", baseDisplaySymbol: "BTC", quoteDisplaySymbol: "EUR", iconUrl: null, status: "online", tradingDisabled: false, viewOnly: false },
+            sparkline: [],
+          },
+          // EURC reserve: isCash=true, excluded from investment cards but included in total
+          {
+            asset: "EURC",
+            assetUuid: "eurc-uuid",
+            accountUuid: "eurc-account",
+            totalBalanceFiat: 71.05,
+            totalBalanceCrypto: 71.05,
+            allocation: null,
+            costBasis: { value: 71.05, currency: "EUR" },
+            averageEntryPrice: null,
+            unrealizedPnl: 0,
+            fundingPnl: null,
+            availableToTradeFiat: 71.05,
+            availableToTradeCrypto: 71.05,
+            availableToTransferFiat: 71.05,
+            availableToTransferCrypto: 71.05,
+            availableToSendFiat: 71.05,
+            availableToSendCrypto: 71.05,
+            assetImageUrl: null,
+            assetColor: null,
+            isCash: true,
+            accountType: "exchange",
+            market: null,
             sparkline: [],
           },
         ],
@@ -386,6 +411,147 @@ describe("Cartera Coinbase", () => {
     await waitFor(() => {
       expect(screen.getByText("Mis posiciones")).toBeInTheDocument();
     });
-    expect(screen.queryByText("EURC")).not.toBeInTheDocument();
+    // EURC must NOT appear as an investment position card (the symbol "EURC" in a card)
+    // but CAN appear inside "Reserva EURC" label text (it's part of a longer string)
+    const eurcExactMatch = screen.queryAllByText("EURC").filter(
+      (el) => el.tagName === "SMALL" || el.tagName === "STRONG"
+    );
+    expect(eurcExactMatch.length).toBe(0);
+  });
+
+  test("EURC se suma al valor total patrimonial de la cabecera", async () => {
+    // Default mock has BTC+ADA+TON (309.24 €) + EURC (71.05 €) = 380.29 €
+    renderWithQuery(<Portfolio />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Valor total de activos")).toBeInTheDocument();
+    });
+    // Total = crypto + EURC = 309.24 + 71.05 = 380.29 €
+    expect(screen.getByText("380,29 €")).toBeInTheDocument();
+  });
+
+  test("Reserva EURC aparece como métrica separada en la cabecera", async () => {
+    renderWithQuery(<Portfolio />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Reserva EURC")).toBeInTheDocument();
+    });
+    // The EURC metric value should show the EURC amount (71.05 €)
+    expect(screen.getByText("71,05 €")).toBeInTheDocument();
+  });
+
+  test("sin EURC muestra 'Sin reserva' en la métrica", async () => {
+    const now = Date.now();
+    window.cryptoControl.coinbase.getPortfolioBreakdown = () =>
+      ok({
+        portfolio: { uuid: "portfolio-1", name: "Default", type: "default", deleted: false },
+        balances: { totalBalance: { value: 100, currency: "EUR" }, totalCryptoBalance: { value: 100, currency: "EUR" }, totalCashEquivalentBalance: null, totalFuturesBalance: null, futuresUnrealizedPnl: null, perpUnrealizedPnl: null },
+        positions: [
+          {
+            asset: "BTC",
+            assetUuid: "btc-uuid", accountUuid: "btc-account",
+            totalBalanceFiat: 100, totalBalanceCrypto: 0.001,
+            allocation: 1, costBasis: { value: 90, currency: "EUR" }, averageEntryPrice: null,
+            unrealizedPnl: 10, fundingPnl: null,
+            availableToTradeFiat: 100, availableToTradeCrypto: 0.001,
+            availableToTransferFiat: 100, availableToTransferCrypto: 0.001,
+            availableToSendFiat: 100, availableToSendCrypto: 0.001,
+            assetImageUrl: null, assetColor: null, isCash: false, accountType: "exchange",
+            market: { productId: "BTC-EUR", price: 100000, pricePercentageChange24h: 1, volume24h: null, volumePercentageChange24h: null, marketCap: null, baseName: "Bitcoin", baseDisplaySymbol: "BTC", quoteDisplaySymbol: "EUR", iconUrl: null, status: "online", tradingDisabled: false, viewOnly: false },
+            sparkline: [],
+          },
+        ],
+        capturedAt: now, currency: "EUR" as const, source: "coinbase" as const, state: "live" as const,
+      });
+
+    renderWithQuery(<Portfolio />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Reserva EURC")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Sin reserva")).toBeInTheDocument();
+  });
+
+  test("desglose cripto·EURC aparece en el hero cuando hay EURC", async () => {
+    renderWithQuery(<Portfolio />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Cripto.*EURC/)).toBeInTheDocument();
+    });
+  });
+
+  test("valor total no incluye EUR fiat (solo cripto + EURC)", async () => {
+    const now = Date.now();
+    window.cryptoControl.coinbase.getPortfolioBreakdown = () =>
+      ok({
+        portfolio: { uuid: "portfolio-1", name: "Default", type: "default", deleted: false },
+        balances: { totalBalance: { value: 600, currency: "EUR" }, totalCryptoBalance: { value: 100, currency: "EUR" }, totalCashEquivalentBalance: { value: 500, currency: "EUR" }, totalFuturesBalance: null, futuresUnrealizedPnl: null, perpUnrealizedPnl: null },
+        positions: [
+          {
+            asset: "BTC",
+            assetUuid: "btc-uuid", accountUuid: "btc-account",
+            totalBalanceFiat: 100, totalBalanceCrypto: 0.001,
+            allocation: 1, costBasis: null, averageEntryPrice: null,
+            unrealizedPnl: null, fundingPnl: null,
+            availableToTradeFiat: 100, availableToTradeCrypto: 0.001,
+            availableToTransferFiat: 100, availableToTransferCrypto: 0.001,
+            availableToSendFiat: 100, availableToSendCrypto: 0.001,
+            assetImageUrl: null, assetColor: null, isCash: false, accountType: "exchange",
+            market: null, sparkline: [],
+          },
+          // EURC reserve
+          {
+            asset: "EURC",
+            assetUuid: null, accountUuid: "eurc-account",
+            totalBalanceFiat: 50, totalBalanceCrypto: 50,
+            allocation: null, costBasis: null, averageEntryPrice: null,
+            unrealizedPnl: 0, fundingPnl: null,
+            availableToTradeFiat: 50, availableToTradeCrypto: 50,
+            availableToTransferFiat: 50, availableToTransferCrypto: 50,
+            availableToSendFiat: 50, availableToSendCrypto: 50,
+            assetImageUrl: null, assetColor: null, isCash: true, accountType: "exchange",
+            market: null, sparkline: [],
+          },
+          // EUR fiat — must NOT be included in total
+          {
+            asset: "EUR",
+            assetUuid: null, accountUuid: "eur-account",
+            totalBalanceFiat: 450, totalBalanceCrypto: 450,
+            allocation: null, costBasis: null, averageEntryPrice: null,
+            unrealizedPnl: 0, fundingPnl: null,
+            availableToTradeFiat: 450, availableToTradeCrypto: 450,
+            availableToTransferFiat: 450, availableToTransferCrypto: 450,
+            availableToSendFiat: 450, availableToSendCrypto: 450,
+            assetImageUrl: null, assetColor: null, isCash: true, accountType: "exchange",
+            market: null, sparkline: [],
+          },
+        ],
+        capturedAt: now, currency: "EUR" as const, source: "coinbase" as const, state: "live" as const,
+      });
+
+    renderWithQuery(<Portfolio />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Valor total de activos")).toBeInTheDocument();
+    });
+    // Total = BTC (100) + EURC (50) = 150 €, NOT 600 (which would include EUR fiat)
+    expect(screen.getByText("150,00 €")).toBeInTheDocument();
+    expect(screen.queryByText("600,00 €")).not.toBeInTheDocument();
+  });
+
+  test("P&L se calcula solo sobre cripto, no sobre EURC", async () => {
+    // Default mock: crypto=309.24 €, EURC=71.05 €, totalBalance=380.29 €
+    // localPositions are NOT set (mock returns {}) so performance = null
+    // This test verifies the performance calculation uses cryptoTotal, not totalBalance
+    renderWithQuery(<Portfolio />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Beneficio / Pérdida")).toBeInTheDocument();
+    });
+    // Without local cost data both P&L and "Total invertido" show "En cálculo"
+    expect(screen.getAllByText("En cálculo").length).toBeGreaterThanOrEqual(1);
+    // Ensure the P&L metric specifically shows "En cálculo" (not a EURC value)
+    const pnlMetric = screen.getByText("Beneficio / Pérdida").closest(".portfolio-metric");
+    expect(pnlMetric?.textContent).toContain("En cálculo");
   });
 });

@@ -1,6 +1,6 @@
-import type { ProjectionInput, ProjectionOutput, ProjectionScenario, PlanConsolidatedSnapshot, FiscalConfig, ProjectionOptions, ScenarioOrderingViolation } from "./types";
+import type { ProjectionInput, ProjectionOutput, ProjectionScenario, PlanConsolidatedSnapshot, FiscalConfig, ProjectionOptions, ScenarioOrderingViolation, WealthFloorViolation } from "./types";
 import { SPANISH_FISCAL_CONFIG_2024 } from "./types";
-import { buildDefaultHypotheses } from "./asset-simulator";
+import { buildDefaultHypotheses, buildZeroGrowthHypotheses } from "./asset-simulator";
 import { runProjection } from "./projection-engine";
 
 export interface ScenarioSet {
@@ -11,6 +11,7 @@ export interface ScenarioSet {
   muy_favorable: ProjectionOutput;
   optimista:     ProjectionOutput;
   dinamico:      ProjectionOutput;
+  cero:          ProjectionOutput;
 }
 
 export interface ScenarioComparison {
@@ -36,7 +37,10 @@ export function buildScenarioInput(
     ...Object.keys(snapshot.prices),
     ...snapshot.cycles.flatMap(cycle => cycle.assets.map(asset => asset.assetId)),
   ]));
-  const hypotheses = buildDefaultHypotheses(scenario, assetIds, dynamicFactors);
+
+  const hypotheses = scenario === "cero"
+    ? buildZeroGrowthHypotheses(assetIds)
+    : buildDefaultHypotheses(scenario, assetIds, dynamicFactors);
 
   return {
     snapshot,
@@ -69,7 +73,38 @@ export function runAllScenarios(
     results[s as keyof ScenarioSet] = runProjection(input);
   }
 
+  // CERO control: plan_base policy + 0% growth — independent of user policy selection
+  results.cero = runControlCeroScenario(snapshot, horizonDate, fiscalConfig, now);
+
   return results as ScenarioSet;
+}
+
+export function runControlCeroScenario(
+  snapshot: PlanConsolidatedSnapshot,
+  horizonDate: number,
+  fiscalConfig: FiscalConfig = SPANISH_FISCAL_CONFIG_2024,
+  now: number = Date.now(),
+): ProjectionOutput {
+  const assetIds = Array.from(new Set([
+    ...Object.keys(snapshot.positions),
+    ...Object.keys(snapshot.prices),
+    ...snapshot.cycles.flatMap(cycle => cycle.assets.map(asset => asset.assetId)),
+  ]));
+  const hypotheses = buildZeroGrowthHypotheses(assetIds);
+
+  const input: ProjectionInput = {
+    snapshot,
+    projectionStartDate: snapshot.projectionStartDate,
+    horizonDate,
+    scenario: "cero",
+    scenarioHypotheses: hypotheses,
+    fiscalConfig,
+    resolution: "monthly",
+    // plan_base: only contributions, no sales/rebuys — guarantees CERO floor
+    options: { simulationPolicy: "plan_base", projectExtraordinaryContributions: false },
+    now,
+  };
+  return runProjection(input);
 }
 
 export function validateScenarioOrdering(set: ScenarioSet): ScenarioOrderingViolation[] {
@@ -95,7 +130,7 @@ export function validateScenarioOrdering(set: ScenarioSet): ScenarioOrderingViol
 }
 
 export function compareScenarios(set: ScenarioSet): ScenarioComparison[] {
-  const LABELS: Record<ProjectionScenario, string> = {
+  const LABELS: Record<string, string> = {
     conservador:   "Conservador",
     moderado:      "Moderado",
     base:          "Base",
@@ -103,18 +138,47 @@ export function compareScenarios(set: ScenarioSet): ScenarioComparison[] {
     muy_favorable: "Muy favorable",
     optimista:     "Optimista",
     dinamico:      "Dinámico",
+    cero:          "Control 0%",
   };
 
-  const order: ProjectionScenario[] = [
-    "conservador", "moderado", "base", "favorable", "muy_favorable", "optimista", "dinamico",
+  const order: Array<keyof ScenarioSet> = [
+    "conservador", "moderado", "base", "favorable", "muy_favorable", "optimista", "dinamico", "cero",
   ];
 
   return order.map(s => ({
-    scenario:            s,
-    label:               LABELS[s],
-    finalGrossWealthEur: set[s as keyof ScenarioSet].summary.finalGrossWealthEur,
-    finalNetWealthEur:   set[s as keyof ScenarioSet].summary.finalNetWealthEur,
-    probability:         set[s as keyof ScenarioSet].summary.probability,
-    confidence:          set[s as keyof ScenarioSet].summary.confidence,
+    scenario:            s as ProjectionScenario,
+    label:               LABELS[s] ?? String(s),
+    finalGrossWealthEur: set[s].summary.finalGrossWealthEur,
+    finalNetWealthEur:   set[s].summary.finalNetWealthEur,
+    probability:         set[s].summary.probability,
+    confidence:          set[s].summary.confidence,
   }));
+}
+
+// Every positive scenario must reach at least the CERO floor (initial + contributions).
+export function validateWealthFloor(set: ScenarioSet): WealthFloorViolation[] {
+  const floorEur = set.cero.summary.finalGrossWealthEur;
+  const positiveScenarios: Array<keyof ScenarioSet> = [
+    "conservador", "moderado", "base", "favorable", "muy_favorable", "optimista",
+  ];
+  const LABELS: Record<string, string> = {
+    conservador: "Conservador", moderado: "Moderado", base: "Base",
+    favorable: "Favorable", muy_favorable: "Muy favorable", optimista: "Optimista",
+  };
+
+  const violations: WealthFloorViolation[] = [];
+  for (const s of positiveScenarios) {
+    const actual = set[s].summary.finalGrossWealthEur;
+    if (actual < floorEur - 1) {
+      violations.push({
+        scenario: String(s),
+        label: LABELS[s] ?? String(s),
+        floorEur,
+        actualEur: actual,
+        deficitEur: Math.round((floorEur - actual) * 100) / 100,
+        explanation: `${LABELS[s] ?? s} (${actual.toFixed(0)}€) cae por debajo del suelo mínimo (${floorEur.toFixed(0)}€) — escenario con crecimiento produce menos que 0%`,
+      });
+    }
+  }
+  return violations;
 }

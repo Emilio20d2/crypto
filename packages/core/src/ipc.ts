@@ -134,7 +134,7 @@ export interface DiagnosticsReport {
 }
 
 export interface ProjectionScenarioResult {
-  scenario: "conservador" | "moderado" | "base" | "favorable" | "muy_favorable" | "optimista" | "dinamico";
+  scenario: "conservador" | "moderado" | "base" | "favorable" | "muy_favorable" | "optimista" | "dinamico" | "cero";
   label: string;
   description?: string;
   probability: number | null;
@@ -157,6 +157,13 @@ export interface ProjectionScenarioResult {
     finalEurcAvailableEur: number;
     finalCashEur: number;
     finalFiscalReserveEur: number;
+    simulationPolicy?: string;
+    salesZeroExplanation?: string | null;
+    rebuysZeroExplanation?: string | null;
+    hypotheticalSalesCount?: number;
+    hypotheticalRebuysCount?: number;
+    hypotheticalSales?: unknown[];
+    hypotheticalRebuys?: unknown[];
   };
   hypotheses: Array<{
     assetId: string;
@@ -289,12 +296,51 @@ export interface ProjectionResult {
   };
   scenarios: ProjectionScenarioResult[];
   comparison: Array<{
-    scenario: "conservador" | "moderado" | "base" | "favorable" | "muy_favorable" | "optimista" | "dinamico";
+    scenario: string;
     label: string;
     finalGrossWealthEur: number;
     finalNetWealthEur: number;
     probability: number | null;
     confidence: number | null;
+  }>;
+  contributionLedger: {
+    generatedAt: number;
+    projectionStartDate: number;
+    horizonDate: number;
+    cycles: Array<{
+      cycleId: string;
+      cycleName: string;
+      planName: string;
+      startDate: number;
+      endDate: number | null;
+      monthlyAmountEur: number;
+      firstMonthIncluded: number | null;
+      lastMonthIncluded: number | null;
+      monthsIncluded: number;
+      totalFutureEur: number;
+    }>;
+    cyclesTotal: number;
+    cyclesIncluded: number;
+    plansTotal: number;
+    plansIncluded: number;
+    totalFutureEur: number;
+    coverageNote: string | null;
+  };
+  wealthFloorViolations: Array<{
+    scenario: string;
+    label: string;
+    floorEur: number;
+    actualEur: number;
+    deficitEur: number;
+    explanation: string;
+  }>;
+  orderingViolations: Array<{
+    date: number;
+    lowerScenario: string;
+    lowerValue: number;
+    higherScenario: string;
+    higherValue: number;
+    explanation: string;
   }>;
   horizonYears: number;
   generatedAt: number;

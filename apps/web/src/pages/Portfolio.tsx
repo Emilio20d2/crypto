@@ -39,9 +39,11 @@ function toChartPoints(points: { time: number; value: number }[]): ChartPoint[] 
     .sort((a, b) => (a.time as number) - (b.time as number));
 }
 
-function portfolio24hVariation(positions: any[]) {
-  let currentTotal = 0;
-  let previousTotal = 0;
+// eurcFiatStable: EURC reserve in EUR — added symmetrically to current and
+// previous so it dilutes the crypto % without adding spurious gain or loss.
+function portfolio24hVariation(positions: any[], eurcFiatStable: number = 0) {
+  let currentTotal = eurcFiatStable;
+  let previousTotal = eurcFiatStable;
 
   for (const position of positions) {
     const current = position.totalBalanceFiat;
@@ -59,14 +61,6 @@ function portfolio24hVariation(positions: any[]) {
   return { value, percent: (value / previousTotal) * 100 };
 }
 
-function fallbackTotalBalance(balances: any) {
-  const total = balances?.totalBalance?.value;
-  if (typeof total === "number" && Number.isFinite(total)) return total;
-  const crypto = balances?.totalCryptoBalance?.value;
-  const cash = balances?.totalCashEquivalentBalance?.value;
-  const values = [crypto, cash].filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-  return values.length > 0 ? values.reduce((sum, value) => sum + value, 0) : null;
-}
 
 function positionsTotalBalance(positions: any[]) {
   const values = positions
@@ -266,14 +260,17 @@ export function Portfolio() {
     // Pin the chart's right edge to the live breakdown value (refreshes every
     // 5 s) so price changes are visible immediately without waiting for the
     // heavier historical-series fetch interval.
+    // Includes EURC (stablecoin reserve) and excludes EUR fiat — same definition
+    // as the header's "Valor total" so the last chart point matches exactly.
     const liveBreakdown = breakdownRes?.ok && breakdownRes.data.state === "live" ? breakdownRes.data : null;
     if (liveBreakdown) {
       const liveValue = liveBreakdown.positions.reduce(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (sum: number, p: any) =>
-          !p.isCash && p.asset !== "EURC" && typeof p.totalBalanceFiat === "number" && Number.isFinite(p.totalBalanceFiat)
-            ? sum + p.totalBalanceFiat
-            : sum,
+        (sum: number, p: any) => {
+          if (typeof p.totalBalanceFiat !== "number" || !Number.isFinite(p.totalBalanceFiat)) return sum;
+          if (p.isCash && p.asset !== "EURC") return sum; // exclude EUR fiat, keep EURC
+          return sum + p.totalBalanceFiat;
+        },
         0,
       );
       if (liveValue > 0) {
@@ -371,12 +368,22 @@ export function Portfolio() {
     );
   }
 
-  const positions = Array.isArray(breakdown.positions)
-    ? aggregatePositionsByAsset(breakdown.positions)
-      .filter(hasPositivePositionBalance)
-      .filter((position) => position.asset !== "EURC" && !position.isCash)
-      .sort((a, b) => (b.totalBalanceFiat ?? -1) - (a.totalBalanceFiat ?? -1))
+  // Aggregate all positions, then split: EURC as reserve, rest as investment cards.
+  const allAggregated = Array.isArray(breakdown.positions)
+    ? aggregatePositionsByAsset(breakdown.positions).filter(hasPositivePositionBalance)
     : [];
+
+  // EURC reserve: stablecoin held as fiscal/rebuy liquidity.
+  const eurcPosition = allAggregated.find((p) => p.asset === "EURC");
+  const eurcTotalFiat: number =
+    typeof eurcPosition?.totalBalanceFiat === "number" && Number.isFinite(eurcPosition.totalBalanceFiat)
+      ? eurcPosition.totalBalanceFiat
+      : 0;
+
+  // Investment positions: crypto only (no EURC, no EUR fiat).
+  const positions = allAggregated
+    .filter((position) => position.asset !== "EURC" && !position.isCash)
+    .sort((a, b) => (b.totalBalanceFiat ?? -1) - (a.totalBalanceFiat ?? -1));
 
   let totalInvestedSum = 0;
   let totalInvestedComplete = positions.length > 0;
@@ -390,9 +397,19 @@ export function Portfolio() {
   }
 
   const totalInvested = totalInvestedComplete ? totalInvestedSum : null;
-  const totalBalance = fallbackTotalBalance(breakdown.balances) ?? positionsTotalBalance(positions);
-  const performance = totalInvested !== null && totalBalance !== null ? totalBalance - totalInvested : null;
-  const variationFromPositions = portfolio24hVariation(positions);
+
+  // Crypto value (investment positions only) — used for P&L.
+  const cryptoTotal = positionsTotalBalance(positions);
+
+  // Total patrimonial = cripto + EURC. Same definition used by live chart pin
+  // and historical series. EUR fiat excluded per spec.
+  const totalBalance = cryptoTotal !== null || eurcTotalFiat > 0
+    ? (cryptoTotal ?? 0) + eurcTotalFiat
+    : null;
+
+  // P&L is crypto-only: EURC is a stablecoin reserve, not a speculative asset.
+  const performance = totalInvested !== null && cryptoTotal !== null ? cryptoTotal - totalInvested : null;
+  const variationFromPositions = portfolio24hVariation(positions, eurcTotalFiat);
   const reconstructed24h = toChartPoints(series24h);
   const variationFromChart = chartVariation(reconstructed24h);
   const variation24h = variationFromPositions.value !== null ? variationFromPositions : variationFromChart;
@@ -411,6 +428,8 @@ export function Portfolio() {
 
       <PortfolioMetrics
         totalBalance={totalBalance}
+        cryptoTotalEur={cryptoTotal}
+        eurcTotalEur={eurcTotalFiat > 0 ? eurcTotalFiat : null}
         totalInvested={totalInvested}
         performance={performance}
         variation24h={variation24h.value}

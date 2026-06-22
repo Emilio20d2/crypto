@@ -1,4 +1,4 @@
-import type { ScenarioHypotheses, AssetScenarioRates } from "./types";
+import type { ScenarioHypotheses, AssetScenarioRates, ProjectionScenario } from "./types";
 
 // ── Phase-based price projection ──────────────────────────────────────────────
 //
@@ -316,5 +316,35 @@ export function buildDefaultHypotheses(
           confidence:         DYNAMIC_CONFIDENCE,
         }
       : undefined,
+  };
+}
+
+// Returns hypotheses for CERO control scenario: 0% growth, prices stay flat.
+// No decay, no cap needed — prices never move.
+export function buildZeroGrowthHypotheses(assetIds: string[]): ScenarioHypotheses {
+  const assetRates: AssetScenarioRates[] = assetIds.map(assetId => ({
+    assetId,
+    annualGrowthRate: 0,
+    decayFactor: 1,
+    terminalAnnualRate: 0,
+    cycleLengthYears: 4,
+    maxPriceMultiplier: 1,
+    volatility: 0,
+    correctionDepth: 0,
+    source: "control_cero",
+    hypothesis: "Sin crecimiento de mercado — suelo mínimo garantizado por aportaciones",
+    dataQuality: "alta",
+    confidence: 1,
+  }));
+
+  return {
+    scenario: "cero" as ProjectionScenario,
+    label: "Control 0%",
+    description: "Crecimiento de mercado cero — patrimonio final = inicial + aportaciones futuras",
+    probability: null,
+    confidence: 1,
+    assetRates,
+    defaultAnnualGrowthRate: 0,
+    marketPhase: "sideways",
   };
 }

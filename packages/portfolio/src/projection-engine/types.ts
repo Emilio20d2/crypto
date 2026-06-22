@@ -1,6 +1,6 @@
 // ── Escenarios ────────────────────────────────────────────────────────────────
 
-export type ProjectionScenario = "conservador" | "moderado" | "base" | "favorable" | "muy_favorable" | "optimista" | "dinamico";
+export type ProjectionScenario = "conservador" | "moderado" | "base" | "favorable" | "muy_favorable" | "optimista" | "dinamico" | "cero";
 
 // ── Configuración fiscal (versionada, sin hardcodear) ─────────────────────────
 
@@ -67,6 +67,45 @@ export interface DynamicMarketFactors {
   sourcesUsed: string[];
   sourcesUnavailable: string[];
   confidence: number; // 0..1
+}
+
+// ── Libro mayor de aportaciones ───────────────────────────────────────────────
+
+export interface ContributionLedgerCycle {
+  cycleId: string;
+  cycleName: string;
+  planName: string;
+  startDate: number;
+  endDate: number | null;
+  monthlyAmountEur: number;
+  firstMonthIncluded: number | null;
+  lastMonthIncluded: number | null;
+  monthsIncluded: number;
+  totalFutureEur: number;
+}
+
+export interface ContributionLedger {
+  generatedAt: number;
+  projectionStartDate: number;
+  horizonDate: number;
+  cycles: ContributionLedgerCycle[];
+  cyclesTotal: number;
+  cyclesIncluded: number;
+  plansTotal: number;
+  plansIncluded: number;
+  totalFutureEur: number;
+  coverageNote: string | null;
+}
+
+// ── Validación de suelo de patrimonio ─────────────────────────────────────────
+
+export interface WealthFloorViolation {
+  scenario: string;
+  label: string;
+  floorEur: number;
+  actualEur: number;
+  deficitEur: number;
+  explanation: string;
 }
 
 // ── Snapshot consolidado (fuente única de verdad) ─────────────────────────────
