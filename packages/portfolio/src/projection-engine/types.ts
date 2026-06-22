@@ -596,6 +596,16 @@ export interface ProjectionSummary {
   estimatedFeesEur: number;
   weightedAnnualReturn: number | null;
 
+  // Métricas de rentabilidad correctamente diferenciadas
+  xirrAnnual: number | null;      // XIRR: rentabilidad personal con flujos reales fechados
+  twrAnnual: number | null;       // TWR anualizada: rentabilidad de estrategia sin efecto flujos
+  roiAccumulated: number | null;  // ROI acumulado = (finalWealth / totalCapital) − 1
+
+  // Controles independientes (fórmula analítica de anualidad, no llama al motor)
+  controlCeroWealth: number | null;  // FV a 0% de crecimiento
+  control5pctWealth: number | null;  // FV a 5% anual constante
+  control7pctWealth: number | null;  // FV a 7% anual constante
+
   totalRealizedGainEur: number;
   totalUnrealizedGainEur: number;
   totalTaxGeneratedEur: number;

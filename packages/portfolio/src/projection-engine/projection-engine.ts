@@ -19,6 +19,7 @@ import { simulateSaleRules, simulateProposedSales, buildSalesZeroExplanation } f
 import { simulateRebuyTiers, simulateProposedRebuys, buildRebuysZeroExplanation } from "./rebuy-simulator";
 import type { HypotheticalSaleProposal, HypotheticalRebuyProposal, SimulationPolicy } from "./types";
 import { reconcileProjection, validateProjectionOutput } from "./projection-validation";
+import { xirrFromPeriods, twrFromPeriods, computeControlScenario } from "./financial-math";
 
 const MS_PER_MONTH = (365.25 / 12) * 24 * 3600 * 1000;
 
@@ -570,11 +571,49 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
     estimatedFeesEur -
     treasuryInterestEur
   ) * 100) / 100;
+  // CAGR simple (conservado para compatibilidad; trata todo el capital futuro como si fuera t=0)
   const weightedBaseCapital = Math.max(1, initialGrossWealthEur + futureCapitalEur);
   const projectionYears = yearsBetween(projectionStartDate, effectiveHorizon);
   const weightedAnnualReturn = finalNetWealthEur > 0
     ? Math.pow(finalNetWealthEur / weightedBaseCapital, 1 / projectionYears) - 1
     : null;
+
+  // ── Métricas de rentabilidad correctamente diferenciadas ────────────────────
+
+  // XIRR: tasa interna de retorno personal con flujos reales fechados
+  const xirrAnnual = xirrFromPeriods({
+    initialGrossWealthEur,
+    projectionStartDate,
+    periods: periods.map(p => ({ date: p.date, futureCapitalEur: p.futureCapitalEur, grossWealthEur: p.grossWealthEur })),
+  });
+
+  // TWR: rentabilidad de la estrategia eliminando el efecto de los flujos externos
+  const twrCumulative = twrFromPeriods({
+    initialGrossWealthEur,
+    periods: periods.map(p => ({ date: p.date, futureCapitalEur: p.futureCapitalEur, grossWealthEur: p.grossWealthEur })),
+  });
+  const twrAnnual = twrCumulative != null && twrCumulative > 0 && projectionYears > 0
+    ? Math.pow(twrCumulative, 1 / projectionYears) - 1
+    : null;
+
+  // ROI acumulado simple = (patrimonio final / capital total invertido) − 1
+  const totalCapitalInvested = snapshot.historicalCapitalEur + futureCapitalEur;
+  const roiAccumulated = totalCapitalInvested > 0 && finalNetWealthEur > 0
+    ? finalNetWealthEur / totalCapitalInvested - 1
+    : null;
+
+  // Controles independientes: calculadora analítica de anualidad (NO llama a runProjection)
+  const controlMonths = periods.length;
+  const avgMonthlyContrib = controlMonths > 0 ? futureCapitalEur / controlMonths : 0;
+  const controlBaseParams = {
+    initialWealthEur: initialGrossWealthEur,
+    monthlyContributionEur: avgMonthlyContrib,
+    months: controlMonths,
+    projectionStartDate,
+  };
+  const ctrl0 = computeControlScenario({ ...controlBaseParams, annualReturnRate: 0 });
+  const ctrl5 = computeControlScenario({ ...controlBaseParams, annualReturnRate: 0.05 });
+  const ctrl7 = computeControlScenario({ ...controlBaseParams, annualReturnRate: 0.07 });
 
   // Zero-value explanations
   const salesZeroExplanation = totalSalesEur === 0
@@ -598,6 +637,12 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
     treasuryInterestEur,
     estimatedFeesEur,
     weightedAnnualReturn: weightedAnnualReturn != null ? Math.round(weightedAnnualReturn * 10_000) / 10_000 : null,
+    xirrAnnual: xirrAnnual != null ? Math.round(xirrAnnual * 100_000) / 100_000 : null,
+    twrAnnual: twrAnnual != null ? Math.round(twrAnnual * 100_000) / 100_000 : null,
+    roiAccumulated: roiAccumulated != null ? Math.round(roiAccumulated * 100_000) / 100_000 : null,
+    controlCeroWealth: ctrl0.finalWealth,
+    control5pctWealth: ctrl5.finalWealth,
+    control7pctWealth: ctrl7.finalWealth,
     totalRealizedGainEur: Math.round(totalRealizedGainEur * 100) / 100,
     totalUnrealizedGainEur: Math.round(finalUnrealized * 100) / 100,
     totalTaxGeneratedEur: Math.round(totalTaxGeneratedEur * 100) / 100,

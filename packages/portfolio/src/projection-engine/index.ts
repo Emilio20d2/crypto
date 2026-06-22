@@ -9,3 +9,4 @@ export * from "./rebuy-simulator";
 export * from "./projection-validation";
 export * from "./projection-engine";
 export * from "./scenario-engine";
+export { computeXIRR, computeTWR, computeControlScenario, xirrFromPeriods, twrFromPeriods } from "./financial-math";

@@ -2,6 +2,7 @@ import { describe, test, expect } from "vitest";
 import { runProjection } from "./projection-engine";
 import { SPANISH_FISCAL_CONFIG_2024, buildCacheKey } from "./types";
 import { buildDefaultHypotheses, buildZeroGrowthHypotheses } from "./asset-simulator";
+import { computeXIRR, computeControlScenario } from "./financial-math";
 import { computeEffectiveAllocation } from "./contribution-simulator";
 import { computeTaxOnGain } from "./tax-simulator";
 import { simulateSaleRules } from "./sale-simulator";
@@ -636,8 +637,7 @@ describe("buildCacheKey", () => {
 });
 
 // ── Bloque B1: validación de orden entre escenarios ───────────────────────────
-
-import { runAllScenarios } from "./scenario-engine";
+// (runAllScenarios already imported at top of file)
 
 describe("ordenación de escenarios — regresión inversión", () => {
   const now = new Date("2026-01-01").getTime();
@@ -859,5 +859,134 @@ describe("simulateProposedRebuys", () => {
     const rebuy = rebuyResults.find(r => r.triggered);
     expect(rebuy).toBeDefined();
     expect(rebuy!.eurcConsumedEur).toBeGreaterThan(0);
+  });
+});
+
+// ── financial-math tests ───────────────────────────────────────────────────────
+
+describe("financial-math", () => {
+  test("computeXIRR: flujos de suma cero → XIRR ≈ 0%", () => {
+    const now = new Date("2026-01-01").getTime();
+    const MS = (365.25 / 12) * 24 * 3600 * 1000;
+    const months = 12;
+    const monthly = 300;
+    const flows: { date: number; amount: number }[] = [{ date: now, amount: -100 }];
+    for (let i = 1; i <= months; i++) {
+      flows.push({ date: now + i * MS, amount: -monthly });
+    }
+    // Return exactly what was put in (zero net gain)
+    flows.push({ date: now + months * MS, amount: 100 + monthly * months });
+    const xirr = computeXIRR(flows);
+    expect(xirr).not.toBeNull();
+    expect(Math.abs(xirr!)).toBeLessThan(0.01);
+  });
+
+  test("computeControlScenario: 5% anual → XIRR converge a ≈ 5%", () => {
+    const now = new Date("2026-01-01").getTime();
+    const result = computeControlScenario({
+      initialWealthEur: 1000,
+      monthlyContributionEur: 200,
+      annualReturnRate: 0.05,
+      months: 120,
+      projectionStartDate: now,
+    });
+    expect(result.finalWealth).toBeGreaterThan(1000 + 200 * 120);
+    expect(result.xirr).not.toBeNull();
+    expect(Math.abs(result.xirr! - 0.05)).toBeLessThan(0.005);
+  });
+
+  test("computeControlScenario: 7% anual → XIRR converge a ≈ 7%", () => {
+    const now = new Date("2026-01-01").getTime();
+    const result = computeControlScenario({
+      initialWealthEur: 1000,
+      monthlyContributionEur: 200,
+      annualReturnRate: 0.07,
+      months: 120,
+      projectionStartDate: now,
+    });
+    expect(result.xirr).not.toBeNull();
+    expect(Math.abs(result.xirr! - 0.07)).toBeLessThan(0.005);
+  });
+
+  test("computeControlScenario: 7% > 5% > 0%", () => {
+    const now = new Date("2026-01-01").getTime();
+    const params = { initialWealthEur: 500, monthlyContributionEur: 300, months: 216, projectionStartDate: now };
+    const c0 = computeControlScenario({ ...params, annualReturnRate: 0 });
+    const c5 = computeControlScenario({ ...params, annualReturnRate: 0.05 });
+    const c7 = computeControlScenario({ ...params, annualReturnRate: 0.07 });
+    expect(c5.finalWealth).toBeGreaterThan(c0.finalWealth);
+    expect(c7.finalWealth).toBeGreaterThan(c5.finalWealth);
+  });
+
+  test("projection 0% growth: xirrAnnual ≈ 0%", () => {
+    const snap = makeSnapshot();
+    const start = snap.projectionStartDate;
+    const out = runProjection({
+      snapshot: snap,
+      projectionStartDate: start,
+      horizonDate: start + 3 * 365.25 * 24 * 3600 * 1000,
+      scenario: "cero",
+      scenarioHypotheses: buildZeroGrowthHypotheses(["BTC", "ETH"]),
+      fiscalConfig: SPANISH_FISCAL_CONFIG_2024,
+      resolution: "monthly",
+      options: { simulationPolicy: "plan_base" },
+      now: start,
+    });
+    expect(out.summary.xirrAnnual).not.toBeNull();
+    expect(Math.abs(out.summary.xirrAnnual!)).toBeLessThan(0.02);
+  });
+
+  test("períodos: totalCapitalEur es monotónicamente no decreciente", () => {
+    const snap = makeSnapshot();
+    const out = runProjection({
+      snapshot: snap,
+      projectionStartDate: snap.projectionStartDate,
+      horizonDate: snap.projectionStartDate + 24 * 30 * 24 * 3600 * 1000,
+      scenario: "base",
+      scenarioHypotheses: buildDefaultHypotheses("base", ["BTC", "ETH"]),
+      fiscalConfig: SPANISH_FISCAL_CONFIG_2024,
+      resolution: "monthly",
+      options: { simulationPolicy: "plan_base" },
+      now: snap.projectionStartDate,
+    });
+    for (let i = 1; i < out.periods.length; i++) {
+      expect(out.periods[i].totalCapitalEur).toBeGreaterThanOrEqual(out.periods[i - 1].totalCapitalEur - 0.01);
+    }
+  });
+
+  test("conciliación: sin doble conteo de plusvalías", () => {
+    const snap = makeSnapshot();
+    const out = runProjection({
+      snapshot: snap,
+      projectionStartDate: snap.projectionStartDate,
+      horizonDate: snap.projectionStartDate + 12 * 30 * 24 * 3600 * 1000,
+      scenario: "base",
+      scenarioHypotheses: buildDefaultHypotheses("base", ["BTC", "ETH"]),
+      fiscalConfig: SPANISH_FISCAL_CONFIG_2024,
+      resolution: "monthly",
+      options: { simulationPolicy: "plan_base" },
+      now: snap.projectionStartDate,
+    });
+    expect(out.reconciliation.allPassed).toBe(true);
+  });
+
+  test("controles independientes: 5% > 0% y 7% > 5% en summary", () => {
+    const snap = makeSnapshot();
+    const out = runProjection({
+      snapshot: snap,
+      projectionStartDate: snap.projectionStartDate,
+      horizonDate: snap.projectionStartDate + 10 * 365.25 * 24 * 3600 * 1000,
+      scenario: "base",
+      scenarioHypotheses: buildDefaultHypotheses("base", ["BTC", "ETH"]),
+      fiscalConfig: SPANISH_FISCAL_CONFIG_2024,
+      resolution: "monthly",
+      options: { simulationPolicy: "plan_base" },
+      now: snap.projectionStartDate,
+    });
+    const c0 = out.summary.controlCeroWealth ?? 0;
+    const c5 = out.summary.control5pctWealth ?? 0;
+    const c7 = out.summary.control7pctWealth ?? 0;
+    expect(c5).toBeGreaterThan(c0);
+    expect(c7).toBeGreaterThan(c5);
   });
 });

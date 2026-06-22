@@ -392,14 +392,86 @@ export function Perspectivas() {
                         </details>
                       </div>
                     )}
-                    <div className="metric-item highlight" style={{ borderColor: SCENARIO_COLORS[activeScenario] }}>
-                      <span className="metric-label">Rentabilidad anualizada est.</span>
-                      <span className="metric-value">{activeScenarioData.summary.weightedAnnualReturn != null
-                        ? `${(activeScenarioData.summary.weightedAnnualReturn * 100).toFixed(1)}% / año`
-                        : "—"}</span>
-                      <span className="metric-sub">Horizonte: {horizonYears} años · Neto de impuestos</span>
+                    <div className="metric-item highlight" style={{ borderColor: SCENARIO_COLORS[activeScenario], gridColumn: "1 / -1" }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.75rem" }}>
+                        <div>
+                          <span className="metric-label">XIRR — Rent. personal</span>
+                          <span className="metric-value">
+                            {(activeScenarioData.summary as any).xirrAnnual != null
+                              ? `${(((activeScenarioData.summary as any).xirrAnnual as number) * 100).toFixed(2)}% / año`
+                              : "—"}
+                          </span>
+                          <span className="metric-sub">Flujos reales fechados</span>
+                        </div>
+                        <div>
+                          <span className="metric-label">TWR — Rent. estrategia</span>
+                          <span className="metric-value">
+                            {(activeScenarioData.summary as any).twrAnnual != null
+                              ? `${(((activeScenarioData.summary as any).twrAnnual as number) * 100).toFixed(2)}% / año`
+                              : "—"}
+                          </span>
+                          <span className="metric-sub">Sin efecto de flujos</span>
+                        </div>
+                        <div>
+                          <span className="metric-label">ROI acumulado</span>
+                          <span className="metric-value">
+                            {(activeScenarioData.summary as any).roiAccumulated != null
+                              ? `${(((activeScenarioData.summary as any).roiAccumulated as number) * 100).toFixed(1)}%`
+                              : "—"}
+                          </span>
+                          <span className="metric-sub">Patrimonio / Capital − 1</span>
+                        </div>
+                      </div>
+                      <span className="metric-sub" style={{ display: "block", marginTop: "0.5rem" }}>
+                        Horizonte: {horizonYears} años · Neto de impuestos
+                      </span>
                     </div>
                   </div>
+                </div>
+              )}
+
+              {/* ── Comparativa con controles independientes ── */}
+              {activeScenarioData && (
+                <div className="perspectives-cycle-table-wrapper" style={{ marginTop: "1rem" }}>
+                  <h4 style={{ fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.5rem", color: "var(--text-muted)" }}>
+                    Controles independientes — Horizonte {horizonYears} años
+                  </h4>
+                  <table className="perspectives-cycle-table">
+                    <thead>
+                      <tr>
+                        <th>Referencia</th>
+                        <th className="text-right">Patrimonio final</th>
+                        <th className="text-right">Método</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>Control 0% (suelo mínimo)</td>
+                        <td className="text-right">{fmt((activeScenarioData.summary as any).controlCeroWealth ?? 0)}</td>
+                        <td className="text-right text-muted">Anualidad a 0%</td>
+                      </tr>
+                      <tr>
+                        <td>Control 5% anual</td>
+                        <td className="text-right">{fmt((activeScenarioData.summary as any).control5pctWealth ?? 0)}</td>
+                        <td className="text-right text-muted">Anualidad a 5%</td>
+                      </tr>
+                      <tr>
+                        <td>Control 7% anual</td>
+                        <td className="text-right">{fmt((activeScenarioData.summary as any).control7pctWealth ?? 0)}</td>
+                        <td className="text-right text-muted">Anualidad a 7%</td>
+                      </tr>
+                      <tr style={{ fontWeight: 600, background: `${SCENARIO_COLORS[activeScenario]}22` }}>
+                        <td>Escenario {activeScenarioData.label}</td>
+                        <td className="text-right">{fmt(activeScenarioData.summary.finalNetWealthEur)}</td>
+                        <td className="text-right text-muted">Simulación completa</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <p style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: "0.4rem" }}>
+                    Controles calculados con fórmula analítica independiente (FV anualidad) ·
+                    Aportación media: {fmt(activeScenarioData.summary.totalFutureCapitalEur / Math.max(1, horizonYears * 12))}/mes ·
+                    Capital inicial: {fmt(activeScenarioData.summary.initialGrossWealthEur)}
+                  </p>
                 </div>
               )}
 
@@ -410,7 +482,7 @@ export function Perspectivas() {
                     <tr>
                       <th>Escenario</th>
                       <th className="text-right">Patr. neto</th>
-                      <th className="text-right">Rent. anualiz.</th>
+                      <th className="text-right">XIRR</th>
                       <th className="text-right">Probabilidad</th>
                       <th className="text-right">Impuesto</th>
                       <th className="text-right">Ventas</th>
@@ -442,7 +514,9 @@ export function Perspectivas() {
                           </td>
                           <td className="text-right font-medium">{fmt(sc.summary.finalNetWealthEur)}</td>
                           <td className="text-right">
-                            {sc.summary.weightedAnnualReturn != null
+                            {(sc.summary as any).xirrAnnual != null
+                              ? `${(((sc.summary as any).xirrAnnual as number) * 100).toFixed(1)}%`
+                              : sc.summary.weightedAnnualReturn != null
                               ? `${(sc.summary.weightedAnnualReturn * 100).toFixed(1)}%`
                               : "—"}
                           </td>
@@ -1012,7 +1086,7 @@ function StrategyBreakdownSection({
           <div className="perspectives-current-card">
             <span className="label">Patrimonio neto</span>
             <span className="value">{fmt(scenario.summary.finalNetWealthEur)}</span>
-            <span className="sub">Retorno ponderado: {pct(scenario.summary.weightedAnnualReturn)}</span>
+            <span className="sub">XIRR: {(scenario.summary as any).xirrAnnual != null ? pct((scenario.summary as any).xirrAnnual) : pct(scenario.summary.weightedAnnualReturn)}</span>
           </div>
         </div>
 
