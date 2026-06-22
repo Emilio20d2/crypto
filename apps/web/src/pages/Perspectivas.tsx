@@ -265,13 +265,42 @@ export function Perspectivas() {
     : 0;
   const beneficioAcumulado = activeNet != null ? activeNet - totalCapital : null;
 
-  // Annual breakdown row for target year
+  // Annual breakdown — typed accessor
+  const annualBreakdown = useMemo(
+    () => (activeScenarioData?.annualBreakdown ?? []) as Array<{
+      year: number;
+      inheritedWealthEur: number;
+      contributionsEur: number;
+      salesEur: number;
+      rebuysEur: number;
+      taxEur: number;
+      marketGainEur: number;
+      endWealthEur: number;
+      annualGrowthPct: number | null;
+      eurcAvailableEur: number;
+      fiscalReserveEur: number;
+      scope: "plan" | "extrapol";
+      positions: Record<string, { assetId: string; balance: number; avgCostEur: number | null; priceEur: number | null; valueEur: number | null; unrealizedGainEur: number | null }>;
+      events: Array<{ date: number; type: string; assetId?: string; amountEur?: number; quantity?: number; priceEur?: number; gainEur?: number; taxEur?: number; description: string }>;
+    }>,
+    [activeScenarioData],
+  );
+
+  // Selected year for detail drill-down (defaults to last year in annualBreakdown)
+  const [selectedDetailYear, setSelectedDetailYear] = useState<number | null>(null);
+  const effectiveDetailYear = selectedDetailYear ?? annualBreakdown[annualBreakdown.length - 1]?.year ?? targetYear;
+
+  // Annual breakdown row for target year (summary card outside detail panel)
   const yearRow = useMemo(() => {
     if (!activeScenarioData) return null;
-    const bd = (activeScenarioData as any).annualBreakdown as Array<any> | undefined;
-    if (!bd || bd.length === 0) return null;
-    return bd.find((r: any) => r.year === targetYear) ?? bd[bd.length - 1] ?? null;
-  }, [activeScenarioData, targetYear]);
+    return annualBreakdown.find(r => r.year === targetYear) ?? annualBreakdown[annualBreakdown.length - 1] ?? null;
+  }, [activeScenarioData, annualBreakdown, targetYear]);
+
+  // Row for the selected detail year
+  const detailRow = useMemo(
+    () => annualBreakdown.find(r => r.year === effectiveDetailYear) ?? annualBreakdown[annualBreakdown.length - 1] ?? null,
+    [annualBreakdown, effectiveDetailYear],
+  );
 
   // Max wealth across 3 perspectives for comparison bars
   const maxWealth = useMemo(() => {
@@ -704,105 +733,196 @@ export function Perspectivas() {
                   targetYear={targetYear}
                 />
 
-                {/* Tabla anual */}
-                {(activeScenarioData as any).annualBreakdown?.length > 0 && (
-                  <div className="perspectives-cycle-table-wrapper" style={{ marginTop: "1.25rem" }}>
-                    <table className="perspectives-cycle-table">
-                      <thead>
-                        <tr>
-                          <th>Año</th>
-                          <th className="text-right">Capital inicial ↓</th>
-                          <th className="text-right">Aportaciones</th>
-                          <th className="text-right">Ganancia mercado</th>
-                          <th className="text-right">% año</th>
-                          <th className="text-right">Ventas</th>
-                          <th className="text-right">Recompras</th>
-                          <th className="text-right">Impuestos</th>
-                          <th className="text-right" style={{ fontWeight: 700 }}>Capital final ↓</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {((activeScenarioData as any).annualBreakdown as Array<{
-                          year: number;
-                          inheritedWealthEur: number;
-                          contributionsEur: number;
-                          salesEur: number;
-                          rebuysEur: number;
-                          taxEur: number;
-                          marketGainEur: number;
-                          endWealthEur: number;
-                          annualGrowthPct: number | null;
-                          scope?: "plan" | "extrapol";
-                        }>).map((row, idx, arr) => {
-                          const prevScope = idx > 0 ? arr[idx - 1].scope : undefined;
-                          const isFirstExtrapol = row.scope === "extrapol" && prevScope !== "extrapol";
-                          return (
-                            <>
-                              {isFirstExtrapol && (
-                                <tr key={`sep-${row.year}`} style={{ background: "transparent" }}>
-                                  <td colSpan={9} style={{ padding: "2px 4px", fontSize: "0.7rem", color: "var(--text-muted)", fontStyle: "italic", borderTop: "1px dashed var(--color-border)" }}>
-                                    — Extrapolación libre (sin nuevas aportaciones del plan) —
+                {/* Tabla anual + selector de año + detalle por año */}
+                {annualBreakdown.length > 0 && (
+                  <div style={{ marginTop: "1.25rem" }}>
+
+                    {/* Year chips */}
+                    <div className="persp-year-selector">
+                      {annualBreakdown.map(row => (
+                        <button
+                          key={row.year}
+                          className={`persp-year-chip${row.scope === "extrapol" ? " extrapol" : ""}${row.year === effectiveDetailYear ? " active" : ""}`}
+                          onClick={() => setSelectedDetailYear(row.year)}
+                          title={row.scope === "extrapol" ? "Extrapolación libre" : undefined}
+                        >
+                          {row.year}{row.scope === "extrapol" ? " ›" : ""}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Evolution table */}
+                    <div className="perspectives-cycle-table-wrapper">
+                      <table className="perspectives-cycle-table">
+                        <thead>
+                          <tr>
+                            <th>Año</th>
+                            <th className="text-right">Capital inicial ↓</th>
+                            <th className="text-right">Aportaciones</th>
+                            <th className="text-right">Ganancia mercado</th>
+                            <th className="text-right">% año</th>
+                            <th className="text-right">Ventas</th>
+                            <th className="text-right">Recompras</th>
+                            <th className="text-right">Impuestos</th>
+                            <th className="text-right" style={{ fontWeight: 700 }}>Capital final ↓</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {annualBreakdown.map((row, idx, arr) => {
+                            const prevScope = idx > 0 ? arr[idx - 1].scope : undefined;
+                            const isFirstExtrapol = row.scope === "extrapol" && prevScope !== "extrapol";
+                            const isSelected = row.year === effectiveDetailYear;
+                            return (
+                              <>
+                                {isFirstExtrapol && (
+                                  <tr key={`sep-${row.year}`} style={{ background: "transparent" }}>
+                                    <td colSpan={9} style={{ padding: "2px 4px", fontSize: "0.7rem", color: "var(--text-muted)", fontStyle: "italic", borderTop: "1px dashed var(--color-border)" }}>
+                                      — Extrapolación libre (sin nuevas aportaciones del plan) —
+                                    </td>
+                                  </tr>
+                                )}
+                                <tr
+                                  key={row.year}
+                                  style={{
+                                    opacity: row.scope === "extrapol" ? 0.65 : undefined,
+                                    background: isSelected ? "color-mix(in srgb, var(--color-primary) 8%, transparent)" : undefined,
+                                    cursor: "pointer",
+                                  }}
+                                  onClick={() => setSelectedDetailYear(row.year)}
+                                >
+                                  <td style={{ fontWeight: isSelected ? 700 : 600, color: isSelected ? PERSPECTIVE_COLORS[activePerspective] : undefined }}>
+                                    {row.year}
+                                    {row.scope === "extrapol" && <span title="Fuera del horizonte del plan" style={{ fontSize: "0.65rem", marginLeft: 3, color: "var(--text-muted)" }}>›</span>}
                                   </td>
+                                  <td className="text-right text-muted">{fmt(row.inheritedWealthEur)}</td>
+                                  <td className="text-right">{fmt(row.contributionsEur)}</td>
+                                  <td className="text-right" style={{ color: row.marketGainEur >= 0 ? "var(--color-success, #10b981)" : "var(--color-negative, #ef4444)", fontWeight: 500 }}>
+                                    {row.marketGainEur >= 0 ? "+" : ""}{fmt(row.marketGainEur)}
+                                  </td>
+                                  <td className="text-right" style={{
+                                    fontWeight: 700,
+                                    color: row.annualGrowthPct == null ? "var(--text-muted)"
+                                      : row.annualGrowthPct >= 0 ? "var(--color-success, #10b981)"
+                                      : "var(--color-negative, #ef4444)",
+                                  }}>
+                                    {row.annualGrowthPct != null
+                                      ? `${row.annualGrowthPct >= 0 ? "+" : ""}${row.annualGrowthPct.toFixed(1)}%`
+                                      : "—"}
+                                  </td>
+                                  <td className="text-right text-muted">{row.salesEur > 0 ? fmt(row.salesEur) : "—"}</td>
+                                  <td className="text-right text-muted">{row.rebuysEur > 0 ? fmt(row.rebuysEur) : "—"}</td>
+                                  <td className="text-right text-muted">{row.taxEur > 0 ? fmt(row.taxEur) : "—"}</td>
+                                  <td className="text-right" style={{ fontWeight: 700, color: PERSPECTIVE_COLORS[activePerspective] }}>{fmt(row.endWealthEur)}</td>
                                 </tr>
-                              )}
-                              <tr key={row.year} style={row.scope === "extrapol" ? { opacity: 0.65 } : undefined}>
-                                <td style={{ fontWeight: 600 }}>
-                                  {row.year}
-                                  {row.scope === "extrapol" && <span title="Fuera del horizonte del plan" style={{ fontSize: "0.65rem", marginLeft: 3, color: "var(--text-muted)" }}>›</span>}
-                                </td>
-                                <td className="text-right text-muted">{fmt(row.inheritedWealthEur)}</td>
-                                <td className="text-right">{fmt(row.contributionsEur)}</td>
-                                <td className="text-right" style={{ color: row.marketGainEur >= 0 ? "var(--color-success, #10b981)" : "var(--color-negative, #ef4444)", fontWeight: 500 }}>
-                                  {row.marketGainEur >= 0 ? "+" : ""}{fmt(row.marketGainEur)}
-                                </td>
-                                <td className="text-right" style={{
-                                  fontWeight: 700,
-                                  color: row.annualGrowthPct == null ? "var(--text-muted)"
-                                    : row.annualGrowthPct >= 0 ? "var(--color-success, #10b981)"
-                                    : "var(--color-negative, #ef4444)",
-                                }}>
-                                  {row.annualGrowthPct != null
-                                    ? `${row.annualGrowthPct >= 0 ? "+" : ""}${row.annualGrowthPct.toFixed(1)}%`
-                                    : "—"}
-                                </td>
-                                <td className="text-right text-muted">{row.salesEur > 0 ? fmt(row.salesEur) : "—"}</td>
-                                <td className="text-right text-muted">{row.rebuysEur > 0 ? fmt(row.rebuysEur) : "—"}</td>
-                                <td className="text-right text-muted">{row.taxEur > 0 ? fmt(row.taxEur) : "—"}</td>
-                                <td className="text-right" style={{ fontWeight: 700, color: PERSPECTIVE_COLORS[activePerspective] }}>{fmt(row.endWealthEur)}</td>
+                              </>
+                            );
+                          })}
+                        </tbody>
+                        <tfoot>
+                          <tr style={{ borderTop: "2px solid var(--color-border)", fontWeight: 700 }}>
+                            <td>Total</td>
+                            <td className="text-right text-muted">—</td>
+                            <td className="text-right">{fmt(activeScenarioData.summary.totalFutureCapitalEur)}</td>
+                            <td className="text-right" style={{ color: activeScenarioData.summary.estimatedMarketGainEur >= 0 ? "var(--color-success, #10b981)" : "var(--color-negative, #ef4444)" }}>
+                              {activeScenarioData.summary.estimatedMarketGainEur >= 0 ? "+" : ""}{fmt(activeScenarioData.summary.estimatedMarketGainEur)}
+                            </td>
+                            <td className="text-right text-muted" title="XIRR del escenario">
+                              {(activeScenarioData.summary as any).xirrAnnual != null
+                                ? `${((activeScenarioData.summary as any).xirrAnnual * 100).toFixed(1)}%`
+                                : "—"}
+                            </td>
+                            <td className="text-right text-muted">{fmt(activeScenarioData.cycleResults.reduce((a, c) => a + c.salesEur, 0))}</td>
+                            <td className="text-right text-muted">{fmt(activeScenarioData.cycleResults.reduce((a, c) => a + c.rebuysEur, 0))}</td>
+                            <td className="text-right text-muted">{fmt(activeScenarioData.summary.totalTaxGeneratedEur)}</td>
+                            <td className="text-right" style={{ color: PERSPECTIVE_COLORS[activePerspective] }}>{fmt(activeScenarioData.summary.finalNetWealthEur)}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                      <p style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: "0.4rem" }}>
+                        <strong>↓ Capital inicial = Capital final del año anterior</strong> (compounding explícito) ·
+                        <strong> % año</strong>: rendimiento del patrimonio acumulado (mercado + recompras − impuestos / capital inicial) ·
+                        El motor modela fases bull/corrección de ciclos de halving ·
+                        {simulationPolicy !== "plan_base" && simulationPolicy !== "confirmed_only"
+                          ? " Ventas/recompras incluyen propuestas según Plan."
+                          : " Política sin propuestas automáticas."}
+                        {" › = extrapolación libre fuera del plan configurado."}
+                      </p>
+                    </div>
+
+                    {/* Per-year detail: asset positions */}
+                    {detailRow && Object.keys(detailRow.positions).length > 0 && (
+                      <div className="persp-year-detail">
+                        <p className="persp-year-detail-title">Posiciones a fin de {detailRow.year} — {PERSPECTIVE_NAMES[activePerspective]}</p>
+                        <div className="perspectives-cycle-table-wrapper">
+                          <table className="perspectives-cycle-table">
+                            <thead>
+                              <tr>
+                                <th>Activo</th>
+                                <th className="text-right">Balance</th>
+                                <th className="text-right">Precio prev.</th>
+                                <th className="text-right">Valor</th>
+                                <th className="text-right">Coste medio</th>
+                                <th className="text-right">G/P lat.</th>
                               </tr>
-                            </>
-                          );
-                        })}
-                      </tbody>
-                      <tfoot>
-                        <tr style={{ borderTop: "2px solid var(--color-border)", fontWeight: 700 }}>
-                          <td>Total</td>
-                          <td className="text-right text-muted">—</td>
-                          <td className="text-right">{fmt(activeScenarioData.summary.totalFutureCapitalEur)}</td>
-                          <td className="text-right" style={{ color: activeScenarioData.summary.estimatedMarketGainEur >= 0 ? "var(--color-success, #10b981)" : "var(--color-negative, #ef4444)" }}>
-                            {activeScenarioData.summary.estimatedMarketGainEur >= 0 ? "+" : ""}{fmt(activeScenarioData.summary.estimatedMarketGainEur)}
-                          </td>
-                          <td className="text-right text-muted" title="XIRR del escenario">
-                            {(activeScenarioData.summary as any).xirrAnnual != null
-                              ? `${((activeScenarioData.summary as any).xirrAnnual * 100).toFixed(1)}%`
-                              : "—"}
-                          </td>
-                          <td className="text-right text-muted">{fmt(activeScenarioData.cycleResults.reduce((a, c) => a + c.salesEur, 0))}</td>
-                          <td className="text-right text-muted">{fmt(activeScenarioData.cycleResults.reduce((a, c) => a + c.rebuysEur, 0))}</td>
-                          <td className="text-right text-muted">{fmt(activeScenarioData.summary.totalTaxGeneratedEur)}</td>
-                          <td className="text-right" style={{ color: PERSPECTIVE_COLORS[activePerspective] }}>{fmt(activeScenarioData.summary.finalNetWealthEur)}</td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                    <p style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: "0.4rem" }}>
-                      <strong>↓ Capital inicial = Capital final del año anterior</strong> (compounding explícito) ·
-                      <strong> % año</strong>: rendimiento del patrimonio acumulado (mercado + recompras − impuestos / capital inicial) ·
-                      El motor modela fases bull/corrección de ciclos de halving ·
-                      {simulationPolicy !== "plan_base" && simulationPolicy !== "confirmed_only"
-                        ? " Ventas/recompras incluyen propuestas según Plan."
-                        : " Política sin propuestas automáticas."}
-                      {" › = extrapolación libre fuera del plan configurado."}
-                    </p>
+                            </thead>
+                            <tbody>
+                              {Object.values(detailRow.positions)
+                                .filter(p => p.balance > 0)
+                                .sort((a, b) => (b.valueEur ?? 0) - (a.valueEur ?? 0))
+                                .map(pos => (
+                                  <tr key={pos.assetId}>
+                                    <td style={{ fontWeight: 600 }}>{pos.assetId}</td>
+                                    <td className="text-right text-muted">{pos.balance.toFixed(4)}</td>
+                                    <td className="text-right text-muted">{pos.priceEur != null ? fmt(pos.priceEur) : "—"}</td>
+                                    <td className="text-right">{pos.valueEur != null ? fmt(pos.valueEur) : "—"}</td>
+                                    <td className="text-right text-muted">{pos.avgCostEur != null ? fmt(pos.avgCostEur) : "—"}</td>
+                                    <td className="text-right" style={{ color: (pos.unrealizedGainEur ?? 0) >= 0 ? "var(--color-success, #10b981)" : "var(--color-negative, #ef4444)", fontWeight: 500 }}>
+                                      {pos.unrealizedGainEur != null
+                                        ? `${pos.unrealizedGainEur >= 0 ? "+" : ""}${fmt(pos.unrealizedGainEur)}`
+                                        : "—"}
+                                    </td>
+                                  </tr>
+                                ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Per-year detail: events */}
+                    {detailRow && detailRow.events.length > 0 && (
+                      <div className="persp-year-detail">
+                        <p className="persp-year-detail-title">Eventos proyectados en {detailRow.year}</p>
+                        <div className="perspectives-cycle-table-wrapper">
+                          <table className="perspectives-cycle-table">
+                            <thead>
+                              <tr>
+                                <th>Fecha</th>
+                                <th>Tipo</th>
+                                <th>Activo</th>
+                                <th className="text-right">Importe</th>
+                                <th>Descripción</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {detailRow.events.map((ev, i) => (
+                                <tr key={i}>
+                                  <td className="text-muted" style={{ fontSize: "0.78rem" }}>
+                                    {new Date(ev.date).toLocaleDateString("es-ES", { month: "short", year: "numeric" })}
+                                  </td>
+                                  <td style={{ fontSize: "0.78rem" }}>{ev.type}</td>
+                                  <td style={{ fontWeight: 600, fontSize: "0.78rem" }}>{ev.assetId ?? "—"}</td>
+                                  <td className="text-right text-muted" style={{ fontSize: "0.78rem" }}>
+                                    {ev.amountEur != null ? fmt(ev.amountEur) : "—"}
+                                  </td>
+                                  <td className="text-muted" style={{ fontSize: "0.75rem" }}>{ev.description}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </CardContent>

@@ -244,6 +244,39 @@ export interface ProjectionScenarioResult {
     reachedYear: number | null;
     isReached: boolean;
   }>;
+  annualBreakdown: Array<{
+    year: number;
+    inheritedWealthEur: number;
+    contributionsEur: number;
+    salesEur: number;
+    rebuysEur: number;
+    taxEur: number;
+    marketGainEur: number;
+    endWealthEur: number;
+    annualGrowthPct: number | null;
+    eurcAvailableEur: number;
+    fiscalReserveEur: number;
+    scope: "plan" | "extrapol";
+    positions: Record<string, {
+      assetId: string;
+      balance: number;
+      avgCostEur: number | null;
+      priceEur: number | null;
+      valueEur: number | null;
+      unrealizedGainEur: number | null;
+    }>;
+    events: Array<{
+      date: number;
+      type: string;
+      assetId?: string;
+      amountEur?: number;
+      quantity?: number;
+      priceEur?: number;
+      gainEur?: number;
+      taxEur?: number;
+      description: string;
+    }>;
+  }>;
 }
 
 export interface ProjectionResult {

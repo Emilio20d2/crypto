@@ -4204,31 +4204,19 @@ function setupIpcHandlers() {
           eurcAvailableEur: p.eurcAvailableEur,
         })),
         annualBreakdown: (() => {
-          // Group periods by calendar year and compute per-year deltas.
-          // Each row verifies: endWealthEur[Y] = inheritedWealthEur[Y+1]
-          // Rows are tagged: "plan" (within a configured cycle) or "extrapol" (beyond last cycle end).
           const lastCycleEndMs = snapshot.cycles.reduce((max, c) =>
             c.endDate != null ? Math.max(max, c.endDate) : max, 0);
 
-          const rows: {
-            year: number;
-            inheritedWealthEur: number;
-            contributionsEur: number;
-            salesEur: number;
-            rebuysEur: number;
-            taxEur: number;
-            marketGainEur: number;
-            endWealthEur: number;
-            annualGrowthPct: number | null; // (endWealth - inheritedWealth) / inheritedWealth × 100
-            scope: "plan" | "extrapol";
-          }[] = [];
-          if (out.periods.length === 0) return rows;
+          if (out.periods.length === 0) return [];
 
-          // last period of each calendar year
+          // last period of each year, and all periods per year (for events)
           const byYear = new Map<number, typeof out.periods[0]>();
+          const periodsByYear = new Map<number, (typeof out.periods[0])[]>();
           for (const p of out.periods) {
             const y = new Date(p.date).getUTCFullYear();
-            byYear.set(y, p); // keeps last period of each year
+            byYear.set(y, p);
+            if (!periodsByYear.has(y)) periodsByYear.set(y, []);
+            periodsByYear.get(y)!.push(p);
           }
 
           let prevWealth = out.summary.initialGrossWealthEur;
@@ -4237,21 +4225,21 @@ function setupIpcHandlers() {
           let prevRebuys = 0;
           let prevTax = 0;
 
-          for (const [year, last] of [...byYear.entries()].sort((a, b) => a[0] - b[0])) {
+          return [...byYear.entries()].sort((a, b) => a[0] - b[0]).map(([year, last]) => {
             const contributions = last.futureCapitalEur - prevFutureCapital;
             const sales = last.totalSalesEur - prevSales;
             const rebuys = last.totalRebuysEur - prevRebuys;
             const tax = last.taxGeneratedEur - prevTax;
             const marketGain = last.grossWealthEur - prevWealth - contributions;
             const yearEndMs = new Date(Date.UTC(year, 11, 31)).getTime();
-            // annualGrowthPct = total return on starting capital for the year
-            // = (endWealth - inheritedWealth) / inheritedWealth × 100
-            // This makes compounding explicit: each row's % is the return
-            // the accumulated portfolio earned IN THAT YEAR.
             const annualGrowthPct = prevWealth > 0
               ? Math.round(((last.grossWealthEur - prevWealth) / prevWealth) * 10000) / 100
               : null;
-            rows.push({
+
+            // collect all events from this year's periods
+            const yearEvents = (periodsByYear.get(year) ?? []).flatMap(p => p.events ?? []);
+
+            const row = {
               year,
               inheritedWealthEur: Math.round(prevWealth * 100) / 100,
               contributionsEur: Math.round(contributions * 100) / 100,
@@ -4261,15 +4249,20 @@ function setupIpcHandlers() {
               marketGainEur: Math.round(marketGain * 100) / 100,
               endWealthEur: Math.round(last.grossWealthEur * 100) / 100,
               annualGrowthPct,
-              scope: lastCycleEndMs > 0 && yearEndMs > lastCycleEndMs ? "extrapol" : "plan",
-            });
+              eurcAvailableEur: Math.round((last.eurcAvailableEur ?? 0) * 100) / 100,
+              fiscalReserveEur: Math.round((last.fiscalReserveEur ?? 0) * 100) / 100,
+              scope: (lastCycleEndMs > 0 && yearEndMs > lastCycleEndMs ? "extrapol" : "plan") as "plan" | "extrapol",
+              positions: last.positions ?? {},
+              events: yearEvents,
+            };
+
             prevWealth = last.grossWealthEur;
             prevFutureCapital = last.futureCapitalEur;
             prevSales = last.totalSalesEur;
             prevRebuys = last.totalRebuysEur;
             prevTax = last.taxGeneratedEur;
-          }
-          return rows;
+            return row;
+          });
         })(),
         assetResults: out.assetResults.map(a => ({
           assetId: a.assetId,
