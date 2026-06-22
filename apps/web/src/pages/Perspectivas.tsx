@@ -508,20 +508,40 @@ export function Perspectivas() {
                           taxEur: number;
                           marketGainEur: number;
                           endWealthEur: number;
-                        }>).map(row => (
-                          <tr key={row.year}>
-                            <td style={{ fontWeight: 600 }}>{row.year}</td>
-                            <td className="text-right text-muted">{fmt(row.inheritedWealthEur)}</td>
-                            <td className="text-right">{fmt(row.contributionsEur)}</td>
-                            <td className="text-right" style={{ color: row.marketGainEur >= 0 ? "var(--color-success, #10b981)" : "var(--color-negative, #ef4444)", fontWeight: 500 }}>
-                              {row.marketGainEur >= 0 ? "+" : ""}{fmt(row.marketGainEur)}
-                            </td>
-                            <td className="text-right text-muted">{row.salesEur > 0 ? fmt(row.salesEur) : "—"}</td>
-                            <td className="text-right text-muted">{row.rebuysEur > 0 ? fmt(row.rebuysEur) : "—"}</td>
-                            <td className="text-right text-muted">{row.taxEur > 0 ? fmt(row.taxEur) : "—"}</td>
-                            <td className="text-right" style={{ fontWeight: 700, color: SCENARIO_COLORS[activeScenario] }}>{fmt(row.endWealthEur)}</td>
-                          </tr>
-                        ))}
+                          scope?: "plan" | "extrapol";
+                        }>).map((row, idx, arr) => {
+                          const prevScope = idx > 0 ? arr[idx - 1].scope : undefined;
+                          const isFirstExtrapol = row.scope === "extrapol" && prevScope !== "extrapol";
+                          return (
+                            <>
+                              {isFirstExtrapol && (
+                                <tr key={`sep-${row.year}`} style={{ background: "transparent" }}>
+                                  <td colSpan={8} style={{ padding: "2px 4px", fontSize: "0.7rem", color: "var(--text-muted)", fontStyle: "italic", borderTop: "1px dashed var(--color-border)" }}>
+                                    — Extrapolación libre (sin nuevas aportaciones del plan) —
+                                  </td>
+                                </tr>
+                              )}
+                              <tr
+                                key={row.year}
+                                style={row.scope === "extrapol" ? { opacity: 0.65 } : undefined}
+                              >
+                                <td style={{ fontWeight: 600 }}>
+                                  {row.year}
+                                  {row.scope === "extrapol" && <span title="Fuera del horizonte del plan configurado" style={{ fontSize: "0.65rem", marginLeft: 3, color: "var(--text-muted)" }}>›</span>}
+                                </td>
+                                <td className="text-right text-muted">{fmt(row.inheritedWealthEur)}</td>
+                                <td className="text-right">{fmt(row.contributionsEur)}</td>
+                                <td className="text-right" style={{ color: row.marketGainEur >= 0 ? "var(--color-success, #10b981)" : "var(--color-negative, #ef4444)", fontWeight: 500 }}>
+                                  {row.marketGainEur >= 0 ? "+" : ""}{fmt(row.marketGainEur)}
+                                </td>
+                                <td className="text-right text-muted">{row.salesEur > 0 ? fmt(row.salesEur) : "—"}</td>
+                                <td className="text-right text-muted">{row.rebuysEur > 0 ? fmt(row.rebuysEur) : "—"}</td>
+                                <td className="text-right text-muted">{row.taxEur > 0 ? fmt(row.taxEur) : "—"}</td>
+                                <td className="text-right" style={{ fontWeight: 700, color: SCENARIO_COLORS[activeScenario] }}>{fmt(row.endWealthEur)}</td>
+                              </tr>
+                            </>
+                          );
+                        })}
                       </tbody>
                       <tfoot>
                         <tr style={{ borderTop: "2px solid var(--color-border)", fontWeight: 700 }}>
@@ -543,6 +563,10 @@ export function Perspectivas() {
                       {simulationPolicy === "confirmed_plus_proposals" || simulationPolicy === "full_strategy"
                         ? " Ventas/recompras incluyen propuestas según analistas."
                         : " Política actual no incluye propuestas hipotéticas."}
+                      {activeScenario === "dinamico"
+                        ? " El escenario Dinámico usa sentimiento real por activo (tendencia 7d/30d + Fear & Greed) para calibrar las tasas de mercado."
+                        : ""}
+                      {" › indica años fuera del horizonte del plan configurado (extrapolación libre)."}
                     </p>
                   </div>
                 </details>

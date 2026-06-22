@@ -30,7 +30,11 @@ export function buildScenarioInput(
   options: ProjectionOptions,
   fiscalConfig: FiscalConfig,
   now: number,
-  dynamicFactors?: { fearAndGreedIndex: number | null; btcDominance: number | null },
+  dynamicFactors?: {
+    fearAndGreedIndex: number | null;
+    btcDominance: number | null;
+    assetSentiment?: Record<string, { score: number; direction: string; confidence: number }>;
+  },
 ): ProjectionInput {
   const assetIds = Array.from(new Set([
     ...Object.keys(snapshot.positions),
@@ -61,7 +65,11 @@ export function runAllScenarios(
   options: ProjectionOptions = {},
   fiscalConfig: FiscalConfig = SPANISH_FISCAL_CONFIG_2024,
   now: number = Date.now(),
-  dynamicFactors?: { fearAndGreedIndex: number | null; btcDominance: number | null },
+  dynamicFactors?: {
+    fearAndGreedIndex: number | null;
+    btcDominance: number | null;
+    assetSentiment?: Record<string, { score: number; direction: string; confidence: number }>;
+  },
 ): ScenarioSet {
   const scenarios: ProjectionScenario[] = [
     "conservador", "moderado", "base", "favorable", "muy_favorable", "optimista", "dinamico",

@@ -233,19 +233,41 @@ const MARKET_PHASES: Record<string, "bull" | "bear" | "sideways" | "unknown"> = 
 export function buildDefaultHypotheses(
   scenario: "conservador" | "moderado" | "base" | "favorable" | "muy_favorable" | "optimista" | "dinamico",
   assetIds: string[],
-  dynamicFactors?: { fearAndGreedIndex: number | null; btcDominance: number | null },
+  dynamicFactors?: {
+    fearAndGreedIndex: number | null;
+    btcDominance: number | null;
+    // Per-asset sentiment scores (-100..+100) derived from 30d price analysis
+    assetSentiment?: Record<string, { score: number; direction: string; confidence: number }>;
+  },
 ): ScenarioHypotheses {
 
   function getDynamicRate(assetId: string): number {
-    const fg = dynamicFactors?.fearAndGreedIndex ?? 50;
-    const baseRate        = INITIAL_RATES[assetId]?.base      ?? DEFAULT_RATES.base;
-    const optimisticRate  = INITIAL_RATES[assetId]?.optimista ?? DEFAULT_RATES.optimista;
     const conservativeRate = INITIAL_RATES[assetId]?.conservador ?? DEFAULT_RATES.conservador;
+    const baseRate         = INITIAL_RATES[assetId]?.base        ?? DEFAULT_RATES.base;
+    const optimisticRate   = INITIAL_RATES[assetId]?.optimista   ?? DEFAULT_RATES.optimista;
 
-    if (fg < 25) return conservativeRate;
-    if (fg < 50) return conservativeRate + (baseRate - conservativeRate) * ((fg - 25) / 25);
-    if (fg < 75) return baseRate + (optimisticRate - baseRate) * ((fg - 50) / 25) * 0.5;
-    return baseRate + (optimisticRate - baseRate) * 0.6;
+    // Prefer per-asset sentiment score when available (30d trend + momentum + Fear&Greed)
+    // Fall back to global Fear & Greed if no per-asset data.
+    const perAsset = dynamicFactors?.assetSentiment?.[assetId];
+    let score: number; // -100..+100
+    if (perAsset && typeof perAsset.score === "number" && Number.isFinite(perAsset.score)) {
+      // Weight per-asset sentiment by its own confidence; blend with Fear&Greed for robustness
+      const fg = dynamicFactors?.fearAndGreedIndex ?? 50;
+      const fgScore = (fg - 50) * 2; // 0..100 → -100..+100
+      const w = Math.min(1, Math.max(0, perAsset.confidence / 100));
+      score = w * perAsset.score + (1 - w) * fgScore;
+    } else {
+      // Only Fear & Greed available
+      const fg = dynamicFactors?.fearAndGreedIndex ?? 50;
+      score = (fg - 50) * 2;
+    }
+
+    // Map score (-100..+100) to a growth rate between conservador and optimista
+    const t = (Math.max(-100, Math.min(100, score)) + 100) / 200; // 0..1
+    if (t < 0.25) return conservativeRate * (t * 4); // very bearish → low conservative
+    if (t < 0.5)  return conservativeRate + (baseRate - conservativeRate) * ((t - 0.25) * 4);
+    if (t < 0.75) return baseRate + (optimisticRate - baseRate) * 0.4 * ((t - 0.5) * 4);
+    return baseRate + (optimisticRate - baseRate) * (0.4 + 0.6 * ((t - 0.75) * 4));
   }
 
   const isStatic = scenario !== "dinamico";

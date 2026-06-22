@@ -1046,15 +1046,38 @@ function setupIpcHandlers() {
     };
   }
 
-  async function getProjectionDynamicFactors(): Promise<{ fearAndGreedIndex: number | null; btcDominance: number | null }> {
-    const [fearGreed, globalMetrics] = await Promise.all([
+  async function getProjectionDynamicFactors(assetIds: string[] = []): Promise<{
+    fearAndGreedIndex: number | null;
+    btcDominance: number | null;
+    assetSentiment: Record<string, { score: number; direction: string; confidence: number }>;
+  }> {
+    const fearGreedValue = getCachedFearGreed();
+    const uniqueAssets = [...new Set(assetIds)].slice(0, 8); // cap to avoid rate-limit storms
+
+    const [fearGreed, globalMetrics, ...sentimentResults] = await Promise.all([
       withSoftTimeout(fearGreedService.get(), 2500, null),
       withSoftTimeout(globalMetricsService.get(), 3000, null),
+      ...uniqueAssets.map(id =>
+        withSoftTimeout(
+          sentimentService.getAssetSentiment(id, "30d", { fearGreedValue }),
+          3500,
+          null,
+        )
+      ),
     ]);
+
+    const assetSentiment: Record<string, { score: number; direction: string; confidence: number }> = {};
+    uniqueAssets.forEach((id, i) => {
+      const s = sentimentResults[i];
+      if (s && typeof s.score === "number" && Number.isFinite(s.score)) {
+        assetSentiment[id] = { score: s.score, direction: s.direction, confidence: s.confidence };
+      }
+    });
 
     return {
       fearAndGreedIndex: fearGreed ? finiteOrNull(fearGreed.value) : null,
       btcDominance: globalMetrics ? finiteOrNull(globalMetrics.btcDominance) : null,
+      assetSentiment,
     };
   }
 
@@ -4049,7 +4072,11 @@ function setupIpcHandlers() {
     const VALID_POLICIES = new Set(["plan_base", "confirmed_only", "confirmed_plus_proposals", "full_strategy"]);
     const simulationPolicy = VALID_POLICIES.has(input?.simulationPolicy ?? "") ? input!.simulationPolicy! : "confirmed_plus_proposals";
     const snapshot = await buildPerspectivesSnapshot(now);
-    const dynamicFactors = await getProjectionDynamicFactors();
+    const portfolioAssetIds = [
+      ...Object.keys(snapshot.positions),
+      ...snapshot.cycles.flatMap(c => c.assets.map(a => a.assetId)),
+    ].filter(id => id !== "EURC" && id !== "EUR");
+    const dynamicFactors = await getProjectionDynamicFactors(portfolioAssetIds);
 
     const scenarioSet = runAllScenarios(
       snapshot,
@@ -4165,6 +4192,10 @@ function setupIpcHandlers() {
         annualBreakdown: (() => {
           // Group periods by calendar year and compute per-year deltas.
           // Each row verifies: endWealthEur[Y] = inheritedWealthEur[Y+1]
+          // Rows are tagged: "plan" (within a configured cycle) or "extrapol" (beyond last cycle end).
+          const lastCycleEndMs = snapshot.cycles.reduce((max, c) =>
+            c.endDate != null ? Math.max(max, c.endDate) : max, 0);
+
           const rows: {
             year: number;
             inheritedWealthEur: number;
@@ -4174,6 +4205,7 @@ function setupIpcHandlers() {
             taxEur: number;
             marketGainEur: number;
             endWealthEur: number;
+            scope: "plan" | "extrapol"; // within configured plan vs open projection
           }[] = [];
           if (out.periods.length === 0) return rows;
 
@@ -4196,6 +4228,7 @@ function setupIpcHandlers() {
             const rebuys = last.totalRebuysEur - prevRebuys;
             const tax = last.taxGeneratedEur - prevTax;
             const marketGain = last.grossWealthEur - prevWealth - contributions;
+            const yearEndMs = new Date(Date.UTC(year, 11, 31)).getTime();
             rows.push({
               year,
               inheritedWealthEur: Math.round(prevWealth * 100) / 100,
@@ -4205,6 +4238,7 @@ function setupIpcHandlers() {
               taxEur: Math.round(tax * 100) / 100,
               marketGainEur: Math.round(marketGain * 100) / 100,
               endWealthEur: Math.round(last.grossWealthEur * 100) / 100,
+              scope: lastCycleEndMs > 0 && yearEndMs > lastCycleEndMs ? "extrapol" : "plan",
             });
             prevWealth = last.grossWealthEur;
             prevFutureCapital = last.futureCapitalEur;
