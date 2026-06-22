@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ChartNoAxesCombined, Target, TrendingUp, PlusCircle, Trash2,
   AlertCircle, Info, Pencil, CheckCircle2, RefreshCw, AlertTriangle,
+  ChevronDown, ChevronUp,
 } from "lucide-react";
 import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
@@ -36,6 +37,8 @@ function tsToDate(ts: number | null): string {
   return new Date(ts).toISOString().slice(0, 10);
 }
 
+// ─── constants ───────────────────────────────────────────────────────────────
+
 const SCENARIO_COLORS: Record<string, string> = {
   conservador:   "var(--color-muted-fg)",
   moderado:      "var(--color-info, #60a5fa)",
@@ -51,6 +54,40 @@ const SCENARIO_ORDER = [
 ] as const;
 
 type ActiveScenario = typeof SCENARIO_ORDER[number];
+
+type PerspectiveKey = "conservadora" | "moderada" | "optimista";
+
+const PERSPECTIVE_NAMES: Record<PerspectiveKey, string> = {
+  conservadora: "Conservadora",
+  moderada:     "Moderada",
+  optimista:    "Optimista",
+};
+
+const PERSPECTIVE_DESCS: Record<PerspectiveKey, string> = {
+  conservadora: "Crecimiento inferior a la media histórica, escenario prudente.",
+  moderada:     "Evolución alineada con expectativas medias de largo plazo.",
+  optimista:    "Crecimiento superior al escenario moderado.",
+};
+
+const PERSPECTIVE_COLORS: Record<PerspectiveKey, string> = {
+  conservadora: "var(--color-muted-fg)",
+  moderada:     "var(--color-primary)",
+  optimista:    "var(--color-success)",
+};
+
+const PERSPECTIVE_SCENARIO: Record<PerspectiveKey, ActiveScenario> = {
+  conservadora: "conservador",
+  moderada:     "base",
+  optimista:    "optimista",
+};
+
+// Base probability groups (sum of static scenario probs per group)
+// conservador(0.15)+moderado(0.22)=0.37, base(0.28)+favorable(0.18)=0.46, muy_fav(0.10)+opt(0.07)=0.17
+const PROB_BASE: Record<PerspectiveKey, number> = {
+  conservadora: 0.37,
+  moderada:     0.46,
+  optimista:    0.17,
+};
 
 const GOAL_TYPE_LABELS: Record<string, string> = {
   patrimonio: "Patrimonio general",
@@ -83,14 +120,20 @@ export function Perspectivas() {
   const currentYear = new Date().getFullYear();
   const [targetYear, setTargetYear] = useState(currentYear + 10);
   const horizonYears = Math.max(1, targetYear - currentYear);
-  const [activeScenario, setActiveScenario] = useState<ActiveScenario>("base");
+  const [activePerspective, setActivePerspective] = useState<PerspectiveKey>("moderada");
   const [simulationPolicy, setSimulationPolicy] = useState<"plan_base" | "confirmed_only" | "confirmed_plus_proposals" | "full_strategy">("confirmed_plus_proposals");
+  const [showDetail, setShowDetail] = useState(false);
+  const [detailTab, setDetailTab] = useState<"evolucion" | "activos" | "estrategia" | "auditoria">("evolucion");
 
+  // Goal form state
   const [showGoalForm, setShowGoalForm] = useState(false);
   const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
   const [goalForm, setGoalForm] = useState<GoalFormState>(EMPTY_GOAL_FORM);
 
-  // ── projection query ──────────────────────────────────────────────────────
+  // The active scenario is driven by the selected perspective
+  const activeScenario: ActiveScenario = PERSPECTIVE_SCENARIO[activePerspective];
+
+  // ── queries ───────────────────────────────────────────────────────────────
   const projectionQ = useQuery({
     queryKey: ["perspectives:getProjection", horizonYears, simulationPolicy],
     queryFn: async () => {
@@ -103,7 +146,16 @@ export function Perspectivas() {
     retry: 1,
   });
 
-  // ── goals query ───────────────────────────────────────────────────────────
+  const fearGreedQ = useQuery({
+    queryKey: ["market:fearGreed"],
+    queryFn: async () => {
+      const r = await api().market.getFearGreed();
+      return r.ok ? r.data : null;
+    },
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+
   const goalsQ = useQuery({
     queryKey: ["perspectives:getGoals"],
     queryFn: async () => {
@@ -115,7 +167,7 @@ export function Perspectivas() {
   });
 
   const projectionYears = useMemo(
-    () => Array.from({ length: 30 }, (_, index) => currentYear + index + 1),
+    () => Array.from({ length: 30 }, (_, i) => currentYear + i + 1),
     [currentYear]
   );
 
@@ -159,17 +211,85 @@ export function Perspectivas() {
 
   // ── derived data ──────────────────────────────────────────────────────────
   const projection = projectionQ.data;
+
   const activeScenarioData = useMemo<ProjectionScenarioResult | null>(
     () => projection?.scenarios.find(s => s.scenario === activeScenario) ?? null,
     [projection, activeScenario],
   );
+
+  const conservadoraData = useMemo(
+    () => projection?.scenarios.find(s => s.scenario === "conservador") ?? null,
+    [projection],
+  );
+  const moderadaData = useMemo(
+    () => projection?.scenarios.find(s => s.scenario === "base") ?? null,
+    [projection],
+  );
+  const optimistaData = useMemo(
+    () => projection?.scenarios.find(s => s.scenario === "optimista") ?? null,
+    [projection],
+  );
+
+  const scenarioByPerspective: Record<PerspectiveKey, ProjectionScenarioResult | null> = {
+    conservadora: conservadoraData,
+    moderada: moderadaData,
+    optimista: optimistaData,
+  };
+
+  // Dynamic probabilities from Fear & Greed
+  const perspectiveProbs = useMemo(() => {
+    const fg: number = (fearGreedQ.data as any)?.value ?? 50;
+    const fgNorm = Math.max(0, Math.min(100, fg)) / 100;
+    const shift = (fgNorm - 0.5) * 0.30; // max ±0.15
+
+    const raw = {
+      conservadora: Math.max(0.08, PROB_BASE.conservadora - shift),
+      optimista:    Math.max(0.08, PROB_BASE.optimista + shift),
+      moderada:     0,
+    };
+    raw.moderada = Math.max(0.08, 1 - raw.conservadora - raw.optimista);
+    const total = raw.conservadora + raw.moderada + raw.optimista;
+    return {
+      conservadora: raw.conservadora / total,
+      moderada:     raw.moderada / total,
+      optimista:    raw.optimista / total,
+      fearGreed: fg,
+      isReal: fearGreedQ.isSuccess && fearGreedQ.data != null,
+    };
+  }, [fearGreedQ.data, fearGreedQ.isSuccess]);
+
+  // Totals for hero
+  const activeNet    = activeScenarioData?.summary.finalNetWealthEur ?? null;
+  const totalCapital = activeScenarioData
+    ? activeScenarioData.summary.historicalCapitalEur + activeScenarioData.summary.totalFutureCapitalEur
+    : 0;
+  const beneficioAcumulado = activeNet != null ? activeNet - totalCapital : null;
+
+  // Annual breakdown row for target year
+  const yearRow = useMemo(() => {
+    if (!activeScenarioData) return null;
+    const bd = (activeScenarioData as any).annualBreakdown as Array<any> | undefined;
+    if (!bd || bd.length === 0) return null;
+    return bd.find((r: any) => r.year === targetYear) ?? bd[bd.length - 1] ?? null;
+  }, [activeScenarioData, targetYear]);
+
+  // Max wealth across 3 perspectives for comparison bars
+  const maxWealth = useMemo(() => {
+    const values = [
+      conservadoraData?.summary.finalNetWealthEur ?? 0,
+      moderadaData?.summary.finalNetWealthEur ?? 0,
+      optimistaData?.summary.finalNetWealthEur ?? 0,
+    ];
+    return Math.max(...values, 1);
+  }, [conservadoraData, moderadaData, optimistaData]);
+
+  const isUnderperforming = activeNet != null && totalCapital > 0 && activeNet < totalCapital * 0.95;
 
   const currentValueEur = projection?.snapshot.currentPortfolioValueEur ?? 0;
   const goalResultById = useMemo(
     () => new Map((activeScenarioData?.goalResults ?? []).map(goal => [goal.id, goal])),
     [activeScenarioData],
   );
-
   const dataScore = projection?.snapshot.dataQuality.overallScore ?? null;
 
   // ── render ────────────────────────────────────────────────────────────────
@@ -177,314 +297,416 @@ export function Perspectivas() {
     <section className="page-stack">
       <PageToolbar
         title="Perspectivas"
-        meta="Motor de proyección — simulación hipotética, sin ejecutar operaciones"
+        meta="Simulación hipotética · no ejecuta operaciones"
       />
 
-      {/* ── Sección 1: Estado del plan ── */}
-      <PlanSnapshotSection projection={projection} loading={projectionQ.isLoading} error={projectionQ.error} />
+      {/* ── Mensaje principal ── */}
+      <div className="persp-message-banner">
+        <Info size={14} style={{ flexShrink: 0 }} />
+        <span>
+          Con lo que tengo hoy, todo lo que aportaré y la estrategia definida en mi Plan de Inversión, así podría evolucionar mi patrimonio año a año bajo distintas perspectivas de mercado.
+          Estas perspectivas y sus probabilidades son <strong>estimaciones dinámicas</strong> que la aplicación calcula y actualiza según la información disponible, por lo que pueden variar con el tiempo.
+        </span>
+      </div>
 
-      {/* ── Sección 1b: Libro Mayor de aportaciones ── */}
-      {projection && (
-        <ContributionLedgerSection
-          ledger={projection.contributionLedger}
-          ceroScenario={projection.scenarios.find(s => s.scenario === "cero") ?? null}
-          wealthFloorViolations={projection.wealthFloorViolations ?? []}
-          orderingViolations={projection.orderingViolations ?? []}
-        />
+      {/* ── Controles compactos ── */}
+      <div className="persp-controls-row">
+        <label className="text-sm text-muted">Año objetivo:</label>
+        <select
+          className="ui-select"
+          style={{ width: 100 }}
+          value={targetYear}
+          onChange={e => setTargetYear(parseInt(e.target.value))}
+        >
+          {projectionYears.map(y => <option key={y} value={y}>{y}</option>)}
+        </select>
+        <label className="text-sm text-muted">Política:</label>
+        <select
+          className="ui-select"
+          style={{ width: 200 }}
+          value={simulationPolicy}
+          onChange={e => setSimulationPolicy(e.target.value as typeof simulationPolicy)}
+        >
+          <option value="plan_base">Plan base (solo aportaciones)</option>
+          <option value="confirmed_only">Solo reglas confirmadas</option>
+          <option value="confirmed_plus_proposals">Propuestas prudentes</option>
+          <option value="full_strategy">Estrategia completa</option>
+        </select>
+        {projectionQ.isFetching && <RefreshCw size={14} className="animate-spin text-muted" />}
+      </div>
+
+      {/* ── Error o cargando ── */}
+      {projectionQ.isLoading && (
+        <Card>
+          <CardContent>
+            <p className="text-muted text-sm">Calculando perspectivas…</p>
+          </CardContent>
+        </Card>
       )}
-
-      {/* ── Sección 2: 7 escenarios — selector + tarjeta activa + comparativa ── */}
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            <ChartNoAxesCombined size={16} />
-            Proyección — 7 escenarios
-          </CardTitle>
-          <div className="flex gap-2 items-center flex-wrap">
-            <label className="text-sm text-muted">Año:</label>
-            <select
-              className="ui-select"
-              style={{ width: 110 }}
-              value={targetYear}
-              onChange={e => setTargetYear(parseInt(e.target.value))}
-            >
-              {projectionYears.map(year => (
-                <option key={year} value={year}>{year}</option>
-              ))}
-            </select>
-            <label className="text-sm text-muted">Política:</label>
-            <select
-              className="ui-select"
-              style={{ width: 220 }}
-              value={simulationPolicy}
-              onChange={e => setSimulationPolicy(e.target.value as typeof simulationPolicy)}
-            >
-              <option value="plan_base">Plan base (solo aportaciones)</option>
-              <option value="confirmed_only">Solo reglas confirmadas</option>
-              <option value="confirmed_plus_proposals">Propuestas prudentes</option>
-              <option value="full_strategy">Estrategia completa</option>
-            </select>
-            {projectionQ.isFetching && <RefreshCw size={14} className="animate-spin text-muted" />}
-          </div>
-        </CardHeader>
-        <CardContent>
-          {projectionQ.isLoading && <p className="text-muted text-sm">Calculando proyección…</p>}
-          {projectionQ.error && (
+      {projectionQ.error && (
+        <Card>
+          <CardContent>
             <div className="empty-state-inline">
               <AlertCircle size={16} />
               <span>{String(projectionQ.error)}</span>
             </div>
-          )}
-          {projection && (
-            <>
-              {/* ── Selector de escenario ── */}
-              <div className="perspectives-scenario-selector" role="tablist" aria-label="Escenarios de proyección">
-                {SCENARIO_ORDER.map(s => {
-                  const sc = projection.scenarios.find(x => x.scenario === s);
-                  const color = SCENARIO_COLORS[s];
-                  const isActive = activeScenario === s;
-                  return (
-                    <button
-                      key={s}
-                      role="tab"
-                      aria-selected={isActive}
-                      className={`perspectives-scenario-tab${isActive ? " active" : ""}`}
-                      style={{ "--scenario-color": color } as React.CSSProperties}
-                      onClick={() => setActiveScenario(s)}
-                    >
-                      <span className="tab-dot" style={{ background: color }} />
-                      <span className="tab-label">{sc?.label ?? s}</span>
-                      {sc?.probability != null && (
-                        <span className="tab-prob">{pct(sc.probability)}</span>
-                      )}
-                    </button>
-                  );
-                })}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Sección principal: Hero + 3 perspectivas ── */}
+      {projection && (
+        <Card>
+          <CardContent>
+
+            {/* Hero */}
+            <div className="persp-hero">
+              <p className="persp-hero-label">
+                Patrimonio neto estimado en {targetYear}
+                <span className="persp-hero-perspective">
+                  &nbsp;·&nbsp;Perspectiva {PERSPECTIVE_NAMES[activePerspective]}
+                  &nbsp;·&nbsp;Prob. ≈ {(perspectiveProbs[activePerspective] * 100).toFixed(0)}%
+                </span>
+              </p>
+              <div className="persp-hero-amount" style={{ color: PERSPECTIVE_COLORS[activePerspective] }}>
+                {fmt(activeNet)}
               </div>
+              <div className="persp-hero-sub">
+                <span>Capital aportado: <strong>{fmt(totalCapital)}</strong></span>
+                <span className={beneficioAcumulado != null && beneficioAcumulado >= 0 ? "text-success" : "text-danger"}>
+                  Beneficio estimado: <strong>
+                    {beneficioAcumulado != null ? `${beneficioAcumulado >= 0 ? "+" : ""}${fmt(beneficioAcumulado)}` : "—"}
+                  </strong>
+                </span>
+              </div>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => setShowDetail(v => !v)}
+                style={{ marginTop: "0.75rem" }}
+              >
+                {showDetail ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                {showDetail ? "Ocultar detalle" : "Ver detalle"}
+              </Button>
+            </div>
 
-              {/* ── Tarjeta del escenario activo ── */}
-              {activeScenarioData && (
-                <div className="perspectives-active-card" style={{ borderLeftColor: SCENARIO_COLORS[activeScenario] }}>
-                  <div className="active-card-header">
-                    <div>
-                      <h3 className="active-card-title">{activeScenarioData.label}</h3>
-                      <p className="text-sm text-muted" style={{ marginTop: 2 }}>
-                        {activeScenarioData.description}
-                      </p>
-                    </div>
-                    <div className="active-card-badges">
-                      {activeScenarioData.probability != null && (
-                        <Badge variant="neutral">Probabilidad: {pct(activeScenarioData.probability)}</Badge>
-                      )}
-                      {activeScenarioData.confidence != null && (
-                        <Badge variant={activeScenarioData.confidence >= 0.6 ? "success" : "warning"}>
-                          Confianza: {pct(activeScenarioData.confidence)}
-                        </Badge>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="active-card-metrics">
-                    <div className="metric-item">
-                      <span className="metric-label">Patrimonio bruto</span>
-                      <span className="metric-value">{fmt(activeScenarioData.summary.finalGrossWealthEur)}</span>
-                    </div>
-                    <div className="metric-item highlight" style={{ borderColor: SCENARIO_COLORS[activeScenario] }}>
-                      <span className="metric-label">Patrimonio neto</span>
-                      <span className="metric-value">{fmt(activeScenarioData.summary.finalNetWealthEur)}</span>
-                    </div>
-                    <div className="metric-item">
-                      <span className="metric-label">Capital histórico</span>
-                      <span className="metric-value">{fmt(activeScenarioData.summary.historicalCapitalEur)}</span>
-                    </div>
-                    <div className="metric-item">
-                      <span className="metric-label">Aportaciones futuras</span>
-                      <span className="metric-value">{fmt(activeScenarioData.summary.totalFutureCapitalEur)}</span>
-                    </div>
-                    <div className="metric-item">
-                      <span className="metric-label">Plusvalía realizada</span>
-                      <span className={`metric-value ${activeScenarioData.summary.totalRealizedGainEur >= 0 ? "text-success" : "text-danger"}`}>
-                        {fmt(activeScenarioData.summary.totalRealizedGainEur)}
-                      </span>
-                    </div>
-                    <div className="metric-item">
-                      <span className="metric-label">Plusvalía no realizada</span>
-                      <span className={`metric-value ${activeScenarioData.summary.totalUnrealizedGainEur >= 0 ? "text-success" : "text-danger"}`}>
-                        {fmt(activeScenarioData.summary.totalUnrealizedGainEur)}
-                      </span>
-                    </div>
-                    <div className="metric-item">
-                      <span className="metric-label">Impuesto generado</span>
-                      <span className="metric-value text-muted">{fmt(activeScenarioData.summary.totalTaxGeneratedEur)}</span>
-                    </div>
-                    <div className="metric-item">
-                      <span className="metric-label">EURC fiscal reserva</span>
-                      <span className="metric-value">{fmt(activeScenarioData.summary.finalFiscalReserveEur)}</span>
-                    </div>
-                    <div className="metric-item">
-                      <span className="metric-label">EURC libre</span>
-                      <span className="metric-value">{fmt(activeScenarioData.summary.finalEurcAvailableEur)}</span>
-                    </div>
-                    <div className="metric-item">
-                      <span className="metric-label">Ventas proyectadas</span>
-                      {(() => {
-                        const totalSales = activeScenarioData.cycleResults.reduce((s, c) => s + c.salesEur, 0);
-                        return (
-                          <>
-                            <span className="metric-value">{fmt(totalSales)}</span>
-                            {totalSales === 0 && (activeScenarioData.summary as any).salesZeroExplanation && (
-                              <details className="metric-zero-detail">
-                                <summary className="metric-zero-summary">¿Por qué 0 €?</summary>
-                                <span className="metric-zero-text">{(activeScenarioData.summary as any).salesZeroExplanation}</span>
-                              </details>
-                            )}
-                          </>
-                        );
-                      })()}
-                    </div>
-                    <div className="metric-item">
-                      <span className="metric-label">Recompras proyectadas</span>
-                      {(() => {
-                        const totalRebuys = activeScenarioData.cycleResults.reduce((s, c) => s + c.rebuysEur, 0);
-                        return (
-                          <>
-                            <span className="metric-value">{fmt(totalRebuys)}</span>
-                            {totalRebuys === 0 && (activeScenarioData.summary as any).rebuysZeroExplanation && (
-                              <details className="metric-zero-detail">
-                                <summary className="metric-zero-summary">¿Por qué 0 €?</summary>
-                                <span className="metric-zero-text">{(activeScenarioData.summary as any).rebuysZeroExplanation}</span>
-                              </details>
-                            )}
-                          </>
-                        );
-                      })()}
-                    </div>
-                    {/* Propuestas hipotéticas */}
-                    {(activeScenarioData.summary as any).hypotheticalSales?.length > 0 && (
-                      <div className="metric-item" style={{ gridColumn: "1 / -1" }}>
-                        <span className="metric-label">Ventas hipotéticas simuladas</span>
-                        <span className="metric-value text-warning">{(activeScenarioData.summary as any).hypotheticalSales.length} eventos</span>
-                        <details className="metric-zero-detail">
-                          <summary className="metric-zero-summary">Ver propuestas</summary>
-                          <ul style={{ fontSize: "0.75rem", margin: "4px 0 0", paddingLeft: "12px" }}>
-                            {(activeScenarioData.summary as any).hypotheticalSales.slice(0, 5).map((p: any) => (
-                              <li key={p.id}>
-                                {new Date(p.date).toLocaleDateString("es-ES", { year: "numeric", month: "short" })} — {p.assetId}: vender {p.sellPercentage.toFixed(0)}% · {fmt(p.grossEur)} bruto · {p.explanation.slice(0, 80)}
-                              </li>
-                            ))}
-                          </ul>
-                        </details>
-                      </div>
-                    )}
-                    {(activeScenarioData.summary as any).hypotheticalRebuys?.length > 0 && (
-                      <div className="metric-item" style={{ gridColumn: "1 / -1" }}>
-                        <span className="metric-label">Recompras hipotéticas simuladas</span>
-                        <span className="metric-value text-info">{(activeScenarioData.summary as any).hypotheticalRebuys.length} eventos</span>
-                        <details className="metric-zero-detail">
-                          <summary className="metric-zero-summary">Ver propuestas</summary>
-                          <ul style={{ fontSize: "0.75rem", margin: "4px 0 0", paddingLeft: "12px" }}>
-                            {(activeScenarioData.summary as any).hypotheticalRebuys.slice(0, 5).map((p: any) => (
-                              <li key={p.id}>
-                                {new Date(p.date).toLocaleDateString("es-ES", { year: "numeric", month: "short" })} — {p.assetId}: {fmt(p.eurcUsedEur)} EURC · caída {p.drawdownPercentage.toFixed(0)}%
-                              </li>
-                            ))}
-                          </ul>
-                        </details>
-                      </div>
-                    )}
-                    <div className="metric-item highlight" style={{ borderColor: SCENARIO_COLORS[activeScenario], gridColumn: "1 / -1" }}>
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.75rem" }}>
-                        <div>
-                          <span className="metric-label">XIRR — Rent. personal</span>
-                          <span className="metric-value">
-                            {(activeScenarioData.summary as any).xirrAnnual != null
-                              ? `${(((activeScenarioData.summary as any).xirrAnnual as number) * 100).toFixed(2)}% / año`
-                              : "—"}
-                          </span>
-                          <span className="metric-sub">Flujos reales fechados</span>
-                        </div>
-                        <div>
-                          <span className="metric-label">TWR — Rent. estrategia</span>
-                          <span className="metric-value">
-                            {(activeScenarioData.summary as any).twrAnnual != null
-                              ? `${(((activeScenarioData.summary as any).twrAnnual as number) * 100).toFixed(2)}% / año`
-                              : "—"}
-                          </span>
-                          <span className="metric-sub">Sin efecto de flujos</span>
-                        </div>
-                        <div>
-                          <span className="metric-label">ROI acumulado</span>
-                          <span className="metric-value">
-                            {(activeScenarioData.summary as any).roiAccumulated != null
-                              ? `${(((activeScenarioData.summary as any).roiAccumulated as number) * 100).toFixed(1)}%`
-                              : "—"}
-                          </span>
-                          <span className="metric-sub">Patrimonio / Capital − 1</span>
-                        </div>
-                      </div>
-                      <span className="metric-sub" style={{ display: "block", marginTop: "0.5rem" }}>
-                        Horizonte: {horizonYears} años · Neto de impuestos
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* ── Comparativa con controles independientes ── */}
-              {activeScenarioData && (
-                <div className="perspectives-cycle-table-wrapper" style={{ marginTop: "1rem" }}>
-                  <h4 style={{ fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.5rem", color: "var(--text-muted)" }}>
-                    Controles independientes — Horizonte {horizonYears} años
-                  </h4>
-                  <table className="perspectives-cycle-table">
-                    <thead>
-                      <tr>
-                        <th>Referencia</th>
-                        <th className="text-right">Patrimonio final</th>
-                        <th className="text-right">Método</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr>
-                        <td>Control 0% (suelo mínimo)</td>
-                        <td className="text-right">{fmt((activeScenarioData.summary as any).controlCeroWealth ?? 0)}</td>
-                        <td className="text-right text-muted">Anualidad a 0%</td>
-                      </tr>
-                      <tr>
-                        <td>Control 5% anual</td>
-                        <td className="text-right">{fmt((activeScenarioData.summary as any).control5pctWealth ?? 0)}</td>
-                        <td className="text-right text-muted">Anualidad a 5%</td>
-                      </tr>
-                      <tr>
-                        <td>Control 7% anual</td>
-                        <td className="text-right">{fmt((activeScenarioData.summary as any).control7pctWealth ?? 0)}</td>
-                        <td className="text-right text-muted">Anualidad a 7%</td>
-                      </tr>
-                      <tr style={{ fontWeight: 600, background: `${SCENARIO_COLORS[activeScenario]}22` }}>
-                        <td>Escenario {activeScenarioData.label}</td>
-                        <td className="text-right">{fmt(activeScenarioData.summary.finalNetWealthEur)}</td>
-                        <td className="text-right text-muted">Simulación completa</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                  <p style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: "0.4rem" }}>
-                    Controles calculados con fórmula analítica independiente (FV anualidad) ·
-                    Aportación media: {fmt(activeScenarioData.summary.totalFutureCapitalEur / Math.max(1, horizonYears * 12))}/mes ·
-                    Capital inicial: {fmt(activeScenarioData.summary.initialGrossWealthEur)}
-                  </p>
-                </div>
-              )}
-
-              {/* ── Evolución anual acumulada ── */}
-              {activeScenarioData && (activeScenarioData as any).annualBreakdown?.length > 0 && (
-                <details style={{ marginTop: "1rem" }}>
-                  <summary style={{ cursor: "pointer", fontSize: "0.85rem", fontWeight: 600, color: "var(--text-muted)", marginBottom: "0.5rem" }}>
-                    Evolución año a año — {activeScenarioData.label}
-                    <span className="text-muted" style={{ fontWeight: 400, marginLeft: "0.5rem" }}>
-                      (capital inicial heredado + ganancias acumuladas)
+            {/* 3 tarjetas de perspectiva */}
+            <div className="persp-3cards">
+              {(["conservadora", "moderada", "optimista"] as PerspectiveKey[]).map(p => {
+                const data = scenarioByPerspective[p];
+                const prob = perspectiveProbs[p];
+                const wealth = data?.summary.finalNetWealthEur ?? null;
+                const cap = data
+                  ? data.summary.historicalCapitalEur + data.summary.totalFutureCapitalEur
+                  : totalCapital;
+                const benefit = wealth != null ? wealth - cap : null;
+                const color = PERSPECTIVE_COLORS[p];
+                return (
+                  <button
+                    key={p}
+                    className={`persp-perspective-card${activePerspective === p ? " active" : ""}`}
+                    style={{ "--persp-color": color } as React.CSSProperties}
+                    onClick={() => setActivePerspective(p)}
+                    aria-pressed={activePerspective === p}
+                  >
+                    <span className="pcard-name">{PERSPECTIVE_NAMES[p]}</span>
+                    <span className="pcard-prob">Prob. estimada: ≈ {(prob * 100).toFixed(0)}%</span>
+                    <span className="pcard-wealth" style={{ color }}>{fmt(wealth)}</span>
+                    <span className={`pcard-benefit ${benefit != null && benefit >= 0 ? "text-success" : "text-danger"}`}>
+                      {benefit != null ? `${benefit >= 0 ? "+" : ""}${fmt(benefit)}` : "—"}
                     </span>
-                  </summary>
-                  <div className="perspectives-cycle-table-wrapper">
+                    <span className="pcard-desc">{PERSPECTIVE_DESCS[p]}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Comparación visual */}
+            <div className="persp-comparison">
+              <p className="persp-comparison-title">Comparación de perspectivas — patrimonio neto estimado en {targetYear}</p>
+              {(["conservadora", "moderada", "optimista"] as PerspectiveKey[]).map(p => {
+                const data = scenarioByPerspective[p];
+                const wealth = data?.summary.finalNetWealthEur ?? 0;
+                const widthPct = maxWealth > 0 ? (wealth / maxWealth) * 100 : 0;
+                const color = PERSPECTIVE_COLORS[p];
+                return (
+                  <div key={p} className="persp-comparison-row" onClick={() => setActivePerspective(p)} style={{ cursor: "pointer" }}>
+                    <span className="persp-comparison-label">{PERSPECTIVE_NAMES[p]}</span>
+                    <div className="persp-comparison-bar-track">
+                      <div
+                        className="persp-comparison-bar-fill"
+                        style={{ width: `${widthPct}%`, background: color }}
+                      />
+                    </div>
+                    <span className="persp-comparison-value" style={{ color }}>{fmt(wealth)}</span>
+                    <span className="persp-comparison-pct text-muted">({(perspectiveProbs[p] * 100).toFixed(0)}%)</span>
+                  </div>
+                );
+              })}
+              {(() => {
+                const cero = projection.scenarios.find(s => s.scenario === "cero");
+                if (!cero) return null;
+                const w = cero.summary.finalNetWealthEur;
+                const wPct = maxWealth > 0 ? (w / maxWealth) * 100 : 0;
+                return (
+                  <div className="persp-comparison-row persp-comparison-cero">
+                    <span className="persp-comparison-label text-muted">Sin crecimiento</span>
+                    <div className="persp-comparison-bar-track">
+                      <div className="persp-comparison-bar-fill" style={{ width: `${wPct}%`, background: "var(--color-muted-fg)" }} />
+                    </div>
+                    <span className="persp-comparison-value text-muted">{fmt(w)}</span>
+                    <span className="persp-comparison-pct text-muted">(suelo)</span>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Nota F&G */}
+            <p className="text-xs text-muted" style={{ marginTop: "0.5rem" }}>
+              Probabilidades calculadas dinámicamente por la aplicación según datos históricos y condiciones actuales de mercado (Fear & Greed: {perspectiveProbs.fearGreed} — {perspectiveProbs.isReal ? "dato real" : "estimación"}).
+              Son orientativas y no representan una predicción exacta. Las condiciones de mercado pueden cambiar la distribución con el tiempo.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Resumen para el año seleccionado ── */}
+      {yearRow && activeScenarioData && (
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              <ChartNoAxesCombined size={16} />
+              Resumen año {yearRow.year} — {PERSPECTIVE_NAMES[activePerspective]}
+            </CardTitle>
+            <Badge variant="neutral">
+              Prob. ≈ {(perspectiveProbs[activePerspective] * 100).toFixed(0)}%
+            </Badge>
+          </CardHeader>
+          <CardContent>
+            <div className="perspectives-summary-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
+              <div className="perspectives-current-card">
+                <span className="label">Capital inicial {yearRow.year}</span>
+                <span className="value">{fmt(yearRow.inheritedWealthEur)}</span>
+                <span className="sub">Heredado del año anterior</span>
+              </div>
+              <div className="perspectives-current-card">
+                <span className="label">Aportaciones</span>
+                <span className="value">{fmt(yearRow.contributionsEur)}</span>
+                <span className="sub">Plan de inversión</span>
+              </div>
+              <div className="perspectives-current-card">
+                <span className="label">Ganancia mercado</span>
+                <span className={`value ${yearRow.marketGainEur >= 0 ? "text-success" : "text-danger"}`}>
+                  {yearRow.marketGainEur >= 0 ? "+" : ""}{fmt(yearRow.marketGainEur)}
+                </span>
+                <span className="sub">Apreciación posiciones</span>
+              </div>
+              <div className="perspectives-current-card">
+                <span className="label">% año</span>
+                <span className={`value ${(yearRow.annualGrowthPct ?? 0) >= 0 ? "text-success" : "text-danger"}`} style={{ fontWeight: 700 }}>
+                  {yearRow.annualGrowthPct != null
+                    ? `${yearRow.annualGrowthPct >= 0 ? "+" : ""}${yearRow.annualGrowthPct.toFixed(1)}%`
+                    : "—"}
+                </span>
+                <span className="sub">Rendimiento patrimonio</span>
+              </div>
+              <div className="perspectives-current-card">
+                <span className="label">Ventas parciales</span>
+                <span className="value">{yearRow.salesEur > 0 ? fmt(yearRow.salesEur) : "—"}</span>
+                <span className="sub">Según Plan</span>
+              </div>
+              <div className="perspectives-current-card">
+                <span className="label">Recompras</span>
+                <span className="value">{yearRow.rebuysEur > 0 ? fmt(yearRow.rebuysEur) : "—"}</span>
+                <span className="sub">EURC disponible</span>
+              </div>
+              <div className="perspectives-current-card">
+                <span className="label">Impuestos {yearRow.year}</span>
+                <span className="value text-muted">{yearRow.taxEur > 0 ? fmt(yearRow.taxEur) : "—"}</span>
+                <span className="sub">Reserva fiscal generada</span>
+              </div>
+              <div className="perspectives-current-card" style={{ borderColor: PERSPECTIVE_COLORS[activePerspective] }}>
+                <span className="label">Patrimonio neto {yearRow.year}</span>
+                <span className="value" style={{ color: PERSPECTIVE_COLORS[activePerspective], fontWeight: 700 }}>
+                  {fmt(yearRow.endWealthEur)}
+                </span>
+                <span className="sub">Capital final del año ↓</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Resumen final (escenario activo) ── */}
+      {activeScenarioData && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Resumen final — {PERSPECTIVE_NAMES[activePerspective]} en {targetYear}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="perspectives-summary-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
+              <div className="perspectives-current-card">
+                <span className="label">Patrimonio actual</span>
+                <span className="value">{fmt(activeScenarioData.summary.initialGrossWealthEur)}</span>
+                <span className="sub">Cartera + tesorería hoy</span>
+              </div>
+              <div className="perspectives-current-card">
+                <span className="label">Capital histórico</span>
+                <span className="value">{fmt(activeScenarioData.summary.historicalCapitalEur)}</span>
+                <span className="sub">Ya invertido</span>
+              </div>
+              <div className="perspectives-current-card">
+                <span className="label">Aportaciones acumuladas</span>
+                <span className="value">{fmt(activeScenarioData.summary.totalFutureCapitalEur)}</span>
+                <span className="sub">Plan futuro</span>
+              </div>
+              <div className="perspectives-current-card">
+                <span className="label">Beneficio acumulado</span>
+                <span className={`value ${(activeScenarioData.summary.estimatedMarketGainEur ?? 0) >= 0 ? "text-success" : "text-danger"}`}>
+                  {fmt(activeScenarioData.summary.estimatedMarketGainEur)}
+                </span>
+                <span className="sub">Ganancia mercado total</span>
+              </div>
+              <div className="perspectives-current-card">
+                <span className="label">Ventas acumuladas</span>
+                <span className="value">{fmt(activeScenarioData.cycleResults.reduce((s, c) => s + c.salesEur, 0))}</span>
+                <span className="sub">Ventas parciales Plan</span>
+              </div>
+              <div className="perspectives-current-card">
+                <span className="label">Recompras acumuladas</span>
+                <span className="value">{fmt(activeScenarioData.cycleResults.reduce((s, c) => s + c.rebuysEur, 0))}</span>
+                <span className="sub">Recompras con EURC</span>
+              </div>
+              <div className="perspectives-current-card">
+                <span className="label">Impuestos generados</span>
+                <span className="value text-muted">{fmt(activeScenarioData.summary.totalTaxGeneratedEur)}</span>
+                <span className="sub">Reserva fiscal total</span>
+              </div>
+              <div className="perspectives-current-card">
+                <span className="label">EURC disponible</span>
+                <span className="value">{fmt(activeScenarioData.summary.finalEurcAvailableEur)}</span>
+                <span className="sub">Neto tras reservas</span>
+              </div>
+              <div className="perspectives-current-card" style={{ borderColor: PERSPECTIVE_COLORS[activePerspective] }}>
+                <span className="label">Patrimonio neto final</span>
+                <span className="value" style={{ color: PERSPECTIVE_COLORS[activePerspective], fontWeight: 700 }}>
+                  {fmt(activeScenarioData.summary.finalNetWealthEur)}
+                </span>
+                <span className="sub">
+                  XIRR: {(activeScenarioData.summary as any).xirrAnnual != null
+                    ? `${(((activeScenarioData.summary as any).xirrAnnual as number) * 100).toFixed(1)}% / año`
+                    : "—"}
+                </span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Explicación si resultado < capital aportado ── */}
+      {isUnderperforming && (
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              <AlertTriangle size={16} style={{ color: "var(--color-warning)" }} />
+              Patrimonio estimado inferior al capital aportado
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted" style={{ marginBottom: "0.75rem" }}>
+              En la perspectiva {PERSPECTIVE_NAMES[activePerspective]} para el año {targetYear}, el patrimonio neto estimado ({fmt(activeNet)}) no supera el capital total aportado ({fmt(totalCapital)}). Esto puede deberse a:
+            </p>
+            <div className="perspectives-confidence-grid">
+              {activeScenarioData?.summary.estimatedMarketGainEur != null && activeScenarioData.summary.estimatedMarketGainEur < 0 && (
+                <div className="confidence-item">
+                  <AlertTriangle size={14} style={{ color: "var(--color-warning)" }} />
+                  <span>Evolución negativa del mercado en este escenario</span>
+                </div>
+              )}
+              {(activeScenarioData?.summary.totalTaxGeneratedEur ?? 0) > 0 && (
+                <div className="confidence-item">
+                  <Info size={14} className="text-muted" />
+                  <span>Impacto fiscal: {fmt(activeScenarioData?.summary.totalTaxGeneratedEur)}</span>
+                </div>
+              )}
+              <div className="confidence-item">
+                <Info size={14} className="text-muted" />
+                <span>El horizonte seleccionado ({targetYear}) puede estar dentro de una fase de corrección del ciclo de halving</span>
+              </div>
+              <div className="confidence-item">
+                <Info size={14} className="text-muted" />
+                <span>La perspectiva Conservadora asume crecimiento inferior a la media histórica</span>
+              </div>
+            </div>
+            <p className="text-xs text-muted" style={{ marginTop: "0.75rem" }}>
+              Compara con las perspectivas Moderada y Optimista, o extiende el horizonte temporal para ver la recuperación.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Validación escenario sin crecimiento ── */}
+      {projection && (() => {
+        const cero = projection.scenarios.find(s => s.scenario === "cero");
+        if (!cero) return null;
+        const activeFloor = activeScenarioData?.summary.finalNetWealthEur ?? 0;
+        const floorOk = activeFloor >= cero.summary.finalNetWealthEur - 1;
+        if (!projection.wealthFloorViolations?.length && floorOk) return null;
+        return (
+          <div className="empty-state-inline" style={{ padding: "8px 12px", borderRadius: "var(--radius)", background: "var(--color-danger-bg, #fee2e2)" }}>
+            <AlertCircle size={14} style={{ color: "var(--color-danger)" }} />
+            <span className="text-sm">
+              <strong>Validación suelo mínimo:</strong> la perspectiva seleccionada produce un patrimonio inferior al escenario sin crecimiento.
+              {" "}Suelo: {fmt(cero.summary.finalNetWealthEur)} · Perspectiva: {fmt(activeFloor)}
+            </span>
+          </div>
+        );
+      })()}
+
+      {/* ── Detalle expandible ── */}
+      {showDetail && projection && (
+        <>
+          {/* Tabs de detalle */}
+          <div className="persp-detail-tabs" role="tablist">
+            {([
+              ["evolucion",  "Evolución anual"],
+              ["activos",    "Activos"],
+              ["estrategia", "Estrategia"],
+              ["auditoria",  "Auditoría"],
+            ] as [typeof detailTab, string][]).map(([tab, label]) => (
+              <button
+                key={tab}
+                role="tab"
+                aria-selected={detailTab === tab}
+                className={`persp-detail-tab${detailTab === tab ? " active" : ""}`}
+                onClick={() => setDetailTab(tab)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* Tab: Evolución anual */}
+          {detailTab === "evolucion" && activeScenarioData && (
+            <Card>
+              <CardHeader>
+                <CardTitle>
+                  <TrendingUp size={16} />
+                  Evolución año a año — {PERSPECTIVE_NAMES[activePerspective]}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {/* Gráfico */}
+                <ScenarioChart
+                  scenarios={projection.scenarios}
+                  activeScenario={activeScenario}
+                  horizonYears={horizonYears}
+                  targetYear={targetYear}
+                />
+
+                {/* Tabla anual */}
+                {(activeScenarioData as any).annualBreakdown?.length > 0 && (
+                  <div className="perspectives-cycle-table-wrapper" style={{ marginTop: "1.25rem" }}>
                     <table className="perspectives-cycle-table">
                       <thead>
                         <tr>
@@ -518,18 +740,15 @@ export function Perspectivas() {
                             <>
                               {isFirstExtrapol && (
                                 <tr key={`sep-${row.year}`} style={{ background: "transparent" }}>
-                                  <td colSpan={8} style={{ padding: "2px 4px", fontSize: "0.7rem", color: "var(--text-muted)", fontStyle: "italic", borderTop: "1px dashed var(--color-border)" }}>
+                                  <td colSpan={9} style={{ padding: "2px 4px", fontSize: "0.7rem", color: "var(--text-muted)", fontStyle: "italic", borderTop: "1px dashed var(--color-border)" }}>
                                     — Extrapolación libre (sin nuevas aportaciones del plan) —
                                   </td>
                                 </tr>
                               )}
-                              <tr
-                                key={row.year}
-                                style={row.scope === "extrapol" ? { opacity: 0.65 } : undefined}
-                              >
+                              <tr key={row.year} style={row.scope === "extrapol" ? { opacity: 0.65 } : undefined}>
                                 <td style={{ fontWeight: 600 }}>
                                   {row.year}
-                                  {row.scope === "extrapol" && <span title="Fuera del horizonte del plan configurado" style={{ fontSize: "0.65rem", marginLeft: 3, color: "var(--text-muted)" }}>›</span>}
+                                  {row.scope === "extrapol" && <span title="Fuera del horizonte del plan" style={{ fontSize: "0.65rem", marginLeft: 3, color: "var(--text-muted)" }}>›</span>}
                                 </td>
                                 <td className="text-right text-muted">{fmt(row.inheritedWealthEur)}</td>
                                 <td className="text-right">{fmt(row.contributionsEur)}</td>
@@ -549,7 +768,7 @@ export function Perspectivas() {
                                 <td className="text-right text-muted">{row.salesEur > 0 ? fmt(row.salesEur) : "—"}</td>
                                 <td className="text-right text-muted">{row.rebuysEur > 0 ? fmt(row.rebuysEur) : "—"}</td>
                                 <td className="text-right text-muted">{row.taxEur > 0 ? fmt(row.taxEur) : "—"}</td>
-                                <td className="text-right" style={{ fontWeight: 700, color: SCENARIO_COLORS[activeScenario] }}>{fmt(row.endWealthEur)}</td>
+                                <td className="text-right" style={{ fontWeight: 700, color: PERSPECTIVE_COLORS[activePerspective] }}>{fmt(row.endWealthEur)}</td>
                               </tr>
                             </>
                           );
@@ -568,138 +787,338 @@ export function Perspectivas() {
                               ? `${((activeScenarioData.summary as any).xirrAnnual * 100).toFixed(1)}%`
                               : "—"}
                           </td>
-                          <td className="text-right text-muted">{fmt(activeScenarioData.cycleResults.reduce((a: number, c: any) => a + c.salesEur, 0))}</td>
-                          <td className="text-right text-muted">{fmt(activeScenarioData.cycleResults.reduce((a: number, c: any) => a + c.rebuysEur, 0))}</td>
+                          <td className="text-right text-muted">{fmt(activeScenarioData.cycleResults.reduce((a, c) => a + c.salesEur, 0))}</td>
+                          <td className="text-right text-muted">{fmt(activeScenarioData.cycleResults.reduce((a, c) => a + c.rebuysEur, 0))}</td>
                           <td className="text-right text-muted">{fmt(activeScenarioData.summary.totalTaxGeneratedEur)}</td>
-                          <td className="text-right" style={{ color: SCENARIO_COLORS[activeScenario] }}>{fmt(activeScenarioData.summary.finalGrossWealthEur)}</td>
+                          <td className="text-right" style={{ color: PERSPECTIVE_COLORS[activePerspective] }}>{fmt(activeScenarioData.summary.finalNetWealthEur)}</td>
                         </tr>
                       </tfoot>
                     </table>
                     <p style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: "0.4rem" }}>
                       <strong>↓ Capital inicial = Capital final del año anterior</strong> (compounding explícito) ·
-                      La columna <strong>% año</strong> es el rendimiento total del patrimonio acumulado ese año
-                      (ganancia mercado + recompras − impuestos sobre capital inicial) ·
-                      El escenario modela fases de ciclo de halving: bulls (+) y correcciones (−) ·
-                      {simulationPolicy === "confirmed_plus_proposals" || simulationPolicy === "full_strategy"
-                        ? " Ventas/recompras incluyen propuestas según analistas."
-                        : " Política sin propuestas hipotéticas."}
-                      {activeScenario === "dinamico"
-                        ? " Dinámico: tasas calibradas con sentimiento real por activo (7d/30d + Fear & Greed)."
-                        : ""}
+                      <strong> % año</strong>: rendimiento del patrimonio acumulado (mercado + recompras − impuestos / capital inicial) ·
+                      El motor modela fases bull/corrección de ciclos de halving ·
+                      {simulationPolicy !== "plan_base" && simulationPolicy !== "confirmed_only"
+                        ? " Ventas/recompras incluyen propuestas según Plan."
+                        : " Política sin propuestas automáticas."}
                       {" › = extrapolación libre fuera del plan configurado."}
                     </p>
                   </div>
-                </details>
-              )}
+                )}
+              </CardContent>
+            </Card>
+          )}
 
-              {/* ── Comparativa compacta de todos los escenarios ── */}
-              <div className="perspectives-cycle-table-wrapper" style={{ marginTop: "1rem" }}>
-                <table className="perspectives-cycle-table">
-                  <thead>
-                    <tr>
-                      <th>Escenario</th>
-                      <th className="text-right">Patr. neto</th>
-                      <th className="text-right">XIRR</th>
-                      <th className="text-right">Probabilidad</th>
-                      <th className="text-right">Impuesto</th>
-                      <th className="text-right">Ventas</th>
-                      <th className="text-right">Recompras</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {SCENARIO_ORDER.map(s => {
-                      const sc = projection.scenarios.find(x => x.scenario === s);
-                      if (!sc) return null;
-                      const isSelected = activeScenario === s;
-                      const totalSales = sc.cycleResults.reduce((a, c) => a + c.salesEur, 0);
-                      const totalRebuys = sc.cycleResults.reduce((a, c) => a + c.rebuysEur, 0);
-                      return (
-                        <tr
-                          key={s}
-                          className={isSelected ? "selected" : ""}
-                          style={{ cursor: "pointer" }}
-                          onClick={() => setActiveScenario(s)}
-                        >
-                          <td>
-                            <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: SCENARIO_COLORS[s], marginRight: 6 }} />
-                            {sc.label}
-                            {s === "dinamico" && sc.confidence != null && (
-                              <span className="text-muted" style={{ fontSize: "0.75em", marginLeft: 4 }}>
-                                conf. {pct(sc.confidence)}
-                              </span>
-                            )}
-                          </td>
-                          <td className="text-right font-medium">{fmt(sc.summary.finalNetWealthEur)}</td>
-                          <td className="text-right">
-                            {(sc.summary as any).xirrAnnual != null
-                              ? `${(((sc.summary as any).xirrAnnual as number) * 100).toFixed(1)}%`
-                              : sc.summary.weightedAnnualReturn != null
-                              ? `${(sc.summary.weightedAnnualReturn * 100).toFixed(1)}%`
-                              : "—"}
-                          </td>
-                          <td className="text-right text-muted">
-                            {sc.probability != null ? pct(sc.probability) : s === "dinamico" ? `conf. ${pct(sc.confidence)}` : "—"}
-                          </td>
-                          <td className="text-right text-muted">{fmt(sc.summary.totalTaxGeneratedEur)}</td>
-                          <td className="text-right">{fmt(totalSales)}</td>
-                          <td className="text-right">{fmt(totalRebuys)}</td>
+          {/* Tab: Activos */}
+          {detailTab === "activos" && activeScenarioData && (
+            <StrategyBreakdownSection projection={projection} scenario={activeScenarioData} />
+          )}
+
+          {/* Tab: Estrategia — comparativa de los 7 escenarios */}
+          {detailTab === "estrategia" && (
+            <Card>
+              <CardHeader>
+                <CardTitle>
+                  <ChartNoAxesCombined size={16} />
+                  Comparativa — 7 escenarios de proyección
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {/* Selector de escenario */}
+                <div className="perspectives-scenario-selector" role="tablist" style={{ marginBottom: "1rem" }}>
+                  {SCENARIO_ORDER.map(s => {
+                    const sc = projection.scenarios.find(x => x.scenario === s);
+                    const color = SCENARIO_COLORS[s];
+                    const isActive = activeScenario === s;
+                    return (
+                      <button
+                        key={s}
+                        role="tab"
+                        aria-selected={isActive}
+                        className={`perspectives-scenario-tab${isActive ? " active" : ""}`}
+                        style={{ "--scenario-color": color } as React.CSSProperties}
+                        onClick={() => {
+                          const matchPerspective = (Object.entries(PERSPECTIVE_SCENARIO) as [PerspectiveKey, ActiveScenario][]).find(([, sc]) => sc === s);
+                          if (matchPerspective) setActivePerspective(matchPerspective[0]);
+                        }}
+                      >
+                        <span className="tab-dot" style={{ background: color }} />
+                        <span className="tab-label">{sc?.label ?? s}</span>
+                        {sc?.probability != null && (
+                          <span className="tab-prob">{pct(sc.probability)}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Tarjeta del escenario activo */}
+                {activeScenarioData && (
+                  <div className="perspectives-active-card" style={{ borderLeftColor: PERSPECTIVE_COLORS[activePerspective] }}>
+                    <div className="active-card-header">
+                      <div>
+                        <h3 className="active-card-title">{activeScenarioData.label}</h3>
+                        <p className="text-sm text-muted" style={{ marginTop: 2 }}>{activeScenarioData.description}</p>
+                      </div>
+                      <div className="active-card-badges">
+                        {activeScenarioData.probability != null && (
+                          <Badge variant="neutral">Probabilidad: {pct(activeScenarioData.probability)}</Badge>
+                        )}
+                        {activeScenarioData.confidence != null && (
+                          <Badge variant={activeScenarioData.confidence >= 0.6 ? "success" : "warning"}>
+                            Confianza: {pct(activeScenarioData.confidence)}
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                    <div className="active-card-metrics">
+                      <div className="metric-item highlight" style={{ borderColor: PERSPECTIVE_COLORS[activePerspective] }}>
+                        <span className="metric-label">Patrimonio neto</span>
+                        <span className="metric-value">{fmt(activeScenarioData.summary.finalNetWealthEur)}</span>
+                      </div>
+                      <div className="metric-item">
+                        <span className="metric-label">Patrimonio bruto</span>
+                        <span className="metric-value">{fmt(activeScenarioData.summary.finalGrossWealthEur)}</span>
+                      </div>
+                      <div className="metric-item">
+                        <span className="metric-label">Capital histórico</span>
+                        <span className="metric-value">{fmt(activeScenarioData.summary.historicalCapitalEur)}</span>
+                      </div>
+                      <div className="metric-item">
+                        <span className="metric-label">Aportaciones futuras</span>
+                        <span className="metric-value">{fmt(activeScenarioData.summary.totalFutureCapitalEur)}</span>
+                      </div>
+                      <div className="metric-item">
+                        <span className="metric-label">Plusvalía realizada</span>
+                        <span className={`metric-value ${activeScenarioData.summary.totalRealizedGainEur >= 0 ? "text-success" : "text-danger"}`}>
+                          {fmt(activeScenarioData.summary.totalRealizedGainEur)}
+                        </span>
+                      </div>
+                      <div className="metric-item">
+                        <span className="metric-label">Plusvalía no realizada</span>
+                        <span className={`metric-value ${activeScenarioData.summary.totalUnrealizedGainEur >= 0 ? "text-success" : "text-danger"}`}>
+                          {fmt(activeScenarioData.summary.totalUnrealizedGainEur)}
+                        </span>
+                      </div>
+                      <div className="metric-item">
+                        <span className="metric-label">Impuesto generado</span>
+                        <span className="metric-value text-muted">{fmt(activeScenarioData.summary.totalTaxGeneratedEur)}</span>
+                      </div>
+                      <div className="metric-item">
+                        <span className="metric-label">EURC reserva fiscal</span>
+                        <span className="metric-value">{fmt(activeScenarioData.summary.finalFiscalReserveEur)}</span>
+                      </div>
+                      <div className="metric-item">
+                        <span className="metric-label">EURC libre</span>
+                        <span className="metric-value">{fmt(activeScenarioData.summary.finalEurcAvailableEur)}</span>
+                      </div>
+                      <div className="metric-item">
+                        <span className="metric-label">Ventas proyectadas</span>
+                        {(() => {
+                          const totalSales = activeScenarioData.cycleResults.reduce((s, c) => s + c.salesEur, 0);
+                          return (
+                            <>
+                              <span className="metric-value">{fmt(totalSales)}</span>
+                              {totalSales === 0 && (activeScenarioData.summary as any).salesZeroExplanation && (
+                                <details className="metric-zero-detail">
+                                  <summary className="metric-zero-summary">¿Por qué 0 €?</summary>
+                                  <span className="metric-zero-text">{(activeScenarioData.summary as any).salesZeroExplanation}</span>
+                                </details>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
+                      <div className="metric-item">
+                        <span className="metric-label">Recompras proyectadas</span>
+                        {(() => {
+                          const totalRebuys = activeScenarioData.cycleResults.reduce((s, c) => s + c.rebuysEur, 0);
+                          return (
+                            <>
+                              <span className="metric-value">{fmt(totalRebuys)}</span>
+                              {totalRebuys === 0 && (activeScenarioData.summary as any).rebuysZeroExplanation && (
+                                <details className="metric-zero-detail">
+                                  <summary className="metric-zero-summary">¿Por qué 0 €?</summary>
+                                  <span className="metric-zero-text">{(activeScenarioData.summary as any).rebuysZeroExplanation}</span>
+                                </details>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
+                      <div className="metric-item highlight" style={{ borderColor: PERSPECTIVE_COLORS[activePerspective], gridColumn: "1 / -1" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.75rem" }}>
+                          <div>
+                            <span className="metric-label">XIRR — Rent. personal</span>
+                            <span className="metric-value">
+                              {(activeScenarioData.summary as any).xirrAnnual != null
+                                ? `${(((activeScenarioData.summary as any).xirrAnnual as number) * 100).toFixed(2)}% / año`
+                                : "—"}
+                            </span>
+                            <span className="metric-sub">Flujos reales fechados</span>
+                          </div>
+                          <div>
+                            <span className="metric-label">TWR — Rent. estrategia</span>
+                            <span className="metric-value">
+                              {(activeScenarioData.summary as any).twrAnnual != null
+                                ? `${(((activeScenarioData.summary as any).twrAnnual as number) * 100).toFixed(2)}% / año`
+                                : "—"}
+                            </span>
+                            <span className="metric-sub">Sin efecto de flujos</span>
+                          </div>
+                          <div>
+                            <span className="metric-label">ROI acumulado</span>
+                            <span className="metric-value">
+                              {(activeScenarioData.summary as any).roiAccumulated != null
+                                ? `${(((activeScenarioData.summary as any).roiAccumulated as number) * 100).toFixed(1)}%`
+                                : "—"}
+                            </span>
+                            <span className="metric-sub">Patrimonio / Capital − 1</span>
+                          </div>
+                        </div>
+                        <span className="metric-sub" style={{ display: "block", marginTop: "0.5rem" }}>
+                          Horizonte: {horizonYears} años · Neto de impuestos
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Comparativa compacta 7 escenarios */}
+                <div className="perspectives-cycle-table-wrapper" style={{ marginTop: "1rem" }}>
+                  <table className="perspectives-cycle-table">
+                    <thead>
+                      <tr>
+                        <th>Escenario</th>
+                        <th className="text-right">Patr. neto</th>
+                        <th className="text-right">XIRR</th>
+                        <th className="text-right">Probabilidad</th>
+                        <th className="text-right">Impuesto</th>
+                        <th className="text-right">Ventas</th>
+                        <th className="text-right">Recompras</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {SCENARIO_ORDER.map(s => {
+                        const sc = projection.scenarios.find(x => x.scenario === s);
+                        if (!sc) return null;
+                        const isSelected = activeScenario === s;
+                        const totalSales = sc.cycleResults.reduce((a, c) => a + c.salesEur, 0);
+                        const totalRebuys = sc.cycleResults.reduce((a, c) => a + c.rebuysEur, 0);
+                        return (
+                          <tr
+                            key={s}
+                            className={isSelected ? "selected" : ""}
+                            style={{ cursor: "pointer" }}
+                            onClick={() => {
+                              const matchP = (Object.entries(PERSPECTIVE_SCENARIO) as [PerspectiveKey, ActiveScenario][]).find(([, sc]) => sc === s);
+                              if (matchP) setActivePerspective(matchP[0]);
+                            }}
+                          >
+                            <td>
+                              <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: SCENARIO_COLORS[s], marginRight: 6 }} />
+                              {sc.label}
+                            </td>
+                            <td className="text-right font-medium">{fmt(sc.summary.finalNetWealthEur)}</td>
+                            <td className="text-right">
+                              {(sc.summary as any).xirrAnnual != null
+                                ? `${(((sc.summary as any).xirrAnnual as number) * 100).toFixed(1)}%`
+                                : sc.summary.weightedAnnualReturn != null
+                                ? `${(sc.summary.weightedAnnualReturn * 100).toFixed(1)}%`
+                                : "—"}
+                            </td>
+                            <td className="text-right text-muted">
+                              {sc.probability != null ? pct(sc.probability) : "—"}
+                            </td>
+                            <td className="text-right text-muted">{fmt(sc.summary.totalTaxGeneratedEur)}</td>
+                            <td className="text-right">{fmt(totalSales)}</td>
+                            <td className="text-right">{fmt(totalRebuys)}</td>
+                          </tr>
+                        );
+                      })}
+                      {(() => {
+                        const cero = projection.scenarios.find(x => x.scenario === "cero");
+                        if (!cero) return null;
+                        return (
+                          <tr key="cero" style={{ borderTop: "2px dashed var(--color-border)", opacity: 0.7 }}>
+                            <td>
+                              <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "var(--color-muted-fg)", marginRight: 6 }} />
+                              {cero.label}
+                              <span className="text-muted" style={{ fontSize: "0.7em", marginLeft: 4 }}>(suelo mínimo)</span>
+                            </td>
+                            <td className="text-right text-muted">{fmt(cero.summary.finalNetWealthEur)}</td>
+                            <td className="text-right text-muted">0%</td>
+                            <td className="text-right text-muted">—</td>
+                            <td className="text-right text-muted">0</td>
+                            <td className="text-right text-muted">0</td>
+                            <td className="text-right text-muted">0</td>
+                          </tr>
+                        );
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Controles independientes */}
+                {activeScenarioData && (
+                  <div className="perspectives-cycle-table-wrapper" style={{ marginTop: "1rem" }}>
+                    <h4 style={{ fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.5rem", color: "var(--text-muted)" }}>
+                      Controles independientes — {horizonYears} años
+                    </h4>
+                    <table className="perspectives-cycle-table">
+                      <thead>
+                        <tr>
+                          <th>Referencia</th>
+                          <th className="text-right">Patrimonio final</th>
+                          <th className="text-right">Método</th>
                         </tr>
-                      );
-                    })}
-                    {/* CERO control row — separator */}
-                    {(() => {
-                      const cero = projection.scenarios.find(x => x.scenario === "cero");
-                      if (!cero) return null;
-                      return (
-                        <tr key="cero" style={{ borderTop: "2px dashed var(--color-border)", opacity: 0.7 }}>
-                          <td>
-                            <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "var(--color-muted-fg)", marginRight: 6 }} />
-                            {cero.label}
-                            <span className="text-muted" style={{ fontSize: "0.7em", marginLeft: 4 }}>(suelo mínimo)</span>
-                          </td>
-                          <td className="text-right text-muted">{fmt(cero.summary.finalNetWealthEur)}</td>
-                          <td className="text-right text-muted">0%</td>
-                          <td className="text-right text-muted">—</td>
-                          <td className="text-right text-muted">0</td>
-                          <td className="text-right text-muted">0</td>
-                          <td className="text-right text-muted">0</td>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          <td>Control 0% (suelo mínimo)</td>
+                          <td className="text-right">{fmt((activeScenarioData.summary as any).controlCeroWealth ?? 0)}</td>
+                          <td className="text-right text-muted">Anualidad a 0%</td>
                         </tr>
-                      );
-                    })()}
-                  </tbody>
-                </table>
-              </div>
+                        <tr>
+                          <td>Control 5% anual</td>
+                          <td className="text-right">{fmt((activeScenarioData.summary as any).control5pctWealth ?? 0)}</td>
+                          <td className="text-right text-muted">Anualidad a 5%</td>
+                        </tr>
+                        <tr>
+                          <td>Control 7% anual</td>
+                          <td className="text-right">{fmt((activeScenarioData.summary as any).control7pctWealth ?? 0)}</td>
+                          <td className="text-right text-muted">Anualidad a 7%</td>
+                        </tr>
+                        <tr style={{ fontWeight: 600, background: `${PERSPECTIVE_COLORS[activePerspective]}22` }}>
+                          <td>{PERSPECTIVE_NAMES[activePerspective]}</td>
+                          <td className="text-right">{fmt(activeScenarioData.summary.finalNetWealthEur)}</td>
+                          <td className="text-right text-muted">Simulación completa</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Tab: Auditoría */}
+          {detailTab === "auditoria" && (
+            <>
+              <PlanSnapshotSection projection={projection} loading={false} error={null} />
+              <ContributionLedgerSection
+                ledger={projection.contributionLedger}
+                ceroScenario={projection.scenarios.find(s => s.scenario === "cero") ?? null}
+                wealthFloorViolations={projection.wealthFloorViolations ?? []}
+                orderingViolations={projection.orderingViolations ?? []}
+              />
+              <DataQualitySection projection={projection} activeScenario={activeScenarioData} dataScore={dataScore} />
             </>
           )}
-        </CardContent>
-      </Card>
-
-      {/* ── Sección 3: Gráfico evolutivo ── */}
-      {activeScenarioData && (
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              <TrendingUp size={16} />
-              Evolución — {activeScenarioData.label}
-            </CardTitle>
-            <Badge variant="neutral">Simulación mensual</Badge>
-          </CardHeader>
-          <CardContent>
-            <ScenarioChart
-              scenarios={projection!.scenarios}
-              activeScenario={activeScenario}
-              horizonYears={horizonYears}
-              targetYear={targetYear}
-            />
-          </CardContent>
-        </Card>
+        </>
       )}
 
-      {projection && activeScenarioData && (
-        <StrategyBreakdownSection projection={projection} scenario={activeScenarioData} />
-      )}
-
-      {/* ── Sección 4: Objetivos ── */}
+      {/* ── Sección de objetivos (siempre visible) ── */}
       <Card>
         <CardHeader>
           <CardTitle>
@@ -779,7 +1198,6 @@ export function Perspectivas() {
                     </button>
                   </div>
                 </div>
-
                 <div className="goal-progress-row">
                   <div className="goal-progress-bar">
                     <div className="goal-progress-fill" style={{ width: `${progress * 100}%` }} />
@@ -792,10 +1210,9 @@ export function Perspectivas() {
                 </div>
                 {projectedGoal && (
                   <p className="text-sm text-muted">
-                    Proyectado en {activeScenarioData?.label ?? "escenario activo"}: {fmt(projectedGoal.projectedAssignedEur)} asignados por prioridad.
+                    Proyectado en {PERSPECTIVE_NAMES[activePerspective]}: {fmt(projectedGoal.projectedAssignedEur)} asignados por prioridad.
                   </p>
                 )}
-
                 {goal.targetDate && (
                   <p className="text-sm text-muted">
                     Fecha objetivo: {new Date(goal.targetDate).toLocaleDateString("es-ES")}
@@ -807,9 +1224,6 @@ export function Perspectivas() {
           })}
         </CardContent>
       </Card>
-
-      {/* ── Sección 5: Calidad de datos e hipótesis ── */}
-      <DataQualitySection projection={projection} activeScenario={activeScenarioData} dataScore={dataScore} />
     </section>
   );
 }
@@ -844,7 +1258,6 @@ function ContributionLedgerSection({
         )}
       </CardHeader>
       <CardContent>
-        {/* Alertas de violaciones */}
         {orderingViolations?.length > 0 && (
           <div className="empty-state-inline" style={{ marginBottom: "0.75rem", background: "var(--color-warning-bg, #fef3c7)", padding: "8px 12px", borderRadius: "var(--radius)" }}>
             <AlertTriangle size={14} style={{ color: "var(--color-warning)" }} />
@@ -864,7 +1277,6 @@ function ContributionLedgerSection({
           </div>
         )}
 
-        {/* Control CERO */}
         {ceroScenario && (
           <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", marginBottom: "1rem" }}>
             <div className="perspectives-current-card" style={{ flex: "1 1 160px" }}>
@@ -885,7 +1297,6 @@ function ContributionLedgerSection({
           </div>
         )}
 
-        {/* Tabla del libro mayor */}
         {ledger && ledger.cycles.length > 0 && (
           <div className="perspectives-cycle-table-wrapper">
             <table className="perspectives-cycle-table">
@@ -966,8 +1377,7 @@ function PlanSnapshotSection({
             <span>
               {!projection && !error
                 ? "Sin plan activo. Crea un plan de inversión primero."
-                : "Error al cargar el estado del plan."
-              }
+                : "Error al cargar el estado del plan."}
             </span>
           </div>
         </CardContent>
@@ -1051,7 +1461,7 @@ function PlanSnapshotSection({
   );
 }
 
-// ─── Sección 3: Gráfico evolutivo ───────────────────────────────────────────
+// ─── Gráfico evolutivo ───────────────────────────────────────────────────────
 
 function ScenarioChart({
   scenarios,
@@ -1077,31 +1487,19 @@ function ScenarioChart({
   const points = active.chartPoints;
   const maxWealth = Math.max(...points.map(p => p.grossWealthEur));
   const h = 200;
-  const w = 100; // percentage units
+  const w = 100;
 
-  // Simple SVG polyline chart
   const toXY = (i: number, value: number) => ({
     x: (i / (points.length - 1)) * w,
     y: h - (value / (maxWealth || 1)) * h * 0.9,
   });
 
-  const grossLine = points.map((p, i) => {
-    const { x, y } = toXY(i, p.grossWealthEur);
-    return `${x},${y}`;
-  }).join(" ");
+  const grossLine = points.map((p, i) => { const { x, y } = toXY(i, p.grossWealthEur); return `${x},${y}`; }).join(" ");
+  const netLine   = points.map((p, i) => { const { x, y } = toXY(i, p.netWealthEur);   return `${x},${y}`; }).join(" ");
+  const portLine  = points.map((p, i) => { const { x, y } = toXY(i, p.portfolioValueEur); return `${x},${y}`; }).join(" ");
 
-  const netLine = points.map((p, i) => {
-    const { x, y } = toXY(i, p.netWealthEur);
-    return `${x},${y}`;
-  }).join(" ");
-
-  const portfolioLine = points.map((p, i) => {
-    const { x, y } = toXY(i, p.portfolioValueEur);
-    return `${x},${y}`;
-  }).join(" ");
-
-  const color = SCENARIO_COLORS[activeScenario] ?? "var(--color-primary)";
-
+  const activePerspective = (Object.entries(PERSPECTIVE_SCENARIO) as [PerspectiveKey, ActiveScenario][]).find(([, s]) => s === activeScenario)?.[0];
+  const color = activePerspective ? PERSPECTIVE_COLORS[activePerspective] : SCENARIO_COLORS[activeScenario] ?? "var(--color-primary)";
   const first = points[0];
   const last = points[points.length - 1];
   const fmtEur = (v: number) => new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(v);
@@ -1113,14 +1511,10 @@ function ScenarioChart({
         <span className="text-sm"><span className="text-muted font-medium">- -</span> Patrimonio neto</span>
         <span className="text-sm"><span className="text-muted font-medium">···</span> Cartera</span>
       </div>
-      <svg
-        viewBox={`0 0 ${w} ${h}`}
-        style={{ width: "100%", height: 200, overflow: "visible" }}
-        preserveAspectRatio="none"
-      >
+      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", height: 200, overflow: "visible" }} preserveAspectRatio="none">
         <polyline points={grossLine} fill="none" stroke={color} strokeWidth="0.8" vectorEffect="non-scaling-stroke" />
-        <polyline points={netLine} fill="none" stroke={color} strokeWidth="0.6" strokeDasharray="2,1" vectorEffect="non-scaling-stroke" opacity="0.7" />
-        <polyline points={portfolioLine} fill="none" stroke="var(--color-muted-fg)" strokeWidth="0.5" strokeDasharray="1,1.5" vectorEffect="non-scaling-stroke" opacity="0.5" />
+        <polyline points={netLine}   fill="none" stroke={color} strokeWidth="0.6" strokeDasharray="2,1" vectorEffect="non-scaling-stroke" opacity="0.7" />
+        <polyline points={portLine}  fill="none" stroke="var(--color-muted-fg)" strokeWidth="0.5" strokeDasharray="1,1.5" vectorEffect="non-scaling-stroke" opacity="0.5" />
       </svg>
       <div className="perspectives-cycle-table-wrapper" style={{ marginTop: "0.75rem" }}>
         <table className="perspectives-cycle-table">
@@ -1152,14 +1546,14 @@ function ScenarioChart({
         </table>
       </div>
       <p className="text-sm text-muted" style={{ marginTop: "0.5rem" }}>
-        Escenario {active.label} · {points.length} periodos mensuales ·
+        {active.label} · {points.length} periodos mensuales ·
         <strong> Simulación hipotética, no asesoramiento financiero.</strong>
       </p>
     </div>
   );
 }
 
-// ─── Desglose de estrategia completa ─────────────────────────────────────────
+// ─── Desglose de estrategia ──────────────────────────────────────────────────
 
 function StrategyBreakdownSection({
   projection,
@@ -1177,7 +1571,7 @@ function StrategyBreakdownSection({
       <CardHeader>
         <CardTitle>
           <Info size={16} />
-          Desglose de estrategia — {scenario.label}
+          Desglose de activos — {scenario.label}
         </CardTitle>
         <Badge variant="neutral">{projection.snapshot.plans.length || 1} plan(es)</Badge>
       </CardHeader>
@@ -1273,7 +1667,7 @@ function StrategyBreakdownSection({
   );
 }
 
-// ─── Sección 5: Calidad e hipótesis ─────────────────────────────────────────
+// ─── Calidad e hipótesis ─────────────────────────────────────────────────────
 
 function DataQualitySection({
   projection,
@@ -1289,7 +1683,7 @@ function DataQualitySection({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Calidad de datos e hipótesis</CardTitle>
+        <CardTitle>Fórmulas e hipótesis utilizadas</CardTitle>
         {dataScore != null && (
           <Badge variant={dataScore >= 0.9 ? "success" : dataScore >= 0.6 ? "warning" : "neutral"}>
             Score: {(dataScore * 100).toFixed(0)}%
@@ -1341,7 +1735,8 @@ function DataQualitySection({
         <div className="perspectives-confidence-label" style={{ marginTop: "1rem" }}>
           <p className="text-sm text-muted">
             Las proyecciones son escenarios hipotéticos calculados con el motor de proyección interno.
-            Cada activo usa su propia hipótesis de crecimiento y calidad de dato; Bitcoin no se reutiliza como proxy global.
+            Simulación mes a mes acumulativa: cada mes parte del resultado del mes anterior.
+            Cada activo usa su propia hipótesis de crecimiento con fases del ciclo de halving (bull/corrección/recuperación).
             Los escenarios no garantizan rentabilidades futuras y no modifican el plan ni ejecutan operaciones.
           </p>
           {activeScenario && activeScenario.hypotheses.length > 0 && (
@@ -1363,7 +1758,7 @@ function DataQualitySection({
   );
 }
 
-// ─── GoalForm component ──────────────────────────────────────────────────────
+// ─── GoalForm ────────────────────────────────────────────────────────────────
 
 interface GoalFormProps {
   form: GoalFormState;
