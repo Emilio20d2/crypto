@@ -37,13 +37,37 @@ export function runMigrations(migrationsFolder: string) {
   if (!dbInstance || !sqliteInstance) throw new Error("Database not initialized");
 
   const dbPath = sqliteInstance.name;
-  const backupPath = `${dbPath}.backup-${Date.now()}`;
 
-  // 1. Crear copia de seguridad
-  fs.copyFileSync(dbPath, backupPath);
+  // Read journal to check how many migrations are pending
+  const journalPath = path.join(migrationsFolder, "meta", "_journal.json");
+  let pendingCount = 0;
+  if (fs.existsSync(journalPath)) {
+    try {
+      const journal = JSON.parse(fs.readFileSync(journalPath, "utf-8")) as { entries: { tag: string; when: number }[] };
+      const applied = sqliteInstance.prepare("SELECT hash FROM `__drizzle_migrations`").all() as { hash: string }[];
+      const appliedHashes = new Set(applied.map(r => r.hash));
+      const crypto = require("crypto") as typeof import("crypto");
+      for (const entry of journal.entries) {
+        const sqlPath = path.join(migrationsFolder, `${entry.tag}.sql`);
+        if (!fs.existsSync(sqlPath)) continue;
+        const hash = crypto.createHash("sha256").update(fs.readFileSync(sqlPath, "utf-8")).digest("hex");
+        if (!appliedHashes.has(hash)) pendingCount++;
+      }
+    } catch {
+      pendingCount = 1; // assume there might be pending migrations
+    }
+  }
+
+  // Only create backup if there are pending migrations
+  let backupPath: string | null = null;
+  if (pendingCount > 0) {
+    backupPath = `${dbPath}.backup-${Date.now()}`;
+    fs.copyFileSync(dbPath, backupPath);
+    console.log(`[DB] ${pendingCount} migrations pending, backup created at ${backupPath}`);
+  }
 
   try {
-    // 2. Verificar integridad inicial
+    // Verificar integridad inicial
     const integrityInitial = sqliteInstance.pragma("integrity_check") as { integrity_check: string }[];
     if (integrityInitial[0].integrity_check !== "ok") {
       throw new Error(`Integridad de base de datos fallida antes de migrar: ${JSON.stringify(integrityInitial)}`);
@@ -60,7 +84,8 @@ export function runMigrations(migrationsFolder: string) {
 
   } catch (error) {
     console.error("Migration failed, restoring backup...", error);
-    // 4. Restauración en caso de fallo
+    // Restauración en caso de fallo (solo si se creó backup)
+    if (!backupPath) throw error;
     sqliteInstance.close();
     fs.copyFileSync(backupPath, dbPath);
     // Restart connection
