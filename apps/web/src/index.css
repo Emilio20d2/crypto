@@ -5521,6 +5521,29 @@ dd {
   margin-top: 2px;
 }
 
+/* ── Zero-explanation details ── */
+.metric-zero-detail {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.metric-zero-summary {
+  cursor: pointer;
+  color: var(--text-accent);
+  font-size: 11px;
+  user-select: none;
+}
+.metric-zero-summary:hover {
+  text-decoration: underline;
+}
+.metric-zero-text {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
 /* ── Responsive for selector on mobile ── */
 @media (max-width: 640px) {
   .perspectives-scenario-selector {

@@ -84,6 +84,7 @@ export function Perspectivas() {
   const [targetYear, setTargetYear] = useState(currentYear + 10);
   const horizonYears = Math.max(1, targetYear - currentYear);
   const [activeScenario, setActiveScenario] = useState<ActiveScenario>("base");
+  const [simulationPolicy, setSimulationPolicy] = useState<"plan_base" | "confirmed_only" | "confirmed_plus_proposals" | "full_strategy">("confirmed_plus_proposals");
 
   const [showGoalForm, setShowGoalForm] = useState(false);
   const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
@@ -91,9 +92,9 @@ export function Perspectivas() {
 
   // ── projection query ──────────────────────────────────────────────────────
   const projectionQ = useQuery({
-    queryKey: ["perspectives:getProjection", horizonYears],
+    queryKey: ["perspectives:getProjection", horizonYears, simulationPolicy],
     queryFn: async () => {
-      const r = await api().perspectives.getProjection({ horizonYears });
+      const r = await api().perspectives.getProjection({ horizonYears, simulationPolicy });
       if (!r.ok) throw new Error(r.error?.message ?? "Error al calcular proyección");
       return r.data as ProjectionResult;
     },
@@ -189,7 +190,7 @@ export function Perspectivas() {
             <ChartNoAxesCombined size={16} />
             Proyección — 7 escenarios
           </CardTitle>
-          <div className="flex gap-2 items-center">
+          <div className="flex gap-2 items-center flex-wrap">
             <label className="text-sm text-muted">Año:</label>
             <select
               className="ui-select"
@@ -200,6 +201,18 @@ export function Perspectivas() {
               {projectionYears.map(year => (
                 <option key={year} value={year}>{year}</option>
               ))}
+            </select>
+            <label className="text-sm text-muted">Política:</label>
+            <select
+              className="ui-select"
+              style={{ width: 220 }}
+              value={simulationPolicy}
+              onChange={e => setSimulationPolicy(e.target.value as typeof simulationPolicy)}
+            >
+              <option value="plan_base">Plan base (solo aportaciones)</option>
+              <option value="confirmed_only">Solo reglas confirmadas</option>
+              <option value="confirmed_plus_proposals">Propuestas prudentes</option>
+              <option value="full_strategy">Estrategia completa</option>
             </select>
             {projectionQ.isFetching && <RefreshCw size={14} className="animate-spin text-muted" />}
           </div>
@@ -304,12 +317,71 @@ export function Perspectivas() {
                     </div>
                     <div className="metric-item">
                       <span className="metric-label">Ventas proyectadas</span>
-                      <span className="metric-value">{fmt(activeScenarioData.cycleResults.reduce((s, c) => s + c.salesEur, 0))}</span>
+                      {(() => {
+                        const totalSales = activeScenarioData.cycleResults.reduce((s, c) => s + c.salesEur, 0);
+                        return (
+                          <>
+                            <span className="metric-value">{fmt(totalSales)}</span>
+                            {totalSales === 0 && (activeScenarioData.summary as any).salesZeroExplanation && (
+                              <details className="metric-zero-detail">
+                                <summary className="metric-zero-summary">¿Por qué 0 €?</summary>
+                                <span className="metric-zero-text">{(activeScenarioData.summary as any).salesZeroExplanation}</span>
+                              </details>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
                     <div className="metric-item">
                       <span className="metric-label">Recompras proyectadas</span>
-                      <span className="metric-value">{fmt(activeScenarioData.cycleResults.reduce((s, c) => s + c.rebuysEur, 0))}</span>
+                      {(() => {
+                        const totalRebuys = activeScenarioData.cycleResults.reduce((s, c) => s + c.rebuysEur, 0);
+                        return (
+                          <>
+                            <span className="metric-value">{fmt(totalRebuys)}</span>
+                            {totalRebuys === 0 && (activeScenarioData.summary as any).rebuysZeroExplanation && (
+                              <details className="metric-zero-detail">
+                                <summary className="metric-zero-summary">¿Por qué 0 €?</summary>
+                                <span className="metric-zero-text">{(activeScenarioData.summary as any).rebuysZeroExplanation}</span>
+                              </details>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
+                    {/* Propuestas hipotéticas */}
+                    {(activeScenarioData.summary as any).hypotheticalSales?.length > 0 && (
+                      <div className="metric-item" style={{ gridColumn: "1 / -1" }}>
+                        <span className="metric-label">Ventas hipotéticas simuladas</span>
+                        <span className="metric-value text-warning">{(activeScenarioData.summary as any).hypotheticalSales.length} eventos</span>
+                        <details className="metric-zero-detail">
+                          <summary className="metric-zero-summary">Ver propuestas</summary>
+                          <ul style={{ fontSize: "0.75rem", margin: "4px 0 0", paddingLeft: "12px" }}>
+                            {(activeScenarioData.summary as any).hypotheticalSales.slice(0, 5).map((p: any) => (
+                              <li key={p.id}>
+                                {new Date(p.date).toLocaleDateString("es-ES", { year: "numeric", month: "short" })} — {p.assetId}: vender {p.sellPercentage.toFixed(0)}% · {fmt(p.grossEur)} bruto · {p.explanation.slice(0, 80)}
+                              </li>
+                            ))}
+                          </ul>
+                        </details>
+                      </div>
+                    )}
+                    {(activeScenarioData.summary as any).hypotheticalRebuys?.length > 0 && (
+                      <div className="metric-item" style={{ gridColumn: "1 / -1" }}>
+                        <span className="metric-label">Recompras hipotéticas simuladas</span>
+                        <span className="metric-value text-info">{(activeScenarioData.summary as any).hypotheticalRebuys.length} eventos</span>
+                        <details className="metric-zero-detail">
+                          <summary className="metric-zero-summary">Ver propuestas</summary>
+                          <ul style={{ fontSize: "0.75rem", margin: "4px 0 0", paddingLeft: "12px" }}>
+                            {(activeScenarioData.summary as any).hypotheticalRebuys.slice(0, 5).map((p: any) => (
+                              <li key={p.id}>
+                                {new Date(p.date).toLocaleDateString("es-ES", { year: "numeric", month: "short" })} — {p.assetId}: {fmt(p.eurcUsedEur)} EURC · caída {p.drawdownPercentage.toFixed(0)}%
+                              </li>
+                            ))}
+                          </ul>
+                        </details>
+                      </div>
+                    )}
                     <div className="metric-item highlight" style={{ borderColor: SCENARIO_COLORS[activeScenario] }}>
                       <span className="metric-label">Rentabilidad anualizada est.</span>
                       <span className="metric-value">{activeScenarioData.summary.weightedAnnualReturn != null
