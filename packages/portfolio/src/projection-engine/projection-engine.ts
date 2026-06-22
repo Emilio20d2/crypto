@@ -213,12 +213,21 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
     });
   }
 
+  // Mutable copy of cycle assets — modified by substitutions as they become effective
+  const mutableCycleAssets: Record<string, SnapshotCycleAsset[]> = {};
+  for (const cycle of snapshot.cycles) {
+    mutableCycleAssets[cycle.id] = cycle.assets.map(a => ({ ...a }));
+  }
+
   // ── Month-by-month simulation ───────────────────────────────────────────────
 
   let currentDate = startOfMonth(projectionStartDate);
 
   while (currentDate <= effectiveHorizon) {
-    const currentCycles = activeCycles(snapshot.cycles, currentDate);
+    const currentCycles = activeCycles(snapshot.cycles, currentDate).map(cycle => ({
+      ...cycle,
+      assets: mutableCycleAssets[cycle.id] ?? cycle.assets,
+    }));
     const periodCycleId = currentCycles.length > 0
       ? currentCycles.map(cycle => cycle.id).join("+")
       : snapshot.cycles[snapshot.cycles.length - 1]?.id ?? "none";
@@ -268,6 +277,45 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
 
     for (const cycle of currentCycles) {
       const cycleId = cycle.id;
+
+      // --- Apply substitutions that become effective this month ---
+      for (const sub of snapshot.substitutions) {
+        if (sub.cycleId !== cycleId || sub.effectiveDate > currentDate) continue;
+        const cycleAssets = mutableCycleAssets[cycleId];
+        if (!cycleAssets) continue;
+        const fromAsset = cycleAssets.find(a => a.assetId === sub.fromAssetId);
+        if (fromAsset && fromAsset.status !== "retired") {
+          fromAsset.status = "retired";
+          if (sub.toAssetId && !cycleAssets.find(a => a.assetId === sub.toAssetId)) {
+            const fromAlloc = fromAsset.allocationPercentage ?? fromAsset.allocationValue ?? 0;
+            cycleAssets.push({
+              id: `${sub.id}-new`,
+              assetId: sub.toAssetId,
+              cycleId: sub.cycleId,
+              status: "active",
+              allocationPercentage: sub.transferMode === "full" ? fromAlloc : null,
+              allocationValue: null,
+              allocationType: "percentage",
+              priority: fromAsset.priority,
+              targetAmount: null,
+              targetValueEur: null,
+              targetPortfolioPercentage: null,
+              goalReachedAt: null,
+              startDate: sub.effectiveDate,
+              endDate: null,
+            });
+          }
+          periodEvents.push({
+            date: currentDate,
+            type: "substitution" as const,
+            cycleId,
+            assetId: sub.fromAssetId,
+            description: sub.toAssetId
+              ? `Sustitución: ${sub.fromAssetId} → ${sub.toAssetId}`
+              : `Retirada de activo: ${sub.fromAssetId}`,
+          });
+        }
+      }
 
       // --- Sale rules ---
       const saleResults = simulateSaleRules(
@@ -615,6 +663,21 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
       .flatMap(cycle => cycle.assets)
       .find(asset => asset.assetId === assetId);
 
+    const hyp = scenarioHypotheses.assetRates.find(r => r.assetId === assetId) ?? null;
+
+    const basePrice = snapshot.prices[assetId];
+    let trajectory: Array<{ year: number; priceEur: number }> | null = null;
+    if (basePrice != null && basePrice > 0 && hyp != null) {
+      trajectory = [];
+      const startYear = new Date(projectionStartDate).getUTCFullYear();
+      const endYear = new Date(effectiveHorizon).getUTCFullYear();
+      for (let yr = startYear; yr <= endYear; yr++) {
+        const targetDate = new Date(Date.UTC(yr, 11, 31)).getTime();
+        const p = projectAssetPrice(basePrice, assetId, projectionStartDate, targetDate, scenarioHypotheses);
+        if (p != null) trajectory.push({ year: yr, priceEur: Math.round(p * 100) / 100 });
+      }
+    }
+
     assetResults.push({
       assetId,
       initialBalance: initPos?.balance ?? 0,
@@ -639,6 +702,8 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
       goalReachedProjectedAt: goalReachedProjectedAt[assetId] ?? null,
       rulesTriggered: snapshot.saleRules.filter(r => r.assetId === assetId && triggeredSaleRuleIds.has(r.id)).map(r => r.id),
       events: assetEvents[assetId] ?? [],
+      hypothesis: hyp,
+      annualPriceTrajectory: trajectory,
     });
   }
 

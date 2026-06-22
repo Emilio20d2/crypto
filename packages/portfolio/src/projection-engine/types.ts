@@ -547,6 +547,9 @@ export interface AssetProjectionResult {
 
   rulesTriggered: string[];
   events: ProjectionEvent[];
+
+  hypothesis: AssetScenarioRates | null;
+  annualPriceTrajectory: Array<{ year: number; priceEur: number }> | null;
 }
 
 // ── Reconciliación ────────────────────────────────────────────────────────────

@@ -1665,36 +1665,86 @@ function StrategyBreakdownSection({
         )}
 
         {scenario.assetResults.length > 0 && (
-          <div className="perspectives-cycle-table-wrapper" style={{ marginTop: "1rem" }}>
-            <table className="perspectives-cycle-table">
-              <thead>
-                <tr>
-                  <th>Activo</th>
-                  <th className="text-right">Saldo final</th>
-                  <th className="text-right">Valor final</th>
-                  <th className="text-right">Aportado</th>
-                  <th className="text-right">Recomprado</th>
-                  <th className="text-right">Rentabilidad latente</th>
-                  <th className="text-right">Hipótesis</th>
-                </tr>
-              </thead>
-              <tbody>
-                {scenario.assetResults.map(asset => (
-                  <tr key={asset.assetId}>
-                    <td>{asset.assetId}</td>
-                    <td className="text-right">{asset.finalBalance.toLocaleString("es-ES", { maximumFractionDigits: 6 })}</td>
-                    <td className="text-right">{fmt(asset.finalValueEur)}</td>
-                    <td className="text-right">{fmt(asset.costContributionsEur)}</td>
-                    <td className="text-right">{fmt(asset.costRebuyEur)}</td>
-                    <td className={`text-right ${(asset.unrealizedGainEur ?? 0) >= 0 ? "text-success" : "text-danger"}`}>
-                      {fmt(asset.unrealizedGainEur)}
-                    </td>
-                    <td className="text-right">{pct(asset.hypothesis?.annualGrowthRate)}</td>
+          <>
+            <div className="perspectives-cycle-table-wrapper" style={{ marginTop: "1rem" }}>
+              <table className="perspectives-cycle-table">
+                <thead>
+                  <tr>
+                    <th>Activo</th>
+                    <th className="text-right">Saldo final</th>
+                    <th className="text-right">Precio prev.</th>
+                    <th className="text-right">Valor final</th>
+                    <th className="text-right">Aportado</th>
+                    <th className="text-right">Vendido</th>
+                    <th className="text-right">Recomprado</th>
+                    <th className="text-right">Realizado</th>
+                    <th className={`text-right`}>Latente</th>
+                    <th className="text-right">Tasa</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {scenario.assetResults.map(asset => (
+                    <tr key={asset.assetId}>
+                      <td><strong>{asset.assetId}</strong></td>
+                      <td className="text-right">{asset.finalBalance.toLocaleString("es-ES", { maximumFractionDigits: 6 })}</td>
+                      <td className="text-right">{asset.finalPriceEur != null ? fmt(asset.finalPriceEur) : "—"}</td>
+                      <td className="text-right"><strong>{fmt(asset.finalValueEur)}</strong></td>
+                      <td className="text-right">{fmt(asset.costContributionsEur)}</td>
+                      <td className="text-right">{asset.balanceSold > 0 ? asset.balanceSold.toLocaleString("es-ES", { maximumFractionDigits: 6 }) : "—"}</td>
+                      <td className="text-right">{fmt(asset.costRebuyEur)}</td>
+                      <td className={`text-right ${(asset.realizedGainEur ?? 0) >= 0 ? "text-success" : "text-danger"}`}>
+                        {(asset.realizedGainEur ?? 0) !== 0 ? fmt(asset.realizedGainEur) : "—"}
+                      </td>
+                      <td className={`text-right ${(asset.unrealizedGainEur ?? 0) >= 0 ? "text-success" : "text-danger"}`}>
+                        {fmt(asset.unrealizedGainEur)}
+                      </td>
+                      <td className="text-right" style={{ fontSize: "0.75rem", color: "var(--color-muted-fg)" }}>
+                        {asset.hypothesis != null
+                          ? `${(asset.hypothesis.annualGrowthRate * 100).toFixed(0)}%→${(asset.hypothesis.terminalAnnualRate * 100).toFixed(0)}%`
+                          : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Trayectoria anual de precios por activo */}
+            {scenario.assetResults.some(a => (a.annualPriceTrajectory?.length ?? 0) > 0) && (
+              <details style={{ marginTop: "1rem" }}>
+                <summary style={{ cursor: "pointer", fontSize: "0.85rem", color: "var(--color-muted-fg)", padding: "0.25rem 0" }}>
+                  Trayectoria de precios por activo ({scenario.scenario})
+                </summary>
+                <div className="perspectives-cycle-table-wrapper" style={{ marginTop: "0.5rem" }}>
+                  <table className="perspectives-cycle-table" style={{ fontSize: "0.8rem" }}>
+                    <thead>
+                      <tr>
+                        <th>Año</th>
+                        {scenario.assetResults.filter(a => (a.annualPriceTrajectory?.length ?? 0) > 0).map(a => (
+                          <th key={a.assetId} className="text-right">{a.assetId}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(() => {
+                        const assetsWithTraj = scenario.assetResults.filter(a => (a.annualPriceTrajectory?.length ?? 0) > 0);
+                        const years = assetsWithTraj[0]?.annualPriceTrajectory?.map(p => p.year) ?? [];
+                        return years.map(yr => (
+                          <tr key={yr}>
+                            <td><strong>{yr}</strong></td>
+                            {assetsWithTraj.map(a => {
+                              const point = a.annualPriceTrajectory?.find(p => p.year === yr);
+                              return <td key={a.assetId} className="text-right">{point ? fmt(point.priceEur) : "—"}</td>;
+                            })}
+                          </tr>
+                        ));
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            )}
+          </>
         )}
       </CardContent>
     </Card>
