@@ -1,12 +1,12 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, CircleOff, Plus, RotateCcw, Save, Trash2, XCircle } from "lucide-react";
+import { CheckCircle2, CircleOff, Plus, RotateCcw, Save, Search, Trash2, XCircle } from "lucide-react";
 import { Button } from "../../components/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/Card";
 import { CryptoLogo } from "../../components/CryptoLogo";
 import { Input } from "../../components/Input";
 import { formatMoney } from "../../lib/format";
-import type { Asset, AssetAllocation, InvestmentAsset, MarkGoalReachedInput, PortfolioPosition, Result } from "@crypto-control/core";
+import type { Asset, AssetAllocation, CatalogAsset, InvestmentAsset, MarkGoalReachedInput, PortfolioPosition, Result } from "@crypto-control/core";
 
 // ── Goal evaluation types (mirror of plan-goals.ts, browser-safe) ─────────────
 
@@ -173,25 +173,136 @@ function getMonthlyAmount(item: InvestmentAsset, cycleMonthly: number): number |
   return getFixed(item);
 }
 
+// ── AssetPicker — selector buscable con catálogo completo ─────────────────────
+
+function AssetPicker({
+  catalog,
+  value,
+  onChange,
+  disabled,
+}: {
+  catalog: CatalogAsset[];
+  value: string;
+  onChange: (id: string) => void;
+  disabled?: boolean;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const selected = catalog.find(a => a.id === value);
+
+  const filtered = query.length < 1
+    ? catalog
+    : catalog.filter(a =>
+        a.symbol.toLowerCase().includes(query.toLowerCase()) ||
+        a.name.toLowerCase().includes(query.toLowerCase()) ||
+        a.id.toLowerCase().includes(query.toLowerCase()),
+      );
+
+  // Cerrar al hacer click fuera
+  useEffect(() => {
+    function onOutside(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onOutside);
+    return () => document.removeEventListener("mousedown", onOutside);
+  }, []);
+
+  function select(a: CatalogAsset) {
+    onChange(a.id);
+    setQuery("");
+    setOpen(false);
+  }
+
+  return (
+    <div className="asset-picker" ref={containerRef}>
+      <button
+        type="button"
+        className="asset-picker-trigger ui-select"
+        onClick={() => { if (!disabled) setOpen(v => !v); }}
+        disabled={disabled}
+      >
+        {selected ? (
+          <span className="asset-picker-selected">
+            <CryptoLogo symbol={selected.symbol} logoUrl={selected.logoUrl} size={18} />
+            <strong>{selected.symbol}</strong>
+            <span className="asset-picker-name">{selected.name}</span>
+          </span>
+        ) : (
+          <span className="asset-picker-placeholder">Selecciona una moneda…</span>
+        )}
+        <span className="asset-picker-caret">▾</span>
+      </button>
+
+      {open ? (
+        <div className="asset-picker-dropdown">
+          <div className="asset-picker-search">
+            <Search size={14} />
+            <input
+              autoFocus
+              type="text"
+              placeholder="Buscar por nombre o ticker…"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              className="asset-picker-input"
+            />
+          </div>
+          <ul className="asset-picker-list">
+            {filtered.length === 0 ? (
+              <li className="asset-picker-empty">Sin resultados para &laquo;{query}&raquo;</li>
+            ) : (
+              filtered.map(a => (
+                <li
+                  key={a.id}
+                  className={`asset-picker-item${a.id === value ? " asset-picker-item--selected" : ""}`}
+                  onClick={() => select(a)}
+                >
+                  <CryptoLogo symbol={a.symbol} logoUrl={a.logoUrl} size={22} />
+                  <div className="asset-picker-item-info">
+                    <span className="asset-picker-item-symbol">{a.symbol}</span>
+                    <span className="asset-picker-item-name">{a.name}</span>
+                  </div>
+                  <div className="asset-picker-item-badges">
+                    {a.hasCoinbase ? (
+                      <span className="badge badge-success" title="Disponible en Coinbase">CB</span>
+                    ) : a.supportedProviders.length > 0 ? (
+                      <span className="badge" title="Fuente secundaria">SEC</span>
+                    ) : (
+                      <span className="badge badge-warning" title="Sin fuente de precio">?</span>
+                    )}
+                  </div>
+                </li>
+              ))
+            )}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // ── AddAssetForm ──────────────────────────────────────────────────────────────
 
 function AddAssetForm({
   cycleId,
   cycleStart,
-  globalAssets,
+  catalog,
   cycleAssets,
   onSuccess,
   onCancel,
 }: {
   cycleId: string;
   cycleStart: number;
-  globalAssets: Asset[];
+  catalog: CatalogAsset[];
   cycleAssets: InvestmentAsset[];
   onSuccess: () => void;
   onCancel: () => void;
 }) {
   const qc = useQueryClient();
-  const [assetId, setAssetId] = useState(globalAssets[0]?.id ?? "");
+  const [assetId, setAssetId] = useState(catalog[0]?.id ?? "");
   const [allocationMode, setAllocationMode] = useState<AllocationMode>("porcentaje");
   const [percentage, setPercentage] = useState("");
   const [fixedAmount, setFixedAmount] = useState("");
@@ -238,6 +349,21 @@ function AddAssetForm({
       return;
     }
 
+    // Auto-registrar en DB si el activo está en el catálogo pero todavía no en assets table
+    const catalogEntry = catalog.find(a => a.id === assetId);
+    if (catalogEntry && !catalogEntry.inDb) {
+      const regResult = await window.cryptoControl.assets.register({
+        id: catalogEntry.id, symbol: catalogEntry.symbol,
+        name: catalogEntry.name, logoUrl: catalogEntry.logoUrl,
+      }) as { ok: boolean; error?: { message: string } };
+      if (!regResult?.ok) {
+        setError(`No se pudo registrar el activo: ${regResult?.error?.message ?? "error desconocido"}`);
+        return;
+      }
+      await qc.invalidateQueries({ queryKey: ["assets"] });
+      await qc.invalidateQueries({ queryKey: ["assets-catalog"] });
+    }
+
     let targetAmount: number | null = null;
     let targetValueEur: number | null = null;
     let targetPortfolioPercentage: number | null = null;
@@ -269,13 +395,9 @@ function AddAssetForm({
       <h4 className="asset-add-title">Añadir moneda a esta etapa</h4>
       {error ? <p className="error-msg">{error}</p> : null}
       <form className="investment-form-grid compact" onSubmit={(e) => void handleSubmit(e)}>
-        <label className="form-group">
+        <label className="form-group investment-wide">
           <span>Activo *</span>
-          <select className="ui-select" value={assetId} onChange={e => setAssetId(e.target.value)}>
-            {globalAssets.map(a => (
-              <option key={a.id} value={a.id}>{a.symbol} · {a.name}</option>
-            ))}
-          </select>
+          <AssetPicker catalog={catalog} value={assetId} onChange={setAssetId} />
         </label>
 
         <label className="form-group">
@@ -751,6 +873,15 @@ export function PlanEtapaActivos({
   });
   const globalAssets: Asset[] = globalAssetsQ.data ?? [];
 
+  const catalogQ = useQuery({
+    queryKey: ["assets-catalog"],
+    queryFn: () => unwrap(window.cryptoControl.assets.catalog()),
+    staleTime: 300_000,
+  });
+  const catalog: CatalogAsset[] = catalogQ.data ?? globalAssets.map(a => ({
+    ...a, inDb: true, supportedProviders: [], hasCoinbase: false,
+  }));
+
   const cycleAssetsQ = useQuery({
     queryKey: ["investment-assets"],
     queryFn: () => unwrap(window.cryptoControl.investmentAssets.list()),
@@ -846,7 +977,7 @@ export function PlanEtapaActivos({
           <AddAssetForm
             cycleId={cycleId}
             cycleStart={cycleStart}
-            globalAssets={globalAssets}
+            catalog={catalog}
             cycleAssets={cycleAssets}
             onSuccess={() => setShowAdd(false)}
             onCancel={() => setShowAdd(false)}

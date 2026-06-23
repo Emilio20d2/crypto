@@ -19,7 +19,9 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
 
   window.cryptoControl = {
     assets: {
-      list: () => ipc("assets:list"),
+      list:     () =>                 ipc("assets:list"),
+      catalog:  () =>                 ipc("assets:catalog"),
+      register: (input: unknown) =>   ipc("assets:register", input),
     },
     portfolio: {
       getSummary:          () => ipc("portfolio:get-summary"),

@@ -27,7 +27,9 @@ import type {
 
 const cryptoControl = {
   assets: {
-    list: () => ipcRenderer.invoke("assets:list")
+    list:     () =>                 ipcRenderer.invoke("assets:list"),
+    catalog:  () =>                 ipcRenderer.invoke("assets:catalog"),
+    register: (input: unknown) =>   ipcRenderer.invoke("assets:register", input),
   },
   portfolio: {
     getSummary:        () => ipcRenderer.invoke("portfolio:get-summary"),

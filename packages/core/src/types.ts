@@ -165,10 +165,24 @@ import { Asset, AssetSchema, type CryptoControlIndex } from "./validation";
 export type { Asset };
 export { AssetSchema };
 
+// Catálogo enriquecido — devuelto por assets:catalog
+export interface CatalogAsset {
+  id: string;
+  symbol: string;
+  name: string;
+  logoUrl: string | null;
+  type: string;
+  inDb: boolean;             // ya existe en la tabla assets
+  supportedProviders: string[];
+  hasCoinbase: boolean;
+}
+
 // API Interface
 export interface CryptoControlAPI {
   assets: {
     list(): Promise<Result<Asset[]>>;
+    catalog(): Promise<Result<CatalogAsset[]>>;
+    register(input: { id: string; symbol: string; name: string; logoUrl?: string | null; type?: string }): Promise<Result<Asset>>;
   };
   market: {
     getCurrentPrice(input: CurrentPriceRequest): Promise<Result<CurrentPriceResult>>;

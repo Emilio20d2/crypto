@@ -32,6 +32,11 @@ beforeEach(() => {
         { id: "ADA", symbol: "ADA", name: "Cardano", type: "crypto", logoUrl: null, createdAt: now, updatedAt: now },
         { id: "TON", symbol: "TON", name: "Toncoin", type: "crypto", logoUrl: null, createdAt: now, updatedAt: now },
       ]),
+      catalog: () => ok([
+        { id: "ADA", symbol: "ADA", name: "Cardano", type: "crypto", logoUrl: null, inDb: true, supportedProviders: ["coingecko"], hasCoinbase: false },
+        { id: "TON", symbol: "TON", name: "Toncoin", type: "crypto", logoUrl: null, inDb: true, supportedProviders: ["coingecko"], hasCoinbase: false },
+      ]),
+      register: () => ok({ id: "REG", symbol: "REG", name: "Registered", type: "crypto", logoUrl: null, createdAt: now, updatedAt: now }),
     },
     investmentPlan: {
       list: () => ok([{ id: "plan-1", name: "Plan principal", description: "DCA por ciclos", status: "active", baseCurrency: "EUR", notes: null, createdAt: now, updatedAt: now }]),
@@ -294,6 +299,21 @@ async function openAddAssetForm() {
   return document.querySelector(".asset-add-form") as HTMLElement;
 }
 
+async function selectAssetInPicker(formEl: HTMLElement, assetId: string) {
+  const trigger = formEl.querySelector(".asset-picker-trigger") as HTMLElement;
+  fireEvent.click(trigger);
+  const searchInput = await within(formEl).findByPlaceholderText(/buscar por nombre o ticker/i);
+  fireEvent.change(searchInput, { target: { value: assetId } });
+  await waitFor(() => {
+    const items = within(formEl).getAllByRole("listitem");
+    const match = items.find(li => li.textContent?.includes(assetId));
+    expect(match).toBeDefined();
+  });
+  const items = within(formEl).getAllByRole("listitem");
+  const match = items.find(li => li.textContent?.includes(assetId))!;
+  fireEvent.click(match);
+}
+
 // ── PlanEtapaActivos — gestión de monedas ─────────────────────────────────────
 
 describe("PlanEtapaActivos — gestión de monedas", () => {
@@ -338,8 +358,7 @@ describe("PlanEtapaActivos — gestión de monedas", () => {
     const formEl = await openAddAssetForm();
 
     // Seleccionar TON (no está en el ciclo)
-    const assetSelect = within(formEl).getAllByRole("combobox")[0];
-    fireEvent.change(assetSelect, { target: { value: "TON" } });
+    await selectAssetInPicker(formEl, "TON");
 
     // Porcentaje
     const pctInput = within(formEl).getByPlaceholderText(/ej\. 40/i);
@@ -372,7 +391,7 @@ describe("PlanEtapaActivos — gestión de monedas", () => {
     );
     const formEl = await openAddAssetForm();
 
-    fireEvent.change(within(formEl).getAllByRole("combobox")[0], { target: { value: "TON" } });
+    await selectAssetInPicker(formEl, "TON");
 
     fireEvent.change(within(formEl).getByPlaceholderText(/ej\. 40/i), { target: { value: "20" } });
 
@@ -419,7 +438,7 @@ describe("PlanEtapaActivos — gestión de monedas", () => {
     );
     const formEl = await openAddAssetForm();
 
-    fireEvent.change(within(formEl).getAllByRole("combobox")[0], { target: { value: "TON" } });
+    await selectAssetInPicker(formEl, "TON");
     fireEvent.change(within(formEl).getByPlaceholderText(/ej\. 40/i), { target: { value: "20" } });
 
     const accumulationSelect = within(formEl).getAllByRole("combobox").find(
@@ -458,7 +477,7 @@ describe("PlanEtapaActivos — gestión de monedas", () => {
     );
     const formEl = await openAddAssetForm();
 
-    fireEvent.change(within(formEl).getAllByRole("combobox")[0], { target: { value: "TON" } });
+    await selectAssetInPicker(formEl, "TON");
     fireEvent.change(within(formEl).getByPlaceholderText(/ej\. 40/i), { target: { value: "20" } });
 
     const accumulationSelect = within(formEl).getAllByRole("combobox").find(
@@ -497,7 +516,7 @@ describe("PlanEtapaActivos — gestión de monedas", () => {
     );
     const formEl = await openAddAssetForm();
 
-    fireEvent.change(within(formEl).getAllByRole("combobox")[0], { target: { value: "TON" } });
+    await selectAssetInPicker(formEl, "TON");
     fireEvent.change(within(formEl).getByPlaceholderText(/ej\. 40/i), { target: { value: "20" } });
 
     const dateInputs = formEl.querySelectorAll('input[type="date"]');
@@ -520,7 +539,7 @@ describe("PlanEtapaActivos — gestión de monedas", () => {
     );
     const formEl = await openAddAssetForm();
 
-    fireEvent.change(within(formEl).getAllByRole("combobox")[0], { target: { value: "TON" } });
+    await selectAssetInPicker(formEl, "TON");
     fireEvent.change(within(formEl).getByPlaceholderText(/ej\. 40/i), { target: { value: "20" } });
 
     fireEvent.change(formEl.querySelectorAll('input[type="date"]')[0], { target: { value: "2026-01-01" } });

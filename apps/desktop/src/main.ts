@@ -115,14 +115,21 @@ function pointChange(points: { time: number; value: number }[]): number | null {
 function seedDatabase() {
   const db = getDb();
   let existing = db.select().from(schema.assets).all();
-  
+
+  // Catálogo canónico de activos — sincronizado con ASSET_MAP de market-data.
+  // Añadir aquí cualquier activo nuevo que ya tenga fuente de precio configurada.
   const defaultAssets = [
-    { id: "BTC",  symbol: "BTC",  name: "Bitcoin",    type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/1/small/bitcoin.png" },
-    { id: "ETH",  symbol: "ETH",  name: "Ethereum",   type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/279/small/ethereum.png" },
-    { id: "ADA",  symbol: "ADA",  name: "Cardano",    type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/975/small/cardano.png" },
-    { id: "SUI",  symbol: "SUI",  name: "Sui",        type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/26375/small/sui_asset.jpeg" },
-    { id: "SEI",  symbol: "SEI",  name: "Sei",        type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/28205/small/Sei_Logo_-_Transparent.png" },
-    { id: "EURC", symbol: "EURC", name: "Euro Coin",  type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/26045/small/euro-coin.png" },
+    { id: "BTC",  symbol: "BTC",  name: "Bitcoin",       type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/1/small/bitcoin.png" },
+    { id: "ETH",  symbol: "ETH",  name: "Ethereum",      type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/279/small/ethereum.png" },
+    { id: "SOL",  symbol: "SOL",  name: "Solana",        type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/4128/small/solana.png" },
+    { id: "ADA",  symbol: "ADA",  name: "Cardano",       type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/975/small/cardano.png" },
+    { id: "SUI",  symbol: "SUI",  name: "Sui",           type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/26375/small/sui_asset.jpeg" },
+    { id: "SEI",  symbol: "SEI",  name: "Sei",           type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/28205/small/Sei_Logo_-_Transparent.png" },
+    { id: "TON",  symbol: "TON",  name: "Toncoin",       type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/17980/small/ton_symbol.png" },
+    { id: "XLM",  symbol: "XLM",  name: "Stellar",       type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/100/small/Stellar_symbol_black_RGB.png" },
+    { id: "USDC", symbol: "USDC", name: "USD Coin",      type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/6319/small/USD_Coin_icon.png" },
+    { id: "EURC", symbol: "EURC", name: "Euro Coin",     type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/26045/small/euro-coin.png" },
+    { id: "LMTS", symbol: "LMTS", name: "Limitless",     type: "crypto", logoUrl: null },
   ];
 
   console.log(`[DB] Se encontraron ${existing.length} activos. Ejecutando siembra de activos ausentes...`);
@@ -132,18 +139,12 @@ function seedDatabase() {
     const found = existing.some(a => a.id === asset.id);
     if (!found) {
       db.insert(schema.assets).values({
-        id: asset.id,
-        symbol: asset.symbol,
-        name: asset.name,
-        type: asset.type,
-        logoUrl: asset.logoUrl,
-        createdAt: now,
-        updatedAt: now
+        id: asset.id, symbol: asset.symbol, name: asset.name,
+        type: asset.type, logoUrl: asset.logoUrl, createdAt: now, updatedAt: now
       }).run();
     } else {
-      // Update logoUrl for existing assets that don't have one yet
-      const existing_asset = existing.find(a => a.id === asset.id);
-      if (!existing_asset?.logoUrl) {
+      const existingAsset = existing.find(a => a.id === asset.id);
+      if (!existingAsset?.logoUrl && asset.logoUrl) {
         db.update(schema.assets)
           .set({ logoUrl: asset.logoUrl, updatedAt: now })
           .where(eq(schema.assets.id, asset.id))
@@ -152,7 +153,6 @@ function seedDatabase() {
     }
   }
 
-  // Volver a consultar y verificar que todos los símbolos requeridos están presentes
   existing = db.select().from(schema.assets).all();
   console.log(`[DB] Consulta post-siembra: ${existing.length} activos en base de datos.`);
 
@@ -1571,6 +1571,63 @@ function setupIpcHandlers() {
   ipcMain.handle("assets:list", withResult(async () => {
     const db = getDb();
     return await db.select().from(schema.assets).all();
+  }));
+
+  // Catálogo completo: activos en DB enriquecidos con metadatos de market-data
+  ipcMain.handle("assets:catalog", withResult(async () => {
+    const { ASSET_MAP } = require("@crypto-control/market-data") as typeof import("@crypto-control/market-data");
+    const db = getDb();
+    const dbAssets = db.select().from(schema.assets).all();
+    const dbById = new Map(dbAssets.map(a => [a.id, a]));
+
+    // Merge: ASSET_MAP entries first, then any extra DB assets not in map
+    const catalogIds = new Set<string>();
+    const catalog: Array<{
+      id: string; symbol: string; name: string; logoUrl: string | null;
+      type: string; inDb: boolean; supportedProviders: string[]; hasCoinbase: boolean;
+    }> = [];
+
+    for (const [id, meta] of Object.entries(ASSET_MAP)) {
+      catalogIds.add(id);
+      const db_entry = dbById.get(id);
+      catalog.push({
+        id, symbol: meta.symbol,
+        name: db_entry?.name ?? meta.symbol,
+        logoUrl: db_entry?.logoUrl ?? null,
+        type: db_entry?.type ?? "crypto",
+        inDb: !!db_entry,
+        supportedProviders: meta.supportedProviders as string[],
+        hasCoinbase: meta.supportedProviders.includes("coinbase"),
+      });
+    }
+    // Extra assets in DB that are not in ASSET_MAP (manually registered)
+    for (const a of dbAssets) {
+      if (!catalogIds.has(a.id)) {
+        catalog.push({
+          id: a.id, symbol: a.symbol, name: a.name, logoUrl: a.logoUrl,
+          type: a.type, inDb: true, supportedProviders: [], hasCoinbase: false,
+        });
+      }
+    }
+    return catalog;
+  }));
+
+  // Registrar un activo nuevo en la tabla assets (si no existe ya)
+  ipcMain.handle("assets:register", withResult(async (_, input: {
+    id: string; symbol: string; name: string; logoUrl?: string | null; type?: string;
+  }) => {
+    const db = getDb();
+    const id = input.id.trim().toUpperCase();
+    const existing = db.select().from(schema.assets).where(eq(schema.assets.id, id)).get();
+    if (existing) return existing;
+    const now = Date.now();
+    db.insert(schema.assets).values({
+      id, symbol: input.symbol.trim().toUpperCase(),
+      name: input.name.trim(), logoUrl: input.logoUrl ?? null,
+      type: (input.type ?? "crypto") as "crypto" | "fiat",
+      createdAt: now, updatedAt: now,
+    }).run();
+    return db.select().from(schema.assets).where(eq(schema.assets.id, id)).get();
   }));
 
   ipcMain.handle("market:get-current-price", withResult(async (_, input: {assetId: string, quoteCurrency?: string}) => {
