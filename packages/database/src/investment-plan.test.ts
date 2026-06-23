@@ -5,6 +5,10 @@ import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { eq } from "drizzle-orm";
 import crypto from "crypto";
 import * as schema from "./schema";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 describe("Plan de inversión y ciclos", () => {
   let db: ReturnType<typeof drizzle>;
@@ -15,7 +19,7 @@ describe("Plan de inversión y ciclos", () => {
     sqlite.pragma("journal_mode = WAL");
     sqlite.pragma("foreign_keys = ON");
     db = drizzle(sqlite, { schema });
-    migrate(db, { migrationsFolder: "./drizzle" });
+    migrate(db, { migrationsFolder: join(__dirname, "../drizzle") });
 
     const now = Date.now();
     db.insert(schema.assets).values([

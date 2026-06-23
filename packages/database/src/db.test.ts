@@ -5,6 +5,10 @@ import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import * as schema from "./schema";
 import crypto from "crypto";
 import { eq } from "drizzle-orm";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 describe("Base de datos y operaciones", () => {
   let db: ReturnType<typeof drizzle>;
@@ -17,7 +21,7 @@ describe("Base de datos y operaciones", () => {
 
     db = drizzle(sqlite, { schema });
     // Aplicamos migraciones a memoria.
-    migrate(db, { migrationsFolder: "./drizzle" });
+    migrate(db, { migrationsFolder: join(__dirname, "../drizzle") });
 
     // Seed básico para activos
     db.insert(schema.assets).values([

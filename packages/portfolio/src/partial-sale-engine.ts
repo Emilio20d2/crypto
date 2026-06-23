@@ -2,6 +2,8 @@
 // Evaluates configurable rules against real position/price data and produces previews.
 // NEVER executes sales automatically.
 
+import { SPANISH_FISCAL_CONFIG_2024 } from "./projection-engine/types";
+
 export type PartialSaleConditionType =
   | "price_target"
   | "cost_multiple"
@@ -66,13 +68,7 @@ export interface PartialSaleEvaluation {
 
 export function calculateSpanishSavingsTax(netGain: number): number {
   if (netGain <= 0) return 0;
-  const brackets: { upTo: number | null; rate: number }[] = [
-    { upTo: 6_000, rate: 0.19 },
-    { upTo: 50_000, rate: 0.21 },
-    { upTo: 200_000, rate: 0.23 },
-    { upTo: 300_000, rate: 0.27 },
-    { upTo: null, rate: 0.28 },
-  ];
+  const brackets = SPANISH_FISCAL_CONFIG_2024.brackets;
   let remaining = netGain;
   let tax = 0;
   let prev = 0;

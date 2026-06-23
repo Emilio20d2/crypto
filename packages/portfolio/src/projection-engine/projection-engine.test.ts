@@ -286,7 +286,11 @@ describe("runProjection — EURC y tesorería", () => {
     const snap = makeSnapshot({
       treasury: { cashEur: 0, eurcEur: 500, eurcAvailableEur: 400, fiscalReserveEur: 100, totalLiquidityEur: 500 },
     });
-    const result = runProjection(makeInput(snap, 1));
+    // plan_base: contributions only — no sales, no rebuys, no residual reinvestment.
+    // Verifies that eurcAvailable = eurcEur − fiscalReserveEur = 400, and that the
+    // fiscal reserve is never consumed.
+    const input = { ...makeInput(snap, 1), options: { complianceRate: 1.0, simulationPolicy: "plan_base" as const } };
+    const result = runProjection(input);
     // El primer periodo debe reflejar EURC disponible = 400 (500 - 100 reserva)
     expect(result.periods[0].eurcAvailableEur).toBeCloseTo(400, 0);
     expect(result.periods[0].fiscalReserveEur).toBeCloseTo(100, 0);
@@ -555,7 +559,10 @@ describe("runProjection — ventas parciales", () => {
 
   test("beneficio no realizado no genera impuesto", () => {
     const snap = makeSnapshot({ saleRules: [] });
-    const result = runProjection(makeInput(snap, 3));
+    // plan_base: contributions only — no proposal-mode sales. Verifies that
+    // unrealized appreciation never generates tax (only real sell events do).
+    const input = { ...makeInput(snap, 3), options: { complianceRate: 1.0, simulationPolicy: "plan_base" as const } };
+    const result = runProjection(input);
     // Sin ventas, no hay impuesto generado
     expect(result.summary.totalTaxGeneratedEur).toBe(0);
   });

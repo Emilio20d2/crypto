@@ -358,11 +358,14 @@ export interface TaxBand {
   rate: number;
 }
 
+// Tramos IRPF ganancias del ahorro 2024 — fuente canónica: SPANISH_FISCAL_CONFIG_2024
+// en packages/portfolio/src/projection-engine/types.ts
 export const DEFAULT_SPANISH_TAX_BANDS: TaxBand[] = [
-  { upToEur: 6000,  rate: 0.19 },
-  { upToEur: 50000, rate: 0.21 },
-  { upToEur: 200000, rate: 0.23 },
-  { upToEur: null,  rate: 0.26 },
+  { upToEur: 6_000,   rate: 0.19 },
+  { upToEur: 50_000,  rate: 0.21 },
+  { upToEur: 200_000, rate: 0.23 },
+  { upToEur: 300_000, rate: 0.27 },
+  { upToEur: null,    rate: 0.28 },
 ];
 
 export const DEFAULT_SIM_OPTIONS: SimOptions = {

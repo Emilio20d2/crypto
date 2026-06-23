@@ -5,6 +5,10 @@ import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import * as schema from "./schema";
 import { DatabaseTreasuryRepository } from "./treasury-repository";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 describe("Tesorería de ciclos", () => {
   let sqlite: Database.Database;
@@ -16,7 +20,7 @@ describe("Tesorería de ciclos", () => {
     sqlite.pragma("journal_mode = WAL");
     sqlite.pragma("foreign_keys = ON");
     db = drizzle(sqlite, { schema });
-    migrate(db, { migrationsFolder: "./drizzle" });
+    migrate(db, { migrationsFolder: join(__dirname, "../drizzle") });
     repo = new DatabaseTreasuryRepository(db);
   });
 

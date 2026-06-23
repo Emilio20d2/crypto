@@ -48,7 +48,7 @@ export function TradeAlerts() {
     // Initial fetch
     cc?.trade?.getAlerts().then((r: any) => {
       if (r?.ok) setData(r.data);
-    }).catch(() => {});
+    }).catch((e: unknown) => { console.warn("[TradeAlerts] No se pudo obtener alertas:", e); });
 
     // Live push from main process
     if (cc?.trade?.onNewAlerts) {

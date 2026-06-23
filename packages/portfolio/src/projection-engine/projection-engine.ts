@@ -465,8 +465,9 @@ export function runProjection(input: ProjectionInput): ProjectionOutput {
       // --- Residual EURC reinvestment (spec §1, §2, §4) ---
       // After all rebuys, any remaining EURC must go back into the market.
       // EURC is temporary: it must reach 0 at period close.
+      // In plan_base mode (contributions only) EURC is not auto-reinvested.
       const eurcAfterRebuys = eurcAvailable(treasury);
-      if (eurcAfterRebuys >= 0.50) {
+      if (eurcAfterRebuys >= 0.50 && simulationPolicy !== "plan_base") {
         const residualResult = simulateResidualReinvestment(
           eurcAfterRebuys,
           cycle.assets,
