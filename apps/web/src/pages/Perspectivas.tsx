@@ -124,7 +124,7 @@ function fmt(v: number | null | undefined): string {
 
 function fmtSign(v: number | null | undefined): string {
   if (v == null || !isFinite(v)) return "—";
-  return `${v >= 0 ? "+" : ""}${formatMoney(v)}`;
+  return `${v >= 0 ? "+" : ""}${_eur2.format(v)}`;
 }
 
 function fmtPct(v: number | null | undefined, decimals = 1): string {
