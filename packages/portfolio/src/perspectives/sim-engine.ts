@@ -981,9 +981,10 @@ function buildAnnualSnapshot(
   }
 
   closingGrossEur += lastMonth.eurcFree + lastMonth.eurcFiscalReserve + lastMonth.eurCash;
-  const closingWealthEur = closingGrossEur;  // net = gross in this model (fiscal reserve already in EURC)
+  // Patrimonio neto = bruto − reserva fiscal (el usuario la debe pero sigue siendo suya)
+  const closingWealthEur = closingGrossEur - lastMonth.eurcFiscalReserve;
 
-  // Opening wealth = last month of previous year (or start of simulation)
+  // Opening wealth = cierre neto del año anterior (excluye reserva fiscal, igual que closingWealthEur)
   const openingWealthEur = lastMonthPrevYear != null
     ? (() => {
         const prevMKey = monthKey(lastMonthPrevYear.monthDate);
@@ -992,12 +993,13 @@ function buildAnnualSnapshot(
           const p = prices[id]?.[prevMKey] ?? 0;
           ow += st.balance * p;
         }
-        ow += lastMonthPrevYear.eurcFree + lastMonthPrevYear.eurcFiscalReserve + lastMonthPrevYear.eurCash;
+        // Excluye eurcFiscalReserve para consistencia con closingWealthEur (neto)
+        ow += lastMonthPrevYear.eurcFree + lastMonthPrevYear.eurCash;
         return ow;
       })()
     : (input.currentPositions.reduce((s, p) => {
         return s + (p.balance * (p.currentPriceEur ?? 0));
-      }, 0) + input.eurcFree + input.eurcFiscalReserve + input.eurCash);
+      }, 0) + input.eurcFree + input.eurCash); // eurCash pero NO eurcFiscalReserve inicial
 
   // Aggregate year flows from all months
   const contributionsEur = monthsOfYear.reduce((s, m) => s + m.monthContributionsEur, 0);
@@ -1203,14 +1205,13 @@ function runScenario(
     byYear[year].push(ms);
   }
 
-  // Compute per-month opening wealth (closing of previous month)
-  // openingWealthByMonth[i] = wealth at START of month i (= closing of month i-1)
+  // Patrimonio neto mensual: excluye reserva fiscal (consistente con closingWealthEur en snapshots)
   function calcWealth(ms: MonthlyState, mK: string): number {
     let w = 0;
     for (const [id, st] of Object.entries(ms.assetStates)) {
       w += st.balance * (prices[id]?.[mK] ?? 0);
     }
-    return w + ms.eurcFree + ms.eurcFiscalReserve + ms.eurCash;
+    return w + ms.eurcFree + ms.eurCash; // NO eurcFiscalReserve
   }
 
   const years = Object.keys(byYear).map(Number).sort();
@@ -1227,9 +1228,10 @@ function runScenario(
   // Summary
   const lastSnap = annualSnapshots[annualSnapshots.length - 1];
 
+  // Patrimonio neto inicial: excluye reserva fiscal (equivalente a openingWealthEur año 1)
   const initialWealth = input.currentPositions.reduce(
     (s, p) => s + p.balance * (p.currentPriceEur ?? 0), 0
-  ) + input.eurcFree + input.eurcFiscalReserve + input.eurCash;
+  ) + input.eurcFree + input.eurCash; // NO input.eurcFiscalReserve
 
   // TWR: product of per-month sub-period returns excluding contributions
   // r_m = marketGain_m / openingWealth_m ; TWR = Π(1+r_m) - 1
@@ -1289,7 +1291,7 @@ function runScenario(
     scenario,
     initialWealthEur: initialWealth,
     finalNetWealthEur: lastSnap?.closingWealthEur ?? initialWealth,
-    totalContributionsEur: lastSnap?.cumulativeContributionsEur ?? 0,
+    totalContributionsEur: annualSnapshots.reduce((s, a) => s + a.contributionsEur, 0),
     totalHistoricalCapitalEur: input.historicalCapitalEur,
     totalMarketGainEur: annualSnapshots.reduce((s, a) => s + a.marketGainEur, 0),
     totalSalesEur: annualSnapshots.reduce((s, a) => s + a.salesEur, 0),

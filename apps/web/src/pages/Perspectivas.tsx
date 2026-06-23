@@ -9,7 +9,7 @@ import { ErrorState } from "../components/ErrorState";
 import { LoadingState } from "../components/LoadingState";
 import { PageToolbar } from "../components/PageToolbar";
 import { SegmentedControl } from "../components/SegmentedControl";
-import { formatMoney } from "../lib/format";
+// formatMoney no se usa aquí: el formatter local (_eur2) garantiza max 2 decimales
 
 // ─── Types (mirrors packages/portfolio/src/perspectives/types.ts) ────────────
 
@@ -114,9 +114,12 @@ const HORIZON_OPTIONS = [3, 5, 7, 10, 15, 20];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+// Siempre 2 decimales máx (formatMoney usa 4 para valores < €100)
+const _eur2 = new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 2 });
+
 function fmt(v: number | null | undefined): string {
   if (v == null || !isFinite(v)) return "—";
-  return formatMoney(v) ?? "—";
+  return _eur2.format(v);
 }
 
 function fmtSign(v: number | null | undefined): string {
@@ -213,67 +216,66 @@ function AnnualTable({ snapshots }: { snapshots: AnnualSnapshot[] }) {
   const totalMarket = snapshots.reduce((s, r) => s + r.marketGainEur, 0);
   const totalSales = snapshots.reduce((s, r) => s + r.salesEur, 0);
   const totalRebuys = snapshots.reduce((s, r) => s + r.rebuysEur, 0);
-  const totalComm = snapshots.reduce((s, r) => s + r.commissionsEur, 0);
   const totalTax = snapshots.reduce((s, r) => s + r.taxEur, 0);
 
   return (
-    <div className="responsive-table">
-      <table>
-        <thead>
-          <tr>
-            <th>Año</th>
-            <th className="num">Apertura</th>
-            <th className="num">Aportaciones</th>
-            <th className="num">Mercado</th>
-            <th className="num">Ventas</th>
-            <th className="num">Recompras</th>
-            <th className="num">Comisiones</th>
-            <th className="num">Impuesto</th>
-            <th className="num">Cierre</th>
-            <th className="num">Rentab.</th>
-          </tr>
-        </thead>
-        <tbody>
-          {snapshots.map(s => (
-            <tr key={s.year} className={s.scope === "extrapol" ? "opacity-70" : ""}>
-              <td>
-                <span style={{ fontWeight: 600 }}>{s.year}</span>
-                {s.scope === "extrapol" && <span className="ml-1 text-xs text-muted-foreground">*</span>}
-              </td>
-              <td className="num">{fmt(s.openingWealthEur)}</td>
-              <td className="num">{fmt(s.contributionsEur)}</td>
-              <td className={`num ${s.marketGainEur >= 0 ? "text-gain" : "text-loss"}`}>
-                {fmtSign(s.marketGainEur)}
-              </td>
-              <td className="num">{s.salesEur > 0 ? fmt(s.salesEur) : "—"}</td>
-              <td className={`num ${s.rebuysEur > 0 ? "text-gain" : ""}`}>{s.rebuysEur > 0 ? fmt(s.rebuysEur) : "—"}</td>
-              <td className="num">{s.commissionsEur > 0 ? fmt(s.commissionsEur) : "—"}</td>
-              <td className="num">{s.taxEur > 0 ? fmt(s.taxEur) : "—"}</td>
-              <td className="num" style={{ fontWeight: 600 }}>{fmt(s.closingWealthEur)}</td>
-              <td className={`num ${(s.annualReturnPct ?? 0) >= 0 ? "text-gain" : "text-loss"}`}>
-                {s.annualReturnPct != null ? fmtAnnualPct(s.annualReturnPct) : "—"}
-              </td>
+    <div className="space-y-2">
+      <div className="responsive-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Año</th>
+              <th className="num">Apertura neta</th>
+              <th className="num">Aportaciones</th>
+              <th className="num">Resultado mercado</th>
+              <th className="num">Ventas ⓘ</th>
+              <th className="num">Recompras ⓘ</th>
+              <th className="num">Impuesto</th>
+              <th className="num">Cierre neto</th>
+              <th className="num">TWR anual</th>
             </tr>
-          ))}
-        </tbody>
-        <tfoot>
-          <tr>
-            <td><strong>Total</strong></td>
-            <td className="num">{fmt(snapshots[0]?.openingWealthEur)}</td>
-            <td className="num">{fmt(totalContrib)}</td>
-            <td className={`num ${totalMarket >= 0 ? "text-gain" : "text-loss"}`}>{fmtSign(totalMarket)}</td>
-            <td className="num">{totalSales > 0 ? fmt(totalSales) : "—"}</td>
-            <td className={`num ${totalRebuys > 0 ? "text-gain" : ""}`}>{totalRebuys > 0 ? fmt(totalRebuys) : "—"}</td>
-            <td className="num">{totalComm > 0 ? fmt(totalComm) : "—"}</td>
-            <td className="num">{totalTax > 0 ? fmt(totalTax) : "—"}</td>
-            <td className="num"><strong>{fmt(snapshots.at(-1)?.closingWealthEur)}</strong></td>
-            <td className="num"></td>
-          </tr>
-        </tfoot>
-      </table>
-      {snapshots.some(s => s.scope === "extrapol") && (
-        <p className="text-xs text-muted-foreground mt-2">* Años extrapolados fuera del plan explícito</p>
-      )}
+          </thead>
+          <tbody>
+            {snapshots.map(s => (
+              <tr key={s.year} className={s.scope === "extrapol" ? "opacity-70" : ""}>
+                <td>
+                  <span style={{ fontWeight: 600 }}>{s.year}</span>
+                  {s.scope === "extrapol" && <span className="ml-1 text-xs text-muted-foreground">*</span>}
+                </td>
+                <td className="num">{fmt(s.openingWealthEur)}</td>
+                <td className="num">{fmt(s.contributionsEur)}</td>
+                <td className={`num ${s.marketGainEur >= 0 ? "text-gain" : "text-loss"}`}>
+                  {fmtSign(s.marketGainEur)}
+                </td>
+                <td className="num text-muted-foreground">{s.salesEur > 0 ? fmt(s.salesEur) : "—"}</td>
+                <td className="num text-muted-foreground">{s.rebuysEur > 0 ? fmt(s.rebuysEur) : "—"}</td>
+                <td className="num">{s.taxEur > 0 ? fmt(s.taxEur) : "—"}</td>
+                <td className="num" style={{ fontWeight: 600 }}>{fmt(s.closingWealthEur)}</td>
+                <td className={`num ${(s.annualReturnPct ?? 0) >= 0 ? "text-gain" : "text-loss"}`}>
+                  {s.annualReturnPct != null ? fmtAnnualPct(s.annualReturnPct) : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td><strong>Total</strong></td>
+              <td className="num">{fmt(snapshots[0]?.openingWealthEur)}</td>
+              <td className="num">{fmt(totalContrib)}</td>
+              <td className={`num ${totalMarket >= 0 ? "text-gain" : "text-loss"}`}>{fmtSign(totalMarket)}</td>
+              <td className="num text-muted-foreground">{totalSales > 0 ? fmt(totalSales) : "—"}</td>
+              <td className="num text-muted-foreground">{totalRebuys > 0 ? fmt(totalRebuys) : "—"}</td>
+              <td className="num">{totalTax > 0 ? fmt(totalTax) : "—"}</td>
+              <td className="num"><strong>{fmt(snapshots.at(-1)?.closingWealthEur)}</strong></td>
+              <td className="num"></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        ⓘ Ventas y Recompras son movimientos internos (cripto ↔ EURC). No se suman ni restan al patrimonio — son informativas.
+        {snapshots.some(s => s.scope === "extrapol") && " · * Años extrapolados fuera del plan explícito."}
+      </p>
     </div>
   );
 }
@@ -371,54 +373,55 @@ function YearDetail({ snap }: { snap: AnnualSnapshot }) {
 
 function ScenarioComparison({ simData }: { simData: PerspectivesSimulation }) {
   return (
-    <div className="responsive-table">
-      <table>
-        <thead>
-          <tr>
-            <th>Escenario</th>
-            <th className="num">Patrimonio final</th>
-            <th className="num">Ganancia mercado</th>
-            <th className="num">Ventas</th>
-            <th className="num">Recompras</th>
-            <th className="num">Comisiones</th>
-            <th className="num">Impuesto</th>
-            <th className="num">XIRR</th>
-            <th className="num">Drawdown máx.</th>
-          </tr>
-        </thead>
-        <tbody>
-          {simData.scenarios.map(s => (
-            <tr key={s.scenario}>
-              <td>
-                <Badge variant={
-                  s.scenario === "optimista" ? "success" :
-                  s.scenario === "favorable" ? "info" :
-                  s.scenario === "base" ? "neutral" :
-                  s.scenario === "moderado" ? "warning" : "danger"
-                }>
-                  {s.label}
-                </Badge>
-              </td>
-              <td className="num" style={{ fontWeight: 600 }}>{fmt(s.summary.finalNetWealthEur)}</td>
-              <td className={`num ${(s.summary.totalMarketGainEur ?? 0) >= 0 ? "text-gain" : "text-loss"}`}>
-                {fmtSign(s.summary.totalMarketGainEur)}
-              </td>
-              <td className="num">{s.summary.totalSalesEur > 0 ? fmt(s.summary.totalSalesEur) : "—"}</td>
-              <td className={`num ${s.summary.totalRebuysEur > 0 ? "text-gain" : ""}`}>
-                {s.summary.totalRebuysEur > 0 ? fmt(s.summary.totalRebuysEur) : "—"}
-              </td>
-              <td className="num">{fmt(s.summary.totalCommissionsEur)}</td>
-              <td className="num">{fmt(s.summary.totalTaxEur)}</td>
-              <td className={`num ${(s.summary.xirr ?? 0) >= 0 ? "text-gain" : "text-loss"}`}>
-                {fmtPct(s.summary.xirr)}
-              </td>
-              <td className="num text-loss">
-                {s.summary.maxDrawdownPct != null ? `${(s.summary.maxDrawdownPct * 100).toFixed(1)}%` : "—"}
-              </td>
+    <div className="space-y-2">
+      <div className="responsive-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Escenario</th>
+              <th className="num">Patrimonio final</th>
+              <th className="num">Resultado mercado</th>
+              <th className="num">Capital aportado</th>
+              <th className="num">Ventas ⓘ</th>
+              <th className="num">Recompras ⓘ</th>
+              <th className="num">Impuesto</th>
+              <th className="num">XIRR</th>
+              <th className="num">Drawdown máx.</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {simData.scenarios.map(s => (
+              <tr key={s.scenario}>
+                <td>
+                  <Badge variant={
+                    s.scenario === "optimista" ? "success" :
+                    s.scenario === "favorable" ? "info" :
+                    s.scenario === "base" ? "neutral" :
+                    s.scenario === "moderado" ? "warning" : "danger"
+                  }>
+                    {s.label}
+                  </Badge>
+                </td>
+                <td className="num" style={{ fontWeight: 600 }}>{fmt(s.summary.finalNetWealthEur)}</td>
+                <td className={`num ${(s.summary.totalMarketGainEur ?? 0) >= 0 ? "text-gain" : "text-loss"}`}>
+                  {fmtSign(s.summary.totalMarketGainEur)}
+                </td>
+                <td className="num">{fmt(s.summary.totalContributionsEur)}</td>
+                <td className="num text-muted-foreground">{s.summary.totalSalesEur > 0 ? fmt(s.summary.totalSalesEur) : "—"}</td>
+                <td className="num text-muted-foreground">{s.summary.totalRebuysEur > 0 ? fmt(s.summary.totalRebuysEur) : "—"}</td>
+                <td className="num">{s.summary.totalTaxEur > 0 ? fmt(s.summary.totalTaxEur) : "—"}</td>
+                <td className={`num ${(s.summary.xirr ?? 0) >= 0 ? "text-gain" : "text-loss"}`}>
+                  {fmtPct(s.summary.xirr)}
+                </td>
+                <td className="num text-loss">
+                  {s.summary.maxDrawdownPct != null ? `${(s.summary.maxDrawdownPct * 100).toFixed(1)}%` : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-xs text-muted-foreground">ⓘ Ventas y Recompras son movimientos internos — no afectan el patrimonio neto de forma directa.</p>
     </div>
   );
 }
@@ -589,7 +592,8 @@ export function Perspectivas() {
   }
 
   const sum = activeScenario.summary;
-  const gainEur = sum.finalNetWealthEur - sum.initialWealthEur;
+  const beneficioNetoEur = sum.finalNetWealthEur - sum.initialWealthEur - sum.totalContributionsEur;
+  const lastSnap = activeScenario.annualSnapshots.at(-1);
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -641,46 +645,32 @@ export function Perspectivas() {
             <div className="ui-card-header"><h3 className="ui-card-title">Patrimonio inicial</h3></div>
             <div className="ui-card-content"><strong>{fmt(sum.initialWealthEur)}</strong></div>
           </div>
-          <div className={`ui-card stat-card fiscal-stat-card${gainEur >= 0 ? " fiscal-stat-positive" : " fiscal-stat-negative"}`}>
-            <div className="ui-card-header"><h3 className="ui-card-title">Patrimonio final</h3></div>
+          <div className={`ui-card stat-card fiscal-stat-card${sum.finalNetWealthEur >= sum.initialWealthEur ? " fiscal-stat-positive" : " fiscal-stat-negative"}`}>
+            <div className="ui-card-header"><h3 className="ui-card-title">Patrimonio final neto</h3></div>
             <div className="ui-card-content"><strong>{fmt(sum.finalNetWealthEur)}</strong></div>
           </div>
-          <div className={`ui-card stat-card fiscal-stat-card${(sum.totalMarketGainEur ?? 0) >= 0 ? " fiscal-stat-positive" : " fiscal-stat-negative"}`}>
-            <div className="ui-card-header"><h3 className="ui-card-title">Ganancia mercado</h3></div>
-            <div className="ui-card-content"><strong>{fmtSign(sum.totalMarketGainEur)}</strong></div>
-          </div>
           <div className="ui-card stat-card fiscal-stat-card">
-            <div className="ui-card-header"><h3 className="ui-card-title">Aportaciones</h3></div>
+            <div className="ui-card-header"><h3 className="ui-card-title">Capital aportado</h3></div>
             <div className="ui-card-content"><strong>{fmt(sum.totalContributionsEur)}</strong></div>
+          </div>
+          <div className={`ui-card stat-card fiscal-stat-card${beneficioNetoEur >= 0 ? " fiscal-stat-positive" : " fiscal-stat-negative"}`}>
+            <div className="ui-card-header"><h3 className="ui-card-title">Beneficio neto estimado</h3></div>
+            <div className="ui-card-content"><strong>{fmtSign(beneficioNetoEur)}</strong></div>
+          </div>
+          <div className={`ui-card stat-card fiscal-stat-card${(sum.totalMarketGainEur ?? 0) >= 0 ? " fiscal-stat-positive" : " fiscal-stat-negative"}`}>
+            <div className="ui-card-header"><h3 className="ui-card-title">Resultado de mercado</h3></div>
+            <div className="ui-card-content"><strong>{fmtSign(sum.totalMarketGainEur)}</strong></div>
           </div>
           {sum.totalSalesEur > 0 && (
             <div className="ui-card stat-card fiscal-stat-card fiscal-stat-warning">
-              <div className="ui-card-header"><h3 className="ui-card-title">Ventas proyectadas</h3></div>
+              <div className="ui-card-header"><h3 className="ui-card-title">Ventas parciales ⓘ</h3></div>
               <div className="ui-card-content"><strong>{fmt(sum.totalSalesEur)}</strong></div>
             </div>
           )}
           {sum.totalRebuysEur > 0 && (
             <div className="ui-card stat-card fiscal-stat-card fiscal-stat-positive">
-              <div className="ui-card-header"><h3 className="ui-card-title">Recompras proyectadas</h3></div>
+              <div className="ui-card-header"><h3 className="ui-card-title">Recompras ⓘ</h3></div>
               <div className="ui-card-content"><strong>{fmt(sum.totalRebuysEur)}</strong></div>
-            </div>
-          )}
-          {sum.totalRebuysEur === 0 && sum.totalSalesEur === 0 && (
-            <div className="ui-card stat-card fiscal-stat-card">
-              <div className="ui-card-header"><h3 className="ui-card-title">Recompras</h3></div>
-              <div className="ui-card-content"><strong>—</strong><span className="text-xs">Sin caída suficiente</span></div>
-            </div>
-          )}
-          {sum.totalRebuysEur === 0 && sum.totalSalesEur > 0 && (
-            <div className="ui-card stat-card fiscal-stat-card">
-              <div className="ui-card-header"><h3 className="ui-card-title">Recompras</h3></div>
-              <div className="ui-card-content"><strong>—</strong><span className="text-xs">Sin caída ≥20% desde máx.</span></div>
-            </div>
-          )}
-          {sum.totalCommissionsEur > 0 && (
-            <div className="ui-card stat-card fiscal-stat-card fiscal-stat-warning">
-              <div className="ui-card-header"><h3 className="ui-card-title">Comisiones</h3></div>
-              <div className="ui-card-content"><strong>{fmt(sum.totalCommissionsEur)}</strong></div>
             </div>
           )}
           {sum.totalTaxEur > 0 && (
@@ -689,10 +679,28 @@ export function Perspectivas() {
               <div className="ui-card-content"><strong>{fmt(sum.totalTaxEur)}</strong></div>
             </div>
           )}
+          {(lastSnap?.fiscalReserveEur ?? 0) > 0 && (
+            <div className="ui-card stat-card fiscal-stat-card fiscal-stat-warning">
+              <div className="ui-card-header"><h3 className="ui-card-title">Reserva fiscal final</h3></div>
+              <div className="ui-card-content"><strong>{fmt(lastSnap?.fiscalReserveEur)}</strong></div>
+            </div>
+          )}
+          {(lastSnap?.eurcFreeEur ?? 0) > 1 && (
+            <div className="ui-card stat-card fiscal-stat-card">
+              <div className="ui-card-header"><h3 className="ui-card-title">EURC pendiente</h3></div>
+              <div className="ui-card-content"><strong>{fmt(lastSnap?.eurcFreeEur)}</strong></div>
+            </div>
+          )}
           <div className={`ui-card stat-card fiscal-stat-card${(sum.xirr ?? 0) >= 0 ? " fiscal-stat-positive" : " fiscal-stat-negative"}`}>
             <div className="ui-card-header"><h3 className="ui-card-title">XIRR anual</h3></div>
             <div className="ui-card-content"><strong>{fmtPct(sum.xirr)}</strong></div>
           </div>
+          {sum.maxDrawdownPct != null && (
+            <div className="ui-card stat-card fiscal-stat-card fiscal-stat-negative">
+              <div className="ui-card-header"><h3 className="ui-card-title">Drawdown máximo</h3></div>
+              <div className="ui-card-content"><strong>−{(sum.maxDrawdownPct * 100).toFixed(1)}%</strong></div>
+            </div>
+          )}
         </div>
 
         {/* Year selector + detail */}

@@ -337,6 +337,6 @@ export const DEFAULT_SPANISH_TAX_BANDS: TaxBand[] = [
 
 export const DEFAULT_SIM_OPTIONS: SimOptions = {
   policy: "full_strategy",
-  commissionRate: 0.004,
+  commissionRate: 0, // sin comisiones futuras inventadas; el usuario no ha configurado ninguna
   taxBands: DEFAULT_SPANISH_TAX_BANDS,
 };

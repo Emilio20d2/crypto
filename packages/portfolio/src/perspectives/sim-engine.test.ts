@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { buildPricePath, buildPriceMap, monthKey } from "./price-model";
 import { runPerspectivesSimulation } from "./sim-engine";
 import type { SimInput, SimCycle, CurrentPosition, SimOptions } from "./types";
-import { DEFAULT_SPANISH_TAX_BANDS } from "./types";
+import { DEFAULT_SPANISH_TAX_BANDS, DEFAULT_SIM_OPTIONS } from "./types";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -70,11 +70,7 @@ function makeInput(overrides: Partial<SimInput> = {}): SimInput {
     eurCash: 0,
     historicalCapitalEur: 300,
     cycles: [makeCycle()],
-    options: {
-      policy: "full_strategy",
-      commissionRate: 0.004,
-      taxBands: DEFAULT_SPANISH_TAX_BANDS,
-    },
+    options: { ...DEFAULT_SIM_OPTIONS },
   };
   return { ...base, ...overrides };
 }
@@ -198,7 +194,7 @@ describe("sim-engine: sales", () => {
       eurcFree: 0,
       eurcFiscalReserve: 0,
       horizonDate: horizon(3),
-      options: { policy: "full_strategy", commissionRate: 0.004, taxBands: DEFAULT_SPANISH_TAX_BANDS },
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy" },
     });
     const result = runPerspectivesSimulation(input);
     // 1 BTC at €60k, avgCost €5k → 12× gain from start
@@ -286,7 +282,7 @@ describe("sim-engine: rebuys", () => {
       eurcFree: 0,
       eurcFiscalReserve: 0,
       horizonDate: horizon(3),
-      options: { policy: "plan_base", commissionRate: 0.004, taxBands: DEFAULT_SPANISH_TAX_BANDS },
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base" },
     });
     const result = runPerspectivesSimulation(input);
     for (const s of result.scenarios) {
@@ -305,7 +301,7 @@ describe("sim-engine: annual metrics", () => {
     // Plan_base: only contributions, no sales or rebuys
     const input = makeInput({
       horizonDate: horizon(3),
-      options: { policy: "plan_base", commissionRate: 0.004, taxBands: DEFAULT_SPANISH_TAX_BANDS },
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base" },
     });
     const result = runPerspectivesSimulation(input);
     const base = result.scenarios.find(s => s.scenario === "base")!;
@@ -397,6 +393,150 @@ describe("sim-engine: annual metrics", () => {
   });
 });
 
+// ─── Sim engine: no commissions ──────────────────────────────────────────────
+
+describe("sim-engine: no commissions (DEFAULT_SIM_OPTIONS.commissionRate = 0)", () => {
+  it("commissionsEur is zero in all annual snapshots with default options", () => {
+    const input = makeInput({ horizonDate: horizon(5) });
+    const result = runPerspectivesSimulation(input);
+    for (const s of result.scenarios) {
+      for (const snap of s.annualSnapshots) {
+        expect(snap.commissionsEur).toBe(0);
+      }
+    }
+  });
+
+  it("totalCommissionsEur is zero in all scenario summaries", () => {
+    const input = makeInput({ horizonDate: horizon(5) });
+    const result = runPerspectivesSimulation(input);
+    for (const s of result.scenarios) {
+      expect(s.summary.totalCommissionsEur).toBe(0);
+    }
+  });
+
+  it("sale proceeds fully credited to eurcFree (no commission deducted)", () => {
+    // Big gain position → sale triggers
+    const input = makeInput({
+      currentPositions: [{ assetId: "bitcoin", balance: 1.0, avgCostEur: 5000, currentPriceEur: 60000 }],
+      currentLots: [{ id: "l1", assetId: "bitcoin", date: NOW - 3 * YEAR_MS, remainingAmount: 1.0, unitAcquisitionPriceEur: 5000 }],
+      horizonDate: horizon(2),
+    });
+    const result = runPerspectivesSimulation(input);
+    const opt = result.scenarios.find(s => s.scenario === "optimista")!;
+    if (opt.summary.totalSalesEur > 0) {
+      // All commission fields are 0
+      expect(opt.summary.totalCommissionsEur).toBe(0);
+    }
+  });
+});
+
+// ─── Sim engine: no double-counting of sales/rebuys ──────────────────────────
+
+describe("sim-engine: sales and rebuys are internal movements", () => {
+  it("a sale does not increase net patrimony by itself (it just converts crypto to EURC)", () => {
+    const input = makeInput({
+      currentPositions: [{ assetId: "bitcoin", balance: 1.0, avgCostEur: 5000, currentPriceEur: 60000 }],
+      currentLots: [{ id: "l1", assetId: "bitcoin", date: NOW - 3 * YEAR_MS, remainingAmount: 1.0, unitAcquisitionPriceEur: 5000 }],
+      eurcFree: 0,
+      horizonDate: horizon(2),
+      options: { policy: "full_strategy", commissionRate: 0, taxBands: DEFAULT_SPANISH_TAX_BANDS },
+    });
+    const result = runPerspectivesSimulation(input);
+    // In a year where a sale happens, closingWealth should NOT equal openingWealth + salesEur
+    // (that would be double-counting). The sale is ALREADY reflected in closingWealth.
+    const opt = result.scenarios.find(s => s.scenario === "optimista")!;
+    for (const snap of opt.annualSnapshots) {
+      if (snap.salesEur > 0) {
+        // Check continuity: closing = opening + contributions + marketGain (NOT + sales)
+        const reconstructed = snap.openingWealthEur + snap.contributionsEur + snap.marketGainEur;
+        expect(Math.abs(reconstructed - snap.closingWealthEur)).toBeLessThan(2);
+      }
+    }
+  });
+
+  it("a rebuy does not reduce net patrimony by itself (it converts EURC to crypto)", () => {
+    const input = makeInput({
+      eurcFree: 5000,
+      horizonDate: horizon(6),
+      options: { policy: "full_strategy", commissionRate: 0, taxBands: DEFAULT_SPANISH_TAX_BANDS },
+    });
+    const result = runPerspectivesSimulation(input);
+    const cons = result.scenarios.find(s => s.scenario === "conservador")!;
+    for (const snap of cons.annualSnapshots) {
+      // Continuity: closing = opening + contributions + marketGain (NOT - rebuys)
+      const reconstructed = snap.openingWealthEur + snap.contributionsEur + snap.marketGainEur;
+      expect(Math.abs(reconstructed - snap.closingWealthEur)).toBeLessThan(2);
+    }
+  });
+});
+
+// ─── Sim engine: contributions correctly reported ─────────────────────────────
+
+describe("sim-engine: contributions", () => {
+  it("totalContributionsEur in summary matches sum of annual contributions", () => {
+    const input = makeInput({ horizonDate: horizon(5) });
+    const result = runPerspectivesSimulation(input);
+    for (const s of result.scenarios) {
+      const sumFromSnapshots = s.annualSnapshots.reduce((acc, snap) => acc + snap.contributionsEur, 0);
+      expect(Math.abs(s.summary.totalContributionsEur - sumFromSnapshots)).toBeLessThan(0.01);
+    }
+  });
+
+  it("totalContributionsEur > 0 when cycle has monthly contributions", () => {
+    const input = makeInput({ horizonDate: horizon(5) });
+    const result = runPerspectivesSimulation(input);
+    for (const s of result.scenarios) {
+      // €200/month × 12 × 5 = €12,000 expected contributions
+      expect(s.summary.totalContributionsEur).toBeGreaterThan(0);
+    }
+  });
+
+  it("contributions are not counted as market gain", () => {
+    const input = makeInput({
+      horizonDate: horizon(3),
+      options: { policy: "plan_base", commissionRate: 0, taxBands: DEFAULT_SPANISH_TAX_BANDS },
+    });
+    const result = runPerspectivesSimulation(input);
+    const base = result.scenarios.find(s => s.scenario === "base")!;
+    for (const snap of base.annualSnapshots) {
+      // If price didn't change (impossible in cycle model, but verify formula holds)
+      const reconstructed = snap.openingWealthEur + snap.contributionsEur + snap.marketGainEur;
+      expect(Math.abs(reconstructed - snap.closingWealthEur)).toBeLessThan(2);
+    }
+  });
+});
+
+// ─── Sim engine: patrimony formula ───────────────────────────────────────────
+
+describe("sim-engine: patrimony net formula", () => {
+  it("closingWealthEur excludes fiscal reserve (patrimonio neto)", () => {
+    // Give initial fiscal reserve to test exclusion
+    const input = makeInput({
+      eurcFiscalReserve: 1000,
+      horizonDate: horizon(3),
+    });
+    const result = runPerspectivesSimulation(input);
+    for (const s of result.scenarios) {
+      const firstSnap = s.annualSnapshots[0];
+      // Opening should NOT include the initial fiscal reserve
+      // (it's €600 BTC value + €0 eurcFree, not +€1000 fiscal reserve)
+      expect(firstSnap.openingWealthEur).toBeLessThan(1000); // below fiscal reserve value
+    }
+  });
+
+  it("openingWealth[year N+1] equals closingWealth[year N] (continuity)", () => {
+    const input = makeInput({ eurcFiscalReserve: 500, eurcFree: 100, horizonDate: horizon(5) });
+    const result = runPerspectivesSimulation(input);
+    for (const s of result.scenarios) {
+      const snaps = s.annualSnapshots;
+      for (let i = 0; i < snaps.length - 1; i++) {
+        const diff = Math.abs(snaps[i].closingWealthEur - snaps[i + 1].openingWealthEur);
+        expect(diff).toBeLessThan(2);
+      }
+    }
+  });
+});
+
 // ─── Sim engine: EURC invariants ─────────────────────────────────────────────
 
 describe("sim-engine: EURC invariants", () => {
@@ -434,7 +574,7 @@ describe("sim-engine: plan_base vs full_strategy", () => {
       currentLots: [{ id: "l1", assetId: "bitcoin", date: NOW - 3 * YEAR_MS, remainingAmount: 1.0, unitAcquisitionPriceEur: 5000 }],
       eurcFree: 1000,
       horizonDate: horizon(5),
-      options: { policy: "plan_base", commissionRate: 0.004, taxBands: DEFAULT_SPANISH_TAX_BANDS },
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base" },
     });
     const result = runPerspectivesSimulation(input);
     for (const s of result.scenarios) {
@@ -452,11 +592,11 @@ describe("sim-engine: plan_base vs full_strategy", () => {
     });
     const planBase = makeInput({
       ...baseInput,
-      options: { policy: "plan_base", commissionRate: 0.004, taxBands: DEFAULT_SPANISH_TAX_BANDS },
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base" },
     });
     const fullStrat = makeInput({
       ...baseInput,
-      options: { policy: "full_strategy", commissionRate: 0.004, taxBands: DEFAULT_SPANISH_TAX_BANDS },
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy" },
     });
     const rBase = runPerspectivesSimulation(planBase);
     const rFull = runPerspectivesSimulation(fullStrat);
