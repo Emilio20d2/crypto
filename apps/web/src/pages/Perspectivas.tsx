@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChartNoAxesCombined, ChevronLeft, ChevronRight } from "lucide-react";
+import { ChartNoAxesCombined } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/Card";
 import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
@@ -168,42 +168,18 @@ function YearSelector({
   selected: number;
   onSelect: (y: number) => void;
 }) {
-  const idx = years.indexOf(selected);
-
   return (
-    <div className="flex items-center gap-2 flex-wrap">
-      <button
-        type="button"
-        onClick={() => idx > 0 && onSelect(years[idx - 1])}
-        disabled={idx <= 0}
-        className="p-1 rounded hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
-        aria-label="Año anterior"
-      >
-        <ChevronLeft className="w-4 h-4" />
-      </button>
-
-      <div className="fiscal-year-selector" role="group" aria-label="Seleccionar año">
-        {years.map(y => (
-          <button
-            key={y}
-            type="button"
-            className={`fiscal-year-btn${y === selected ? " fiscal-year-btn--active" : ""}`}
-            onClick={() => onSelect(y)}
-          >
-            {y}
-          </button>
-        ))}
-      </div>
-
-      <button
-        type="button"
-        onClick={() => idx < years.length - 1 && onSelect(years[idx + 1])}
-        disabled={idx >= years.length - 1}
-        className="p-1 rounded hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
-        aria-label="Año siguiente"
-      >
-        <ChevronRight className="w-4 h-4" />
-      </button>
+    <div className="fiscal-year-selector" role="group" aria-label="Seleccionar año">
+      {years.map(y => (
+        <button
+          key={y}
+          type="button"
+          className={`fiscal-year-btn${y === selected ? " fiscal-year-btn--active" : ""}`}
+          onClick={() => onSelect(y)}
+        >
+          {y}
+        </button>
+      ))}
     </div>
   );
 }
