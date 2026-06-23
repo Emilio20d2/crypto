@@ -48,6 +48,26 @@ const SYMBOL_TIERS: Record<string, AssetTier> = {
   INJ:  "small_cap",
 };
 
+// Suministro circulante aprox. en millones de tokens (fuentes: CMC/CoinGecko/docs, 2025)
+export const CIRCULATING_SUPPLY_M: Record<string, number> = {
+  BTC:   21,        // 21M máximo; ~19.8M minados
+  ETH:   120,       // ~120M (sin límite duro)
+  BNB:   145,       // ~145M (quemas periódicas)
+  SOL:   580,       // ~580M
+  ADA:   36_000,    // ~36B (de 45B max)
+  AVAX:  400,       // ~400M
+  DOT:   1_500,     // ~1.5B
+  LINK:  600,       // ~600M (de 1B max)
+  TON:   5_000,     // ~5B
+  OP:    4_300,     // ~4.3B en circulación
+  ARB:   10_000,    // ~10B en circulación
+  SUI:   3_500,     // ~3.5B en circulación (de ~10B emitidos)
+  SEI:   4_500,     // ~4.5B en circulación (de ~10B emitidos)
+  APT:   1_100,     // ~1.1B
+  NEAR:  1_100,     // ~1.1B
+  INJ:   100,       // ~100M
+};
+
 export function getAssetTier(assetId: string): AssetTier {
   const lower = assetId.toLowerCase();
   if (KNOWN_TIERS[lower]) return KNOWN_TIERS[lower];

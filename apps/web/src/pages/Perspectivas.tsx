@@ -74,8 +74,26 @@ interface ScenarioSummary {
   totalCommissionsEur: number;
   totalTaxEur: number;
   totalEurcReinvestedEur: number;
+  finalEurcFreeEur: number;
+  finalFiscalReserveEur: number;
   xirr: number | null;
+  twr: number | null;
   maxDrawdownPct: number | null;
+}
+
+interface AssetPriceInfo {
+  assetId: string;
+  tier: string;
+  currentPriceEur: number | null;
+  horizonPriceEur: number | null;
+  priceMultiple: number | null;
+  modelType: "internal_cycle_model" | "analyst_consensus_adjusted";
+  consensusScore: number | null;
+  consensusSourceCount: number;
+  peakMultAdjustment: number | null;
+  circulatingSupplyM: number | null;
+  impliedMarketCapBnEur: number | null;
+  impliedMarketCapWarning: boolean;
 }
 
 interface ScenarioResult {
@@ -83,6 +101,7 @@ interface ScenarioResult {
   label: string;
   annualSnapshots: AnnualSnapshot[];
   summary: ScenarioSummary;
+  assetPriceInfo: Record<string, AssetPriceInfo>;
 }
 
 interface ValidationResult {
@@ -322,7 +341,7 @@ function YearDetail({ snap }: { snap: AnnualSnapshot }) {
       </div>
 
       {/* Tesorería */}
-      {(snap.eurcFreeEur > 0.01 || snap.fiscalReserveEur > 0.01 || snap.eurCashEur > 0.01) && (
+      {(snap.eurcFreeEur > 0.01 || snap.fiscalReserveEur > 0.01 || snap.eurCashEur > 0.01 || snap.eurcReinvestedEur > 0.01) && (
         <div className="persp-kpi-grid">
           {snap.eurcFreeEur > 0.01 && (
             <div className="persp-kpi">
@@ -336,12 +355,38 @@ function YearDetail({ snap }: { snap: AnnualSnapshot }) {
               <span className="persp-kpi-value">{fmt(snap.fiscalReserveEur)}</span>
             </div>
           )}
+          {snap.eurcReinvestedEur > 0.01 && (
+            <div className="persp-kpi">
+              <span className="persp-kpi-label">Reinversión residual</span>
+              <span className="persp-kpi-value">{fmt(snap.eurcReinvestedEur)}</span>
+            </div>
+          )}
           {snap.eurCashEur > 0.01 && (
             <div className="persp-kpi">
               <span className="persp-kpi-label">Cash EUR</span>
               <span className="persp-kpi-value">{fmt(snap.eurCashEur)}</span>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Conciliación EURC — solo cuando hay ventas */}
+      {snap.salesEur > 0.01 && (
+        <div className="text-xs border border-border/40 rounded p-2 space-y-1">
+          <p className="font-medium">Trazabilidad EURC del año</p>
+          <div className="grid grid-cols-2 gap-x-4 text-muted-foreground">
+            <span>Ventas</span>
+            <span className="text-right font-mono text-foreground">{fmt(snap.salesEur)}</span>
+            <span>− Reserva fiscal</span>
+            <span className="text-right font-mono">−{fmt(snap.taxEur)}</span>
+            <span>− Recompras</span>
+            <span className="text-right font-mono">−{fmt(snap.rebuysEur)}</span>
+            <span>− Reinv. residual</span>
+            <span className="text-right font-mono">−{fmt(snap.eurcReinvestedEur)}</span>
+            <span>= EURC libre (cierre)</span>
+            <span className="text-right font-mono text-foreground">{fmt(snap.eurcFreeEur)}</span>
+          </div>
+          <p className="text-[10px] text-muted-foreground/70">La diferencia corresponde a comisiones y saldo EURC del inicio del año.</p>
         </div>
       )}
 
@@ -691,6 +736,9 @@ export function Perspectivas() {
                 label="Escenario de simulación"
               />
             </div>
+            <p className="text-xs text-muted-foreground">
+              Las aportaciones y reglas EURC se aplican por ciclo según las fechas de inicio y fin configuradas en el Plan. El motor simula el cambio de ciclo automáticamente.
+            </p>
           </CardContent>
         </Card>
 
@@ -715,10 +763,12 @@ export function Perspectivas() {
             <span className="persp-kpi-label">Beneficio neto est.</span>
             <span className="persp-kpi-value">{fmtSign(beneficioNetoEur)}</span>
           </div>
-          <div className={`persp-kpi ${(sum.totalMarketGainEur ?? 0) >= 0 ? "kpi-pos" : "kpi-neg"}`}>
-            <span className="persp-kpi-label">Resultado mercado</span>
-            <span className="persp-kpi-value">{fmtSign(sum.totalMarketGainEur)}</span>
-          </div>
+          {sum.twr != null && (
+            <div className={`persp-kpi ${sum.twr >= 0 ? "kpi-pos" : "kpi-neg"}`}>
+              <span className="persp-kpi-label">TWR acumulado</span>
+              <span className="persp-kpi-value">{fmtAnnualPct(sum.twr * 100)}</span>
+            </div>
+          )}
           {sum.totalSalesEur > 0 && (
             <div className="persp-kpi kpi-warn">
               <span className="persp-kpi-label">Ventas parciales ⓘ</span>
@@ -729,6 +779,12 @@ export function Perspectivas() {
             <div className="persp-kpi kpi-pos">
               <span className="persp-kpi-label">Recompras ⓘ</span>
               <span className="persp-kpi-value">{fmt(sum.totalRebuysEur)}</span>
+            </div>
+          )}
+          {sum.totalEurcReinvestedEur > 0 && (
+            <div className="persp-kpi">
+              <span className="persp-kpi-label">Reinversión residual ⓘ</span>
+              <span className="persp-kpi-value">{fmt(sum.totalEurcReinvestedEur)}</span>
             </div>
           )}
           {sum.totalTaxEur > 0 && (
@@ -823,6 +879,60 @@ export function Perspectivas() {
             </CardContent>
           )}
         </Card>
+
+        {/* Trazabilidad de previsiones por activo */}
+        {activeScenario && Object.keys(activeScenario.assetPriceInfo ?? {}).length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Previsiones por activo</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="responsive-table persp-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Activo</th>
+                      <th>Tier</th>
+                      <th className="num">Precio actual</th>
+                      <th className="num">Precio horizonte</th>
+                      <th className="num">Múltiplo</th>
+                      <th className="num">Cap. impl. (B€)</th>
+                      <th>Fuente</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.values(activeScenario.assetPriceInfo).map(info => (
+                      <tr key={info.assetId} className={info.impliedMarketCapWarning ? "opacity-60" : ""}>
+                        <td><span className="font-mono font-semibold text-xs">{info.assetId.toUpperCase()}</span></td>
+                        <td className="text-xs text-muted-foreground">{info.tier}</td>
+                        <td className="num">{fmt(info.currentPriceEur)}</td>
+                        <td className="num" style={{ fontWeight: 600 }}>{fmt(info.horizonPriceEur)}</td>
+                        <td className={`num ${(info.priceMultiple ?? 0) >= 1 ? "text-gain" : "text-loss"}`}>
+                          {info.priceMultiple != null ? `×${info.priceMultiple.toFixed(1)}` : "—"}
+                        </td>
+                        <td className={`num ${info.impliedMarketCapWarning ? "text-yellow-500" : ""}`}>
+                          {info.impliedMarketCapBnEur != null ? info.impliedMarketCapBnEur.toFixed(0) : "—"}
+                          {info.impliedMarketCapWarning && " ⚠"}
+                        </td>
+                        <td className="text-xs">
+                          {info.modelType === "analyst_consensus_adjusted"
+                            ? `Consenso (${info.consensusSourceCount} fuentes${info.peakMultAdjustment != null ? `, adj. ${info.peakMultAdjustment >= 0 ? "+" : ""}${(info.peakMultAdjustment * 100).toFixed(0)}%` : ""})`
+                            : "Modelo ciclos"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                <strong>Modelo ciclos:</strong> trayectoria basada en ciclos históricos BTC (acumulación → euforia → distribución → fondo), determinista por escenario.{" "}
+                <strong>Consenso:</strong> previsiones públicas de analistas (ARK, StanChart, VanEck, Pantera…) ajustan el múltiplo de pico ±30%.{" "}
+                <strong>Cap. impl.</strong> = precio proyectado × suministro circulante aprox. (2025). ⚠ &gt;5.000B€ requiere validación adicional.{" "}
+                Suministro y previsiones pueden variar; las cifras son orientativas.
+              </p>
+            </CardContent>
+          </Card>
+        )}
 
       </div>
     </div>

@@ -849,3 +849,100 @@ describe("forecast-sources: consensus calculation", () => {
     expect(isExpired(src, now + 200)).toBe(true);
   });
 });
+
+// ─── TWR real y métricas derivadas ───────────────────────────────────────────
+
+describe("TWR real y métricas derivadas", () => {
+  it("annualReturnPct usa sub-períodos mensuales encadenados, no Modified Dietz anual", () => {
+    const input = makeInput({ horizonDate: horizon(3) });
+    const result = runPerspectivesSimulation(input);
+    const base = result.scenarios.find(s => s.scenario === "base")!;
+    const snap = base.annualSnapshots[0];
+    expect(snap.annualReturnPct).not.toBeNull();
+    // El TWR encadenado mensualmente debe dar un resultado razonable (−100% a +500%)
+    expect(snap.annualReturnPct!).toBeGreaterThan(-100);
+    expect(snap.annualReturnPct!).toBeLessThan(500);
+    // Verificar que NO es la fórmula de Modified Dietz anual (peso 0.5):
+    // md = gain / (opening + contrib*0.5) * 100
+    // La diferencia es sistemática cuando contributions/opening > 20%
+    const opening = snap.openingWealthEur;
+    const contrib = snap.contributionsEur;
+    const gain = snap.marketGainEur;
+    if (contrib > opening * 0.2 && opening > 0) {
+      const modDietzResult = (gain / (opening + contrib * 0.5)) * 100;
+      // Los dos métodos dan resultados distintos cuando las aportaciones son significativas
+      // (el TWR encadenado mensualmente pondera cada sub-período por el capital real)
+      expect(typeof snap.annualReturnPct).toBe("number");
+      expect(snap.annualReturnPct).not.toBeCloseTo(modDietzResult, 5);
+    }
+  });
+
+  it("summary.twr no es null y está en rango razonable", () => {
+    const input = makeInput({ horizonDate: horizon(5) });
+    const result = runPerspectivesSimulation(input);
+    const base = result.scenarios.find(s => s.scenario === "base")!;
+    expect(base.summary.twr).not.toBeNull();
+    expect(base.summary.twr!).toBeGreaterThan(-1.0); // > −100%
+    expect(base.summary.twr!).toBeLessThan(50.0);    // < 5000% (sin hiperinflación)
+  });
+
+  it("eurcReinvestedEur se agrega correctamente en el snapshot anual", () => {
+    const input = makeInput({ horizonDate: horizon(5), eurcFree: 500 });
+    const result = runPerspectivesSimulation(input);
+    const base = result.scenarios.find(s => s.scenario === "base")!;
+    const totalReinvested = base.summary.totalEurcReinvestedEur;
+    const annualSum = base.annualSnapshots.reduce((s, a) => s + a.eurcReinvestedEur, 0);
+    // La suma de anuales debe coincidir con el total del resumen (error < 0.01€)
+    expect(Math.abs(annualSum - totalReinvested)).toBeLessThan(0.01);
+  });
+
+  it("assetPriceInfo contiene datos por activo en el escenario base", () => {
+    const input = makeInput({ horizonDate: horizon(5) });
+    const result = runPerspectivesSimulation(input);
+    const base = result.scenarios.find(s => s.scenario === "base")!;
+    expect(base.assetPriceInfo).toBeDefined();
+    const infos = Object.values(base.assetPriceInfo);
+    expect(infos.length).toBeGreaterThan(0);
+    for (const info of infos) {
+      expect(["store_of_value","large_cap","mid_cap","small_cap","speculative"]).toContain(info.tier);
+      expect(["internal_cycle_model","analyst_consensus_adjusted"]).toContain(info.modelType);
+      if (info.currentPriceEur != null && info.currentPriceEur > 0 && info.horizonPriceEur != null) {
+        expect(info.priceMultiple).not.toBeNull();
+        expect(info.priceMultiple!).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("capitalización implícita de BTC en escenario base no supera el umbral de advertencia para horizontes cortos", () => {
+    const input = makeInput({
+      currentPositions: [{ assetId: "BTC", balance: 0.01, avgCostEur: 60000, currentPriceEur: 60000 }],
+      currentLots: [],
+      cycles: [makeCycle({ assets: [{ id: "a1", assetId: "BTC", allocationType: "percentage", allocationValue: 100, allocationPercentage: 100, fixedAmountEur: null, targetAmount: null, targetValueEur: null, startDate: NOW - YEAR_MS, endDate: null, status: "active" }] })],
+      horizonDate: horizon(5),
+    });
+    const result = runPerspectivesSimulation(input);
+    const base = result.scenarios.find(s => s.scenario === "base")!;
+    const btcInfo = base.assetPriceInfo["BTC"];
+    // Con 5 años y escenario base, BTC no debería superar los 5T EUR
+    if (btcInfo?.impliedMarketCapBnEur != null) {
+      expect(btcInfo.impliedMarketCapWarning).toBe(false);
+    }
+  });
+
+  it("TWR anual para año sin aportaciones no está distorsionado por el denominador", () => {
+    // Año sin aportaciones: TWR = (closing - opening) / opening * 100
+    // que debe coincidir con la variación porcentual pura del patrimonio
+    const inputNoContrib = makeInput({
+      horizonDate: horizon(2),
+      cycles: [makeCycle({ monthlyAmountEur: 0 })],
+    });
+    const result = runPerspectivesSimulation(inputNoContrib);
+    const base = result.scenarios.find(s => s.scenario === "base")!;
+    const snap = base.annualSnapshots[0];
+    if (snap.contributionsEur === 0 && snap.openingWealthEur > 0) {
+      const expectedPct = (snap.marketGainEur / snap.openingWealthEur) * 100;
+      // Con cero aportaciones, TWR encadenado = Dietz = variación simple
+      expect(snap.annualReturnPct!).toBeCloseTo(expectedPct, 0);
+    }
+  });
+});

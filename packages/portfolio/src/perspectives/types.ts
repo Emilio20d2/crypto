@@ -160,6 +160,23 @@ export interface SimEvent {
   description: string;
 }
 
+// ─── Trazabilidad de previsiones por activo ──────────────────────────────────
+
+export interface AssetPriceInfo {
+  assetId: string;
+  tier: AssetTier;
+  currentPriceEur: number | null;
+  horizonPriceEur: number | null;
+  priceMultiple: number | null;
+  modelType: "internal_cycle_model" | "analyst_consensus_adjusted";
+  consensusScore: number | null;
+  consensusSourceCount: number;
+  peakMultAdjustment: number | null;
+  circulatingSupplyM: number | null;
+  impliedMarketCapBnEur: number | null;
+  impliedMarketCapWarning: boolean;
+}
+
 // ─── Resultado por escenario ─────────────────────────────────────────────────
 
 export interface ScenarioResult {
@@ -167,6 +184,7 @@ export interface ScenarioResult {
   label: string;
   annualSnapshots: AnnualSnapshot[];
   summary: ScenarioSummary;
+  assetPriceInfo: Record<string, AssetPriceInfo>;
 }
 
 export interface ScenarioSummary {

@@ -8,10 +8,10 @@ import type {
   AnnualSnapshot, AnnualAssetPosition, SimEvent, ScenarioResult,
   ScenarioSummary, AssetSimSummary, SimCycle, SimCycleAsset,
   SimSaleRule, SimRebuyTier, SimSubstitution, PerspectivesSimulation,
-  ValidationResult, SimDiagnostics,
+  ValidationResult, SimDiagnostics, AssetPriceInfo,
 } from "./types";
 import { SIM_SCENARIOS, SCENARIO_LABELS, DEFAULT_SIM_OPTIONS } from "./types";
-import { buildPriceMap, monthKey } from "./price-model";
+import { buildPriceMap, monthKey, getAssetTier, CIRCULATING_SUPPLY_M } from "./price-model";
 import { buildConsensus } from "./forecast-sources";
 import { KNOWN_FORECASTS } from "./known-forecasts";
 
@@ -583,6 +583,21 @@ function evaluateProposedRebuys(
   }
 }
 
+// ─── Cálculo de patrimonio neto mensual ──────────────────────────────────────
+// Excluye reserva fiscal para consistencia con closingWealthEur
+
+function calcMonthlyWealth(
+  ms: MonthlyState,
+  prices: Record<string, Record<string, number>>,
+): number {
+  const mK = monthKey(ms.monthDate);
+  let w = 0;
+  for (const [id, st] of Object.entries(ms.assetStates)) {
+    w += st.balance * (prices[id]?.[mK] ?? 0);
+  }
+  return w + ms.eurcFree + ms.eurCash;
+}
+
 // ─── Reinversión residual de EURC ────────────────────────────────────────────
 
 function reinvestResidual(
@@ -1018,12 +1033,23 @@ function buildAnnualSnapshot(
 
   const marketGainEur = closingWealthEur - openingWealthEur - contributionsEur;
 
-  // Modified Dietz: time-adjusts contributions to avoid inflating return
-  // Assumes contributions arrive mid-year on average (weight 0.5)
-  const modDietzDenom = openingWealthEur + contributionsEur * 0.5;
-  const annualReturnPct = modDietzDenom > 0
-    ? (marketGainEur / modDietzDenom) * 100
-    : null;
+  // TWR real: encadenamiento de sub-períodos mensuales.
+  // Para cada mes: r_m = (cierre - apertura - aportación) / (apertura + aportación)
+  // La aportación se trata como capital disponible desde el inicio del mes (DCA al principio).
+  // Esto elimina el efecto del tamaño de las aportaciones sobre la rentabilidad.
+  {
+    var twrProd = 1.0;
+    var prevW = openingWealthEur;
+    for (const ms of monthsOfYear) {
+      const closing = calcMonthlyWealth(ms, prices);
+      const contrib = ms.monthContributionsEur;
+      const denom = prevW + contrib;
+      const gain = closing - prevW - contrib;
+      if (denom > 0.01) twrProd *= (1 + gain / denom);
+      prevW = closing;
+    }
+  }
+  const annualReturnPct = (twrProd - 1) * 100;
 
   // Determine scope: plan or extrapol
   const lastCycleEnd = input.cycles.reduce<number | null>((max, c) => {
@@ -1227,6 +1253,32 @@ function runScenario(
     );
   }
 
+  // Trazabilidad de previsiones por activo
+  const horizonMKey = monthKey(input.horizonDate);
+  const assetPriceInfo: Record<string, AssetPriceInfo> = {};
+  for (const assetId of allAssetIds) {
+    const currentPos = input.currentPositions.find(p => p.assetId === assetId);
+    const currentPriceEur = currentPos?.currentPriceEur ?? null;
+    const horizonPriceEur = prices[assetId]?.[horizonMKey] ?? null;
+    const tier = getAssetTier(assetId);
+    const consensus = consensusByAsset[assetId];
+    const priceMultiple = currentPriceEur && currentPriceEur > 0 && horizonPriceEur
+      ? horizonPriceEur / currentPriceEur : null;
+    const supplyM = CIRCULATING_SUPPLY_M[assetId.toUpperCase()] ?? null;
+    const impliedMarketCapBnEur = supplyM != null && horizonPriceEur != null
+      ? (horizonPriceEur * supplyM) / 1_000 : null;
+    assetPriceInfo[assetId] = {
+      assetId, tier, currentPriceEur, horizonPriceEur, priceMultiple,
+      modelType: consensus && consensus.sourceCount > 0 ? "analyst_consensus_adjusted" : "internal_cycle_model",
+      consensusScore: consensus?.score ?? null,
+      consensusSourceCount: consensus?.sourceCount ?? 0,
+      peakMultAdjustment: consensus?.peakMultAdjustment ?? null,
+      circulatingSupplyM: supplyM,
+      impliedMarketCapBnEur,
+      impliedMarketCapWarning: impliedMarketCapBnEur != null && impliedMarketCapBnEur > 5_000,
+    };
+  }
+
   // Initialize state
   const options = input.options ?? DEFAULT_SIM_OPTIONS;
   let state = initState(input);
@@ -1253,14 +1305,8 @@ function runScenario(
     byYear[year].push(ms);
   }
 
-  // Patrimonio neto mensual: excluye reserva fiscal (consistente con closingWealthEur en snapshots)
-  function calcWealth(ms: MonthlyState, mK: string): number {
-    let w = 0;
-    for (const [id, st] of Object.entries(ms.assetStates)) {
-      w += st.balance * (prices[id]?.[mK] ?? 0);
-    }
-    return w + ms.eurcFree + ms.eurCash; // NO eurcFiscalReserve
-  }
+  // calcWealth: alias local que pasa prices al helper top-level
+  const calcWealth = (ms: MonthlyState, _mK?: string) => calcMonthlyWealth(ms, prices);
 
   const years = Object.keys(byYear).map(Number).sort();
   const annualSnapshots: AnnualSnapshot[] = [];
@@ -1281,19 +1327,18 @@ function runScenario(
     (s, p) => s + p.balance * (p.currentPriceEur ?? 0), 0
   ) + input.eurcFree + input.eurCash; // NO input.eurcFiscalReserve
 
-  // TWR: product of per-month sub-period returns excluding contributions
-  // r_m = marketGain_m / openingWealth_m ; TWR = Π(1+r_m) - 1
+  // TWR acumulado: encadenamiento de sub-períodos mensuales.
+  // r_m = (cierre - apertura - aportación) / (apertura + aportación)
+  // Consistente con el TWR anual calculado en buildAnnualSnapshot.
   let twrProduct = 1.0;
   {
     let pw = initialWealth;
     for (const { state: ms } of allMonthlyStates) {
-      const mK = monthKey(ms.monthDate);
-      const closing = calcWealth(ms, mK);
+      const closing = calcMonthlyWealth(ms, prices);
       const contrib = ms.monthContributionsEur;
-      const openingForReturn = pw + contrib * 0.5; // Modified Dietz sub-period
-      const marketGain = closing - pw - contrib;
-      const subReturn = openingForReturn > 0 ? marketGain / openingForReturn : 0;
-      twrProduct *= (1 + subReturn);
+      const denom = pw + contrib;
+      const gain = closing - pw - contrib;
+      if (denom > 0.01) twrProduct *= (1 + gain / denom);
       pw = closing;
     }
   }
@@ -1370,6 +1415,7 @@ function runScenario(
     label: SCENARIO_LABELS[scenario],
     annualSnapshots,
     summary,
+    assetPriceInfo,
   };
 }
 
