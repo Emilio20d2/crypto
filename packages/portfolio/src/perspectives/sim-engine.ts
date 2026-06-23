@@ -137,6 +137,7 @@ function initState(input: SimInput): MonthlyState {
       failed: false,
       deteriorated: false,
       usedRebuyTierIds: new Set(),
+      usedSaleProposalIds: new Set(),
     };
   }
 
@@ -158,6 +159,7 @@ function initState(input: SimInput): MonthlyState {
           failed: false,
           deteriorated: false,
           usedRebuyTierIds: new Set(),
+          usedSaleProposalIds: new Set(),
         };
       }
     }
@@ -359,21 +361,23 @@ function evaluateSales(
     const hasRule = cycle.saleRules.some(r => r.assetId === assetId && r.status === "active");
     if (hasRule) continue;
 
-    // Proposal: sell 10% when 3× gain, 15% when 5× gain, 20% when 10× gain
-    const proposals: Array<{ threshold: number; pct: number; key: string }> = [
-      { threshold: 3,  pct: 0.10, key: `${assetId}-3x` },
-      { threshold: 5,  pct: 0.15, key: `${assetId}-5x` },
-      { threshold: 10, pct: 0.20, key: `${assetId}-10x` },
+    // Proposal: sell 10% at 3×, 15% at 5×, 20% at 10× gain over avgCost
+    // Min 5% of balance must remain after sale. Rearmed on each new ATH.
+    const proposals: Array<{ threshold: number; pct: number }> = [
+      { threshold: 3,  pct: 0.10 },
+      { threshold: 5,  pct: 0.15 },
+      { threshold: 10, pct: 0.20 },
     ];
 
     for (const p of proposals) {
       if (gainMultiple < p.threshold) continue;
 
-      // Check if this proposal was already triggered (using a simple set on the state)
-      const triggeredKey = `sale-proposal-${p.key}`;
-      if ((state as any)[triggeredKey]) continue;
+      const saleKey = `${assetId}-${p.threshold}x`;
+      if (st.usedSaleProposalIds.has(saleKey)) continue;
 
-      const quantityToSell = st.balance * p.pct;
+      // Keep at least 5% of balance
+      const maxSellPct = Math.min(p.pct, Math.max(0, 1 - 0.05));
+      const quantityToSell = st.balance * maxSellPct;
       if (quantityToSell < 0.000001) continue;
 
       const { totalCostEur } = consumeFifo(st.lots, quantityToSell);
@@ -388,14 +392,13 @@ function evaluateSales(
       st.totalSold += quantityToSell;
       st.lastSalePriceEur = priceEur;
       st.avgCostEur = calcAvgCost(st.lots);
+      st.usedSaleProposalIds.add(saleKey);
 
       state.eurcFree += eurcEur;
       state.eurcFiscalReserve += taxEur;
       state.monthSalesEur += grossEur;
       state.monthCommissionsEur += commissionEur;
       state.monthTaxEur += taxEur;
-
-      (state as any)[triggeredKey] = true;
 
       state.events.push({
         date,
@@ -406,7 +409,7 @@ function evaluateSales(
         priceEur,
         gainEur,
         taxEur,
-        description: `Propuesta: venta ${(p.pct * 100).toFixed(0)}% ${assetId} a ×${p.threshold}`,
+        description: `Propuesta: venta ${(maxSellPct * 100).toFixed(0)}% ${assetId} a ×${p.threshold} coste`,
       });
 
       break; // one proposal at a time per asset
@@ -690,6 +693,7 @@ function simulateMonth(
       ...s,
       lots: s.lots.map(l => ({ ...l })),
       usedRebuyTierIds: new Set(s.usedRebuyTierIds),
+      usedSaleProposalIds: new Set(s.usedSaleProposalIds),
     };
   }
 
@@ -758,6 +762,7 @@ function simulateMonth(
           totalBought: 0, totalSold: 0, totalRebuys: 0,
           goalReached: false, failed: false, deteriorated: false,
           usedRebuyTierIds: new Set(),
+          usedSaleProposalIds: new Set(),
         };
       }
       const toSt = next.assetStates[sub.toAssetId];
@@ -797,12 +802,14 @@ function simulateMonth(
     const priceEur = prices[assetId]?.[mKey];
     if (!priceEur || priceEur <= 0) continue;
     if (st.peakPriceEur == null || priceEur > st.peakPriceEur) {
-      // Nueva ATH: limpiar escalones propuestos del pico anterior
+      // Nueva ATH: limpiar escalones propuestos del pico anterior para rearme
       if (st.peakPriceEur != null) {
-        const prefix = `proposed-rebuy-${assetId}-`;
+        const rebuyPrefix = `proposed-rebuy-${assetId}-`;
         for (const key of [...st.usedRebuyTierIds]) {
-          if (key.startsWith(prefix)) st.usedRebuyTierIds.delete(key);
+          if (key.startsWith(rebuyPrefix)) st.usedRebuyTierIds.delete(key);
         }
+        // Rearmar propuestas de venta: nuevo ciclo puede vender de nuevo
+        st.usedSaleProposalIds.clear();
       }
       st.peakPriceEur = priceEur;
     }
@@ -1002,8 +1009,11 @@ function buildAnnualSnapshot(
 
   const marketGainEur = closingWealthEur - openingWealthEur - contributionsEur;
 
-  const annualReturnPct = openingWealthEur > 0
-    ? ((closingWealthEur - openingWealthEur) / openingWealthEur) * 100
+  // Modified Dietz: time-adjusts contributions to avoid inflating return
+  // Assumes contributions arrive mid-year on average (weight 0.5)
+  const modDietzDenom = openingWealthEur + contributionsEur * 0.5;
+  const annualReturnPct = modDietzDenom > 0
+    ? (marketGainEur / modDietzDenom) * 100
     : null;
 
   // Determine scope: plan or extrapol
@@ -1019,6 +1029,47 @@ function buildAnnualSnapshot(
 
   // Collect all events from all months of this year
   const events = monthsOfYear.flatMap(m => m.events);
+
+  // Skip reasons: derive from events (or lack thereof)
+  const salesSkipReasons: string[] = [];
+  const rebuysSkipReasons: string[] = [];
+
+  if (salesEur === 0) {
+    // Explain why no sales happened
+    for (const assetId of assetIds) {
+      const st = lastMonth.assetStates[assetId];
+      if (!st || st.balance <= 0 || st.failed) continue;
+      const priceEur = prices[assetId]?.[mKey];
+      if (!priceEur) continue;
+      const avgCost = st.avgCostEur;
+      if (!avgCost || avgCost <= 0) continue;
+      const mult = priceEur / avgCost;
+      if (mult < 3) {
+        salesSkipReasons.push(`${assetId}: ×${mult.toFixed(2)} coste (umbral mínimo ×3)`);
+      } else {
+        salesSkipReasons.push(`${assetId}: umbral ×3 superado pero escalón ya consumido`);
+      }
+    }
+  }
+
+  if (rebuysEur === 0) {
+    for (const assetId of assetIds) {
+      const st = lastMonth.assetStates[assetId];
+      if (!st || st.failed) continue;
+      if (!st.peakPriceEur) { rebuysSkipReasons.push(`${assetId}: sin precio máximo registrado`); continue; }
+      const priceEur = prices[assetId]?.[mKey];
+      if (!priceEur) continue;
+      const drawdown = (st.peakPriceEur - priceEur) / st.peakPriceEur;
+      if (drawdown < 0.20) {
+        rebuysSkipReasons.push(`${assetId}: caída ${(drawdown * 100).toFixed(0)}% (umbral mínimo −20% desde máximo)`);
+      } else {
+        rebuysSkipReasons.push(`${assetId}: umbral superado pero sin EURC libre o escalón ya consumido`);
+      }
+    }
+    if (lastMonth.eurcFree < 1) {
+      rebuysSkipReasons.push("Sin EURC reinvertible disponible");
+    }
+  }
 
   return {
     year,
@@ -1039,6 +1090,8 @@ function buildAnnualSnapshot(
     annualReturnPct,
     positions,
     events,
+    salesSkipReasons,
+    rebuysSkipReasons,
   };
 }
 
@@ -1143,11 +1196,21 @@ function runScenario(
     d.setMonth(d.getMonth() + 1);
   }
 
-  // Group by year
+  // Group by year; track monthly opening wealth for TWR
   const byYear: Record<number, MonthlyState[]> = {};
   for (const { year, state: ms } of allMonthlyStates) {
     if (!byYear[year]) byYear[year] = [];
     byYear[year].push(ms);
+  }
+
+  // Compute per-month opening wealth (closing of previous month)
+  // openingWealthByMonth[i] = wealth at START of month i (= closing of month i-1)
+  function calcWealth(ms: MonthlyState, mK: string): number {
+    let w = 0;
+    for (const [id, st] of Object.entries(ms.assetStates)) {
+      w += st.balance * (prices[id]?.[mK] ?? 0);
+    }
+    return w + ms.eurcFree + ms.eurcFiscalReserve + ms.eurCash;
   }
 
   const years = Object.keys(byYear).map(Number).sort();
@@ -1163,11 +1226,30 @@ function runScenario(
 
   // Summary
   const lastSnap = annualSnapshots[annualSnapshots.length - 1];
-  const firstSnap = annualSnapshots[0];
 
   const initialWealth = input.currentPositions.reduce(
     (s, p) => s + p.balance * (p.currentPriceEur ?? 0), 0
   ) + input.eurcFree + input.eurcFiscalReserve + input.eurCash;
+
+  // TWR: product of per-month sub-period returns excluding contributions
+  // r_m = marketGain_m / openingWealth_m ; TWR = Π(1+r_m) - 1
+  let twrProduct = 1.0;
+  {
+    let pw = initialWealth;
+    for (const { state: ms } of allMonthlyStates) {
+      const mK = monthKey(ms.monthDate);
+      const closing = calcWealth(ms, mK);
+      const contrib = ms.monthContributionsEur;
+      const openingForReturn = pw + contrib * 0.5; // Modified Dietz sub-period
+      const marketGain = closing - pw - contrib;
+      const subReturn = openingForReturn > 0 ? marketGain / openingForReturn : 0;
+      twrProduct *= (1 + subReturn);
+      pw = closing;
+    }
+  }
+  const twrAnnual = allMonthlyStates.length > 0
+    ? Math.pow(twrProduct, 12 / allMonthlyStates.length) - 1
+    : null;
 
   // XIRR contributions
   const contributions = annualSnapshots.map(s => ({
@@ -1218,7 +1300,7 @@ function runScenario(
     finalEurcFreeEur: lastSnap?.eurcFreeEur ?? 0,
     finalFiscalReserveEur: lastSnap?.fiscalReserveEur ?? 0,
     xirr,
-    twr: null,  // TWR requires monthly portfolio values — can be added later
+    twr: twrAnnual,
     maxDrawdownPct: maxDD,
     assetSummaries,
   };

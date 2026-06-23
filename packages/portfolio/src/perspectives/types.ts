@@ -51,7 +51,8 @@ export interface AssetSimState {
   goalReached: boolean;
   failed: boolean;
   deteriorated: boolean;
-  usedRebuyTierIds: Set<string>;  // escalones ya consumidos (no se reinician)
+  usedRebuyTierIds: Set<string>;      // escalones de recompra ya consumidos
+  usedSaleProposalIds: Set<string>;   // propuestas de venta ya disparadas (se limpia en nuevo ATH)
 }
 
 // ─── Estado mensual completo de la simulación ────────────────────────────────
@@ -111,6 +112,10 @@ export interface AnnualSnapshot {
 
   // Cronología de eventos del año
   events: SimEvent[];
+
+  // Motivos de ausencia de operaciones (para transparencia del motor)
+  salesSkipReasons: string[];
+  rebuysSkipReasons: string[];
 }
 
 export interface AnnualAssetPosition {
