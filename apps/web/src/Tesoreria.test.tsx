@@ -20,7 +20,7 @@ function ok<T>(data: T) {
 beforeEach(() => {
   const now = Date.now();
   window.cryptoControl = {
-    assets: { list: () => ok([]) },
+    assets: { list: () => ok([]), catalog: () => ok([]), register: () => ok({ id: "", symbol: "", name: "", type: "crypto" as const, createdAt: 0, updatedAt: 0 }) },
     market: {
       getCurrentPrice: () => ok({ price: null, state: "unavailable" as const, provider: "mock", fetchedAt: now }),
       getHistoricalPrices: () => ok({ points: [], provider: "mock", requestedPeriod: "24h", actualInterval: "1h", fetchedAt: now, isCached: false }),

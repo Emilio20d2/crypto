@@ -26,6 +26,8 @@ beforeEach(() => {
         { id: "TON", symbol: "TON", name: "Toncoin", type: "crypto" as const, logoUrl: null, createdAt: 0, updatedAt: 0 },
         { id: "BTC", symbol: "BTC", name: "Bitcoin", type: "crypto" as const, logoUrl: null, createdAt: 0, updatedAt: 0 },
       ]),
+      catalog: () => ok([]),
+      register: () => ok({ id: "", symbol: "", name: "", type: "crypto" as const, createdAt: 0, updatedAt: 0 }),
     },
     portfolio: {
       getSummary: () => ok({ totalValueEur: 0, totalInvestedEur: 0, unrealizedGainEur: 0, unrealizedGainPercentage: 0, valuationStatus: "complete" as const, valuedAssets: 0, unavailableAssets: 0, lastSuccessfulPriceAt: null }),

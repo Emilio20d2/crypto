@@ -257,7 +257,7 @@ function ReglaVentaCard({ rule, onDelete }: { rule: PartialSaleRule; onDelete: (
     queryFn: () => unwrap(window.cryptoControl.partialSaleRules.evaluate({ cycleId: rule.cycleId, assetId: rule.assetId })),
     staleTime: 30_000,
   });
-  const evaluation = evalQ.data?.find(e => e.rule.id === rule.id);
+  const evaluation = Array.isArray(evalQ.data) ? evalQ.data.find(e => e.rule.id === rule.id) : undefined;
 
   return (
     <article className="substitution-card">

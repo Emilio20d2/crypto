@@ -304,6 +304,13 @@ function AddAssetForm({
   const qc = useQueryClient();
   const [assetId, setAssetId] = useState(catalog[0]?.id ?? "");
   const [allocationMode, setAllocationMode] = useState<AllocationMode>("porcentaje");
+
+  // Sync assetId when catalog loads after first render (async query)
+  useEffect(() => {
+    if (!assetId && catalog.length > 0) {
+      setAssetId(catalog[0].id);
+    }
+  }, [catalog, assetId]);
   const [percentage, setPercentage] = useState("");
   const [fixedAmount, setFixedAmount] = useState("");
   const [accumulationType, setAccumulationType] = useState<AccumulationType>("continua");
@@ -879,7 +886,7 @@ export function PlanEtapaActivos({
     staleTime: 300_000,
   });
   const catalog: CatalogAsset[] = catalogQ.data ?? globalAssets.map(a => ({
-    ...a, inDb: true, supportedProviders: [], hasCoinbase: false,
+    ...a, logoUrl: a.logoUrl ?? null, inDb: true, supportedProviders: [], hasCoinbase: false,
   }));
 
   const cycleAssetsQ = useQuery({

@@ -76,7 +76,7 @@ describe("Fiscalidad", () => {
   beforeEach(() => {
     // Ensure window.cryptoControl baseline exists (from App.test.tsx pattern)
     window.cryptoControl = {
-      assets: { list: async () => ({ ok: true as const, data: [] }) },
+      assets: { list: async () => ({ ok: true as const, data: [] }), catalog: async () => ({ ok: true as const, data: [] }), register: async () => ({ ok: true as const, data: { id: "", symbol: "", name: "", type: "crypto" as const, createdAt: 0, updatedAt: 0 } }) },
       market: {
         getCurrentPrice: async () => ({ ok: true as const, data: { price: 0, state: "live" as const, provider: "mock", fetchedAt: 0 } }),
         getHistoricalPrices: async () => ({ ok: true as const, data: { provider: "mock", points: [], requestedPeriod: "24h", actualInterval: "1h", fetchedAt: 0, isCached: false } }),

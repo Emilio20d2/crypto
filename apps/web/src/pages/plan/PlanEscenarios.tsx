@@ -65,7 +65,8 @@ export function PlanEscenarios() {
   const simData = simQuery.data as any;
   if (!simData) return null;
 
-  const activeScenario = simData.scenarios?.find((s: any) => s.scenario === selectedScenario);
+  const scenarios = Array.isArray(simData?.scenarios) ? simData.scenarios : [];
+  const activeScenario = scenarios.find((s: any) => s.scenario === selectedScenario);
   const sum = activeScenario?.summary;
 
   return (

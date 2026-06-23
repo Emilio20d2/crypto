@@ -20,7 +20,7 @@ function setupMock(opts: { assets?: any[]; fearGreedOk?: boolean; fearGreedFallb
   ];
 
   window.cryptoControl = {
-    assets: { list: async () => ({ ok: true as const, data: assets }) },
+    assets: { list: async () => ({ ok: true as const, data: assets }), catalog: async () => ({ ok: true as const, data: [] }), register: async () => ({ ok: true as const, data: { id: "", symbol: "", name: "", type: "crypto" as const, createdAt: 0, updatedAt: 0 } }) },
     market: {
       getCurrentPrice: async () => ({ ok: true as const, data: { price: 50000, state: "live" as const, provider: opts.overviewProvider ?? "coinbase", fetchedAt: Date.now() } }),
       getHistoricalPrices: async () => ({ ok: true as const, data: { provider: opts.historyProvider ?? "coinbase", points: [], requestedPeriod: "24h", actualInterval: "1h", fetchedAt: Date.now(), isCached: false } }),

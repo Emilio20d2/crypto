@@ -5,7 +5,9 @@ import App from './App';
 beforeEach(() => {
   window.cryptoControl = {
     assets: {
-      list: async () => ({ ok: true as const, data: [] })
+      list: async () => ({ ok: true as const, data: [] }),
+      catalog: async () => ({ ok: true as const, data: [] }),
+      register: async () => ({ ok: true as const, data: { id: "", symbol: "", name: "", type: "crypto" as const, createdAt: 0, updatedAt: 0 } }),
     },
     market: {
       getCurrentPrice: async () => ({

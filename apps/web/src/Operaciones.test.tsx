@@ -18,7 +18,9 @@ const mockAPI = () => {
           { id: "BTC", symbol: "BTC", name: "Bitcoin", type: "crypto" as const, createdAt: 0, updatedAt: 0 },
           { id: "ETH", symbol: "ETH", name: "Ethereum", type: "crypto" as const, createdAt: 0, updatedAt: 0 }
         ]
-      })
+      }),
+      catalog: async () => ({ ok: true as const, data: [] }),
+      register: async () => ({ ok: true as const, data: { id: "", symbol: "", name: "", type: "crypto" as const, createdAt: 0, updatedAt: 0 } }),
     },
     market: {
       getCurrentPrice: async () => ({ ok: true as const, data: { price: 50000, state: "live" as const, provider: "mock", fetchedAt: Date.now() } }),
