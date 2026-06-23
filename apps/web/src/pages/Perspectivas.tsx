@@ -220,7 +220,7 @@ function AnnualTable({ snapshots }: { snapshots: AnnualSnapshot[] }) {
 
   return (
     <div className="space-y-2">
-      <div className="responsive-table">
+      <div className="responsive-table persp-table">
         <table>
           <thead>
             <tr>
@@ -290,7 +290,7 @@ function YearDetail({ snap }: { snap: AnnualSnapshot }) {
       {positions.length > 0 && (
         <div>
           <h4 className="text-sm font-semibold mb-2">Posiciones a cierre de {snap.year}</h4>
-          <div className="responsive-table">
+          <div className="responsive-table persp-table">
             <table>
               <thead>
                 <tr>
@@ -374,7 +374,7 @@ function YearDetail({ snap }: { snap: AnnualSnapshot }) {
 function ScenarioComparison({ simData }: { simData: PerspectivesSimulation }) {
   return (
     <div className="space-y-2">
-      <div className="responsive-table">
+      <div className="responsive-table persp-table">
         <table>
           <thead>
             <tr>
@@ -640,65 +640,65 @@ export function Perspectivas() {
         <Validations items={simData.validations} />
 
         {/* KPI summary */}
-        <div className="fiscal-summary-grid">
-          <div className="ui-card stat-card fiscal-stat-card">
-            <div className="ui-card-header"><h3 className="ui-card-title">Patrimonio inicial</h3></div>
-            <div className="ui-card-content"><strong>{fmt(sum.initialWealthEur)}</strong></div>
+        <div className="persp-kpi-grid">
+          <div className="persp-kpi">
+            <span className="persp-kpi-label">Patrimonio inicial</span>
+            <span className="persp-kpi-value">{fmt(sum.initialWealthEur)}</span>
           </div>
-          <div className={`ui-card stat-card fiscal-stat-card${sum.finalNetWealthEur >= sum.initialWealthEur ? " fiscal-stat-positive" : " fiscal-stat-negative"}`}>
-            <div className="ui-card-header"><h3 className="ui-card-title">Patrimonio final neto</h3></div>
-            <div className="ui-card-content"><strong>{fmt(sum.finalNetWealthEur)}</strong></div>
+          <div className={`persp-kpi ${sum.finalNetWealthEur >= sum.initialWealthEur ? "kpi-pos" : "kpi-neg"}`}>
+            <span className="persp-kpi-label">Patrimonio final neto</span>
+            <span className="persp-kpi-value">{fmt(sum.finalNetWealthEur)}</span>
           </div>
-          <div className="ui-card stat-card fiscal-stat-card">
-            <div className="ui-card-header"><h3 className="ui-card-title">Capital aportado</h3></div>
-            <div className="ui-card-content"><strong>{fmt(sum.totalContributionsEur)}</strong></div>
+          <div className="persp-kpi">
+            <span className="persp-kpi-label">Capital aportado</span>
+            <span className="persp-kpi-value">{fmt(sum.totalContributionsEur)}</span>
           </div>
-          <div className={`ui-card stat-card fiscal-stat-card${beneficioNetoEur >= 0 ? " fiscal-stat-positive" : " fiscal-stat-negative"}`}>
-            <div className="ui-card-header"><h3 className="ui-card-title">Beneficio neto estimado</h3></div>
-            <div className="ui-card-content"><strong>{fmtSign(beneficioNetoEur)}</strong></div>
+          <div className={`persp-kpi ${beneficioNetoEur >= 0 ? "kpi-pos" : "kpi-neg"}`}>
+            <span className="persp-kpi-label">Beneficio neto est.</span>
+            <span className="persp-kpi-value">{fmtSign(beneficioNetoEur)}</span>
           </div>
-          <div className={`ui-card stat-card fiscal-stat-card${(sum.totalMarketGainEur ?? 0) >= 0 ? " fiscal-stat-positive" : " fiscal-stat-negative"}`}>
-            <div className="ui-card-header"><h3 className="ui-card-title">Resultado de mercado</h3></div>
-            <div className="ui-card-content"><strong>{fmtSign(sum.totalMarketGainEur)}</strong></div>
+          <div className={`persp-kpi ${(sum.totalMarketGainEur ?? 0) >= 0 ? "kpi-pos" : "kpi-neg"}`}>
+            <span className="persp-kpi-label">Resultado mercado</span>
+            <span className="persp-kpi-value">{fmtSign(sum.totalMarketGainEur)}</span>
           </div>
           {sum.totalSalesEur > 0 && (
-            <div className="ui-card stat-card fiscal-stat-card fiscal-stat-warning">
-              <div className="ui-card-header"><h3 className="ui-card-title">Ventas parciales ⓘ</h3></div>
-              <div className="ui-card-content"><strong>{fmt(sum.totalSalesEur)}</strong></div>
+            <div className="persp-kpi kpi-warn">
+              <span className="persp-kpi-label">Ventas parciales ⓘ</span>
+              <span className="persp-kpi-value">{fmt(sum.totalSalesEur)}</span>
             </div>
           )}
           {sum.totalRebuysEur > 0 && (
-            <div className="ui-card stat-card fiscal-stat-card fiscal-stat-positive">
-              <div className="ui-card-header"><h3 className="ui-card-title">Recompras ⓘ</h3></div>
-              <div className="ui-card-content"><strong>{fmt(sum.totalRebuysEur)}</strong></div>
+            <div className="persp-kpi kpi-pos">
+              <span className="persp-kpi-label">Recompras ⓘ</span>
+              <span className="persp-kpi-value">{fmt(sum.totalRebuysEur)}</span>
             </div>
           )}
           {sum.totalTaxEur > 0 && (
-            <div className="ui-card stat-card fiscal-stat-card fiscal-stat-warning">
-              <div className="ui-card-header"><h3 className="ui-card-title">Impuesto estimado</h3></div>
-              <div className="ui-card-content"><strong>{fmt(sum.totalTaxEur)}</strong></div>
+            <div className="persp-kpi kpi-warn">
+              <span className="persp-kpi-label">Impuesto estimado</span>
+              <span className="persp-kpi-value">{fmt(sum.totalTaxEur)}</span>
             </div>
           )}
           {(lastSnap?.fiscalReserveEur ?? 0) > 0 && (
-            <div className="ui-card stat-card fiscal-stat-card fiscal-stat-warning">
-              <div className="ui-card-header"><h3 className="ui-card-title">Reserva fiscal final</h3></div>
-              <div className="ui-card-content"><strong>{fmt(lastSnap?.fiscalReserveEur)}</strong></div>
+            <div className="persp-kpi kpi-warn">
+              <span className="persp-kpi-label">Reserva fiscal</span>
+              <span className="persp-kpi-value">{fmt(lastSnap?.fiscalReserveEur)}</span>
             </div>
           )}
           {(lastSnap?.eurcFreeEur ?? 0) > 1 && (
-            <div className="ui-card stat-card fiscal-stat-card">
-              <div className="ui-card-header"><h3 className="ui-card-title">EURC pendiente</h3></div>
-              <div className="ui-card-content"><strong>{fmt(lastSnap?.eurcFreeEur)}</strong></div>
+            <div className="persp-kpi">
+              <span className="persp-kpi-label">EURC pendiente</span>
+              <span className="persp-kpi-value">{fmt(lastSnap?.eurcFreeEur)}</span>
             </div>
           )}
-          <div className={`ui-card stat-card fiscal-stat-card${(sum.xirr ?? 0) >= 0 ? " fiscal-stat-positive" : " fiscal-stat-negative"}`}>
-            <div className="ui-card-header"><h3 className="ui-card-title">XIRR anual</h3></div>
-            <div className="ui-card-content"><strong>{fmtPct(sum.xirr)}</strong></div>
+          <div className={`persp-kpi ${(sum.xirr ?? 0) >= 0 ? "kpi-pos" : "kpi-neg"}`}>
+            <span className="persp-kpi-label">XIRR anual</span>
+            <span className="persp-kpi-value">{fmtPct(sum.xirr)}</span>
           </div>
           {sum.maxDrawdownPct != null && (
-            <div className="ui-card stat-card fiscal-stat-card fiscal-stat-negative">
-              <div className="ui-card-header"><h3 className="ui-card-title">Drawdown máximo</h3></div>
-              <div className="ui-card-content"><strong>−{(sum.maxDrawdownPct * 100).toFixed(1)}%</strong></div>
+            <div className="persp-kpi kpi-neg">
+              <span className="persp-kpi-label">Drawdown máx.</span>
+              <span className="persp-kpi-value">−{(sum.maxDrawdownPct * 100).toFixed(1)}%</span>
             </div>
           )}
         </div>

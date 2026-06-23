@@ -4342,6 +4342,64 @@ dd {
 .fiscal-stat-negative strong { color: var(--color-danger); }
 .fiscal-stat-warning strong  { color: var(--color-warning); }
 
+/* ─── Perspectivas: KPI compactas ──────────────────────────────────────────── */
+
+.persp-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 6px;
+}
+
+.persp-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--border-color);
+  min-width: 0;
+}
+.persp-kpi.kpi-pos { border-left-color: var(--color-sage); background: var(--color-sage-tint); }
+.persp-kpi.kpi-neg { border-left-color: var(--color-danger); background: #fff5f5; }
+.persp-kpi.kpi-warn { border-left-color: var(--color-amber); background: var(--color-amber-tint); }
+
+.persp-kpi-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  line-height: 1.2;
+}
+.persp-kpi-value {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.persp-kpi.kpi-pos .persp-kpi-value { color: var(--color-success-text); }
+.persp-kpi.kpi-neg .persp-kpi-value { color: var(--color-danger); }
+.persp-kpi.kpi-warn .persp-kpi-value { color: var(--color-warning); }
+
+/* ─── Perspectivas: tabla sin table-layout fixed ────────────────────────────── */
+
+.persp-table table {
+  table-layout: auto !important;
+}
+.persp-table th,
+.persp-table td {
+  white-space: nowrap;
+}
+.persp-table th.wrap,
+.persp-table td.wrap {
+  white-space: normal;
+  min-width: 90px;
+}
+
 .fiscal-tax-note {
   font-size: 12px;
   color: var(--text-muted);
