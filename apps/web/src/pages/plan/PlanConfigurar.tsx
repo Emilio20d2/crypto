@@ -187,7 +187,10 @@ function NewCycleForm({
     mutationFn: (data: Parameters<typeof window.cryptoControl.investmentCycles.create>[0]) =>
       unwrap(window.cryptoControl.investmentCycles.create(data)),
     onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["investment-cycles"] });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["investment-cycles"] }),
+        qc.invalidateQueries({ queryKey: ["persp2:getSimulation"] }),
+      ]);
       onSuccess();
     },
   });
@@ -461,6 +464,7 @@ function CycleDetailForm({ cycle }: { cycle: InvestmentCycle }) {
       await Promise.all([
         qc.invalidateQueries({ queryKey: ["investment-cycles"] }),
         qc.invalidateQueries({ queryKey: ["investment-plan"] }),
+        qc.invalidateQueries({ queryKey: ["persp2:getSimulation"] }),
       ]);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
@@ -470,7 +474,10 @@ function CycleDetailForm({ cycle }: { cycle: InvestmentCycle }) {
   const deleteCycle = useMutation({
     mutationFn: () => unwrap(window.cryptoControl.investmentCycles.delete(cycle.id)),
     onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["investment-cycles"] });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["investment-cycles"] }),
+        qc.invalidateQueries({ queryKey: ["persp2:getSimulation"] }),
+      ]);
       navigate("/plan-inversion/configurar");
     },
   });

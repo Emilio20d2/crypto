@@ -613,7 +613,8 @@ export function Perspectivas() {
       const sim = result.data as PerspectivesSimulation;
       return sim;
     },
-    staleTime: 5 * 60 * 1000,
+    staleTime: 0,
+    refetchOnMount: "always",
     refetchOnWindowFocus: false,
   });
 

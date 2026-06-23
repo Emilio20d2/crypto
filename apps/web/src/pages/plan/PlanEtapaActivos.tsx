@@ -930,12 +930,17 @@ export function PlanEtapaActivos({
     return { balance: pos.balance, currentValueEur, currentWeightPct };
   }
 
-  const invalidateAssets = () => qc.invalidateQueries({ queryKey: ["investment-assets"] });
+  const invalidateSimulation = () => qc.invalidateQueries({ queryKey: ["persp2:getSimulation"] });
+  const invalidateAssets = async () => {
+    await qc.invalidateQueries({ queryKey: ["investment-assets"] });
+    void invalidateSimulation();
+  };
   const invalidateAll = async () => {
     await Promise.all([
       qc.invalidateQueries({ queryKey: ["investment-assets"] }),
       qc.invalidateQueries({ queryKey: ["strategy-revisions"] }),
     ]);
+    void invalidateSimulation();
   };
 
   const updateAsset = useMutation({
