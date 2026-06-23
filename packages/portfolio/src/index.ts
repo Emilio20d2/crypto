@@ -16,3 +16,13 @@ export * from "./rebuy-engine";
 export * from "./plan-monitoring";
 export * from "./smart-buy-engine";
 export * from "./projection-engine";
+// perspectives exports — selective to avoid naming conflicts with plan-substitutions
+export type {
+  SimScenario, AssetTier, SimLot, AssetSimState, MonthlyState,
+  AnnualSnapshot, AnnualAssetPosition, SimEvent, SimEventType,
+  ScenarioResult, ScenarioSummary, AssetSimSummary,
+  PerspectivesSimulation, CurrentPosition, HistoricalLot,
+  SimInput, SimCycle, SimCycleAsset, SimSaleRule, SimRebuyTier,
+  SimSubstitution, SimRevision, SimOptions, TaxBand, PricePoint,
+} from "./perspectives";
+export { SIM_SCENARIOS, SCENARIO_LABELS, DEFAULT_SPANISH_TAX_BANDS, DEFAULT_SIM_OPTIONS, buildPricePath, buildPriceMap, monthKey, runPerspectivesSimulation } from "./perspectives";

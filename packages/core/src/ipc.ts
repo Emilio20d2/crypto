@@ -519,6 +519,9 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
     getConsolidatedSnapshot: () => Promise<Result<PlanConsolidatedSnapshot>>;
     getProjection: (input?: { horizonYears?: number; complianceRate?: number; simulationPolicy?: string }) => Promise<Result<ProjectionResult>>;
   };
+  persp2: {
+    getSimulation: (input?: { horizonYears?: number; policy?: "plan_base" | "full_strategy" }) => Promise<Result<unknown>>;
+  };
   smartBuy: {
     getRecommendation: (input: { cycleId: string; amount: number; mode?: SmartBuyMode; originType?: "cash" | "eurc"; weights?: { planPct?: number; balancePct?: number; opportunityPct?: number; potentialPct?: number }; horizon?: "1-3y" | "3-5y" | "5y+" }) => Promise<Result<SmartBuyRecommendation>>;
   };

@@ -142,13 +142,9 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
     strategicDecisions: {
       getCycleReport: (i: unknown) =>           ipc("strategicDecisions:getCycleReport", i),
     },
-    perspectives: {
-      getGoals:    () =>                        ipc("perspectives:getGoals"),
-      createGoal:  (d: unknown) =>              ipc("perspectives:createGoal", d),
-      updateGoal:  (id: unknown, d: unknown) => ipc("perspectives:updateGoal", id, d),
-      deleteGoal:  (id: unknown) =>             ipc("perspectives:deleteGoal", id),
-      getConsolidatedSnapshot: () =>            ipc("perspectives:getConsolidatedSnapshot"),
-      getProjection: (i?: unknown) =>           ipc("perspectives:getProjection", i),
+    persp2: {
+      getSimulation: (input?: { horizonYears?: number; policy?: string }) =>
+        ipc("persp2:getSimulation", input),
     },
     smartBuy: {
       getRecommendation: (input: unknown) => ipc("smartBuy:getRecommendation", input),

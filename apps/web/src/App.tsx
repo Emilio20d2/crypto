@@ -8,10 +8,10 @@ import { Mercado } from "./pages/Mercado";
 import { Operaciones } from "./pages/Operaciones";
 import { AssetDetail } from "./pages/AssetDetail";
 import { Configuracion } from "./pages/Configuracion";
-import { Perspectivas } from "./pages/Perspectivas";
 import { Fiscalidad } from "./pages/Fiscalidad";
 import { PlanInversion } from "./pages/PlanInversion";
 import { Tesoreria } from "./pages/Tesoreria";
+import { Perspectivas } from "./pages/Perspectivas";
 
 const queryClient = new QueryClient({
   defaultOptions: {

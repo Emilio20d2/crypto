@@ -4357,6 +4357,200 @@ function setupIpcHandlers() {
     };
   }));
 
+  // --- PERSPECTIVAS v2: motor de simulación mensual por activo (nuevo desde cero) ---
+
+  ipcMain.handle("persp2:getSimulation", withResult(async (_, input?: {
+    horizonYears?: number;
+    policy?: "plan_base" | "full_strategy";
+  }) => {
+    const { runPerspectivesSimulation, DEFAULT_SPANISH_TAX_BANDS } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    const now = Date.now();
+    const horizonYears = Math.min(Math.max(input?.horizonYears ?? 10, 1), 30);
+    const horizonDate = now + horizonYears * 365.25 * 24 * 3600 * 1000;
+
+    // Read active plan + cycles
+    const planRows = db.select().from(schema.investmentPlans)
+      .where(eq(schema.investmentPlans.status, "active"))
+      .orderBy(asc(schema.investmentPlans.createdAt))
+      .all();
+    if (planRows.length === 0) throw new Error("No hay un plan de inversión activo.");
+    const planIds = planRows.map(p => p.id);
+
+    const cycleRows = db.select().from(schema.investmentCycles)
+      .where(inArray(schema.investmentCycles.planId, planIds))
+      .orderBy(asc(schema.investmentCycles.startDate), asc(schema.investmentCycles.priority))
+      .all()
+      .filter(c => c.status === "active" || c.status === "planned");
+    const cycleIds = cycleRows.map(c => c.id);
+
+    const allAssetRows = cycleIds.length > 0
+      ? db.select().from(schema.investmentAssets)
+        .where(inArray(schema.investmentAssets.cycleId, cycleIds))
+        .all()
+      : [];
+
+    const saleRuleRows = cycleIds.length > 0
+      ? db.select().from(schema.partialSaleRules)
+        .where(inArray(schema.partialSaleRules.cycleId, cycleIds))
+        .all()
+      : [];
+
+    const rebuyTierRows = cycleIds.length > 0
+      ? db.select().from(schema.cycleRebuyTiers)
+        .where(inArray(schema.cycleRebuyTiers.cycleId, cycleIds))
+        .all()
+      : [];
+
+    const substitutionRows = cycleIds.length > 0
+      ? db.select().from(schema.assetSubstitutions)
+        .where(inArray(schema.assetSubstitutions.cycleId, cycleIds))
+        .all()
+        .filter(r => r.status === "programada" && r.toAssetId != null)
+      : [];
+
+    const revisionRows = cycleIds.length > 0
+      ? db.select().from(schema.strategyRevisions)
+        .where(inArray(schema.strategyRevisions.cycleId, cycleIds))
+        .orderBy(asc(schema.strategyRevisions.effectiveDate))
+        .all()
+        .filter(r => r.effectiveDate > now)
+      : [];
+
+    // Build SimCycles
+    const cycles = cycleRows.map(c => ({
+      id: c.id,
+      planId: c.planId,
+      name: c.name,
+      startDate: c.startDate,
+      endDate: c.endDate ?? null,
+      monthlyAmountEur: c.monthlyAmountEur,
+      assets: allAssetRows
+        .filter(a => a.cycleId === c.id)
+        .map(a => ({
+          id: a.id,
+          assetId: a.assetId,
+          allocationType: (a.allocationType ?? "percentage") as "percentage" | "amount",
+          allocationValue: a.allocationValue ?? 0,
+          allocationPercentage: a.allocationPercentage ?? null,
+          fixedAmountEur: a.fixedAmountEur ?? null,
+          targetAmount: a.targetAmount ?? null,
+          targetValueEur: a.targetValueEur ?? null,
+          startDate: a.startDate ?? c.startDate,
+          endDate: a.endDate ?? null,
+          status: (a.status ?? "active") as "active" | "paused" | "closed" | "goal_reached",
+        })),
+      saleRules: saleRuleRows
+        .filter(r => r.cycleId === c.id)
+        .map(r => ({
+          id: r.id,
+          assetId: r.assetId ?? null,
+          triggerType: (r.conditionType ?? "gain_multiple") as "gain_multiple" | "price_target" | "portfolio_weight",
+          triggerValue: r.conditionValue ?? 0,
+          sellPercentage: r.sellPercentage,
+          status: (r.status === "activa" ? "active" : "cancelled") as "active" | "pending" | "triggered" | "cancelled",
+          triggeredAt: r.lastTriggeredAt ?? null,
+        })),
+      rebuyTiers: rebuyTierRows
+        .filter(r => r.cycleId === c.id)
+        .map(r => ({
+          id: r.id,
+          assetId: r.assetId ?? null,
+          drawdownPercentage: r.drawdownPercentage,
+          usagePercentage: r.usagePercentage,
+          referenceType: (r.referenceType === "last_sale" ? "last_sale" : r.referenceType === "cycle_peak" ? "cycle_peak" : null) as "last_sale" | "cycle_peak" | null,
+          status: (r.status === "activa" ? "active" : "cancelled") as "active" | "triggered" | "cancelled",
+        })),
+      substitutions: substitutionRows
+        .filter(r => r.cycleId === c.id)
+        .map(r => ({
+          id: r.id,
+          fromAssetId: r.fromAssetId,
+          toAssetId: r.toAssetId!,
+          effectiveDate: r.effectiveDate,
+          status: "pending" as const,
+        })),
+      revisions: revisionRows
+        .filter(r => r.cycleId === c.id)
+        .map(r => ({
+          id: r.id,
+          effectiveDate: r.effectiveDate,
+          changesJson: r.changesJson ?? "{}",
+        })),
+    }));
+
+    // Read current portfolio positions + lots
+    const portfolioService = getPortfolioService();
+    const portfolioPositions = (await portfolioService.getPositions()).positions as Record<string, {
+      balance: number; averagePriceEur: number | null; totalInvestedEur: number;
+    }>;
+
+    const lotRows = db.select().from(schema.lots)
+      .orderBy(asc(schema.lots.date))
+      .all()
+      .filter(l => l.remainingAmount != null && l.remainingAmount > 0);
+
+    const investablePositionIds = Object.entries(portfolioPositions)
+      .filter(([assetId, pos]) => isInvestableAsset(assetId) && pos.balance > 1e-12)
+      .map(([assetId]) => assetId);
+
+    const allSimAssetIds = Array.from(new Set([
+      ...investablePositionIds,
+      ...allAssetRows.map(a => a.assetId).filter(isInvestableAsset),
+    ]));
+
+    // Fetch current prices
+    const prices: Record<string, number | null> = {};
+    await Promise.all(allSimAssetIds.map(async (assetId) => {
+      const r = await getSnapshotPrice(assetId);
+      prices[assetId] = finiteOrNull(r.price);
+    }));
+
+    const currentPositions = investablePositionIds.map(assetId => ({
+      assetId,
+      balance: portfolioPositions[assetId]?.balance ?? 0,
+      avgCostEur: finiteOrNull(portfolioPositions[assetId]?.averagePriceEur ?? null),
+      currentPriceEur: prices[assetId] ?? null,
+    }));
+
+    const currentLots = lotRows
+      .filter(l => isInvestableAsset(l.assetId))
+      .map(l => ({
+        id: l.id,
+        assetId: l.assetId,
+        date: l.date,
+        remainingAmount: l.remainingAmount ?? 0,
+        unitAcquisitionPriceEur: l.unitAcquisitionPriceEur ?? 0,
+      }));
+
+    const historicalCapitalEur = investablePositionIds.reduce(
+      (s, id) => s + (portfolioPositions[id]?.totalInvestedEur ?? 0), 0
+    );
+
+    const treasurySummary = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance());
+    const eurcFree = Math.max(0, (treasurySummary?.eurcBalance ?? 0) - (treasurySummary?.fiscalReserveBalance ?? 0));
+    const eurcFiscalReserve = treasurySummary?.fiscalReserveBalance ?? 0;
+    const eurCash = treasurySummary?.cashBalance ?? 0;
+
+    const simInput = {
+      now,
+      horizonDate,
+      currentPositions,
+      currentLots,
+      eurcFree,
+      eurcFiscalReserve,
+      eurCash,
+      historicalCapitalEur,
+      cycles,
+      options: {
+        policy: (input?.policy ?? "full_strategy") as "plan_base" | "full_strategy",
+        commissionRate: 0.004,
+        taxBands: DEFAULT_SPANISH_TAX_BANDS,
+      },
+    };
+
+    return runPerspectivesSimulation(simInput);
+  }));
+
   // --- COMPRA INTELIGENTE: recomendación explicable sin ejecución automática ---
 
   ipcMain.handle("smartBuy:getRecommendation", withResult(async (_, input: {
