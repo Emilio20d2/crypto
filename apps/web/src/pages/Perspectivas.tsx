@@ -283,86 +283,142 @@ function AnnualTable({ snapshots }: { snapshots: AnnualSnapshot[] }) {
 // ─── Year detail section ──────────────────────────────────────────────────────
 
 function YearDetail({ snap }: { snap: AnnualSnapshot }) {
+  const [eventsOpen, setEventsOpen] = useState(false);
   const positions = Object.values(snap.positions).filter(p => p.balance > 0 || p.failed);
 
   return (
-    <div className="space-y-4">
-      {positions.length > 0 && (
-        <div>
-          <h4 className="text-sm font-semibold mb-2">Posiciones a cierre de {snap.year}</h4>
-          <div className="responsive-table persp-table">
-            <table>
-              <thead>
-                <tr>
-                  <th>Activo</th>
-                  <th className="num">Saldo</th>
-                  <th className="num">Precio</th>
-                  <th className="num">Valor</th>
-                  <th className="num">G/P lat.</th>
-                  <th className="num">Estado</th>
-                </tr>
-              </thead>
-              <tbody>
-                {positions.map(p => (
-                  <tr key={p.assetId}>
-                    <td><span className="font-mono font-semibold text-xs">{p.assetId.toUpperCase()}</span></td>
-                    <td className="num font-mono text-xs">{p.balance.toPrecision(4)}</td>
-                    <td className="num">{fmt(p.priceEur)}</td>
-                    <td className="num" style={{ fontWeight: 600 }}>{fmt(p.valueEur)}</td>
-                    <td className={`num ${(p.unrealizedGainEur ?? 0) >= 0 ? "text-gain" : "text-loss"}`}>
-                      {p.unrealizedGainEur != null ? fmtSign(p.unrealizedGainEur) : "—"}
-                    </td>
-                    <td className="num">
-                      {p.failed
-                        ? <Badge variant="danger">Fallido</Badge>
-                        : p.goalReached
-                          ? <Badge variant="success">Objetivo</Badge>
-                          : <Badge variant="neutral">Activo</Badge>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+    <div className="space-y-3">
+      {/* Flujos del año */}
+      <div className="persp-kpi-grid">
+        <div className="persp-kpi">
+          <span className="persp-kpi-label">Apertura neta</span>
+          <span className="persp-kpi-value">{fmt(snap.openingWealthEur)}</span>
+        </div>
+        <div className="persp-kpi">
+          <span className="persp-kpi-label">Aportaciones</span>
+          <span className="persp-kpi-value">{fmt(snap.contributionsEur)}</span>
+        </div>
+        <div className={`persp-kpi ${snap.marketGainEur >= 0 ? "kpi-pos" : "kpi-neg"}`}>
+          <span className="persp-kpi-label">Resultado mercado</span>
+          <span className="persp-kpi-value">{fmtSign(snap.marketGainEur)}</span>
+        </div>
+        <div className={`persp-kpi ${snap.closingWealthEur >= snap.openingWealthEur ? "kpi-pos" : "kpi-neg"}`}>
+          <span className="persp-kpi-label">Cierre neto</span>
+          <span className="persp-kpi-value">{fmt(snap.closingWealthEur)}</span>
+        </div>
+        {snap.annualReturnPct != null && (
+          <div className={`persp-kpi ${snap.annualReturnPct >= 0 ? "kpi-pos" : "kpi-neg"}`}>
+            <span className="persp-kpi-label">TWR anual</span>
+            <span className="persp-kpi-value">{fmtAnnualPct(snap.annualReturnPct)}</span>
           </div>
+        )}
+        {snap.salesEur > 0 && (
+          <div className="persp-kpi kpi-warn">
+            <span className="persp-kpi-label">Ventas ⓘ</span>
+            <span className="persp-kpi-value">{fmt(snap.salesEur)}</span>
+          </div>
+        )}
+        {snap.rebuysEur > 0 && (
+          <div className="persp-kpi kpi-pos">
+            <span className="persp-kpi-label">Recompras ⓘ</span>
+            <span className="persp-kpi-value">{fmt(snap.rebuysEur)}</span>
+          </div>
+        )}
+        {snap.taxEur > 0 && (
+          <div className="persp-kpi kpi-warn">
+            <span className="persp-kpi-label">Impuesto</span>
+            <span className="persp-kpi-value">{fmt(snap.taxEur)}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Tesorería */}
+      {(snap.eurcFreeEur > 0.01 || snap.fiscalReserveEur > 0.01 || snap.eurCashEur > 0.01) && (
+        <div className="persp-kpi-grid">
+          {snap.eurcFreeEur > 0.01 && (
+            <div className="persp-kpi">
+              <span className="persp-kpi-label">EURC libre</span>
+              <span className="persp-kpi-value">{fmt(snap.eurcFreeEur)}</span>
+            </div>
+          )}
+          {snap.fiscalReserveEur > 0.01 && (
+            <div className="persp-kpi kpi-warn">
+              <span className="persp-kpi-label">Reserva fiscal</span>
+              <span className="persp-kpi-value">{fmt(snap.fiscalReserveEur)}</span>
+            </div>
+          )}
+          {snap.eurCashEur > 0.01 && (
+            <div className="persp-kpi">
+              <span className="persp-kpi-label">Cash EUR</span>
+              <span className="persp-kpi-value">{fmt(snap.eurCashEur)}</span>
+            </div>
+          )}
         </div>
       )}
 
-      <div className="fiscal-summary-grid">
-        <div className="ui-card stat-card fiscal-stat-card">
-          <div className="ui-card-header"><h3 className="ui-card-title">EURC libre</h3></div>
-          <div className="ui-card-content"><strong>{fmt(snap.eurcFreeEur)}</strong></div>
+      {/* Posiciones compactas */}
+      {positions.length > 0 && (
+        <div className="responsive-table persp-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Activo</th>
+                <th className="num">Saldo</th>
+                <th className="num">Precio</th>
+                <th className="num">Valor</th>
+                <th className="num">G/P lat.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {positions.map(p => (
+                <tr key={p.assetId}>
+                  <td>
+                    <span className="font-mono font-semibold text-xs">{p.assetId.toUpperCase()}</span>
+                    {p.failed && <Badge variant="danger" style={{ marginLeft: 4 }}>Fallido</Badge>}
+                    {p.goalReached && <Badge variant="success" style={{ marginLeft: 4 }}>Obj.</Badge>}
+                  </td>
+                  <td className="num font-mono text-xs">{p.balance.toPrecision(4)}</td>
+                  <td className="num">{fmt(p.priceEur)}</td>
+                  <td className="num" style={{ fontWeight: 600 }}>{fmt(p.valueEur)}</td>
+                  <td className={`num ${(p.unrealizedGainEur ?? 0) >= 0 ? "text-gain" : "text-loss"}`}>
+                    {p.unrealizedGainEur != null ? fmtSign(p.unrealizedGainEur) : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-        <div className="ui-card stat-card fiscal-stat-card">
-          <div className="ui-card-header"><h3 className="ui-card-title">Reserva fiscal</h3></div>
-          <div className="ui-card-content"><strong>{fmt(snap.fiscalReserveEur)}</strong></div>
-        </div>
-        <div className="ui-card stat-card fiscal-stat-card">
-          <div className="ui-card-header"><h3 className="ui-card-title">Cash EUR</h3></div>
-          <div className="ui-card-content"><strong>{fmt(snap.eurCashEur)}</strong></div>
-        </div>
-      </div>
+      )}
 
+      {/* Eventos colapsables */}
       {snap.events.length > 0 && (
         <div>
-          <h4 className="text-sm font-semibold mb-2">Eventos ({snap.events.length})</h4>
-          <div className="space-y-1 max-h-64 overflow-y-auto">
-            {snap.events.map((ev, i) => (
-              <div key={i} className="flex items-start gap-2 text-xs py-1 border-b border-border/30">
-                <span className="text-muted-foreground shrink-0 font-mono">
-                  {new Date(ev.date).toLocaleDateString("es-ES", { month: "short", year: "numeric" })}
-                </span>
-                <span className="shrink-0">
+          <button
+            type="button"
+            className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+            onClick={() => setEventsOpen(v => !v)}
+          >
+            <span>{eventsOpen ? "▾" : "▸"}</span>
+            <span>{snap.events.length} eventos</span>
+          </button>
+          {eventsOpen && (
+            <div className="mt-1.5 max-h-40 overflow-y-auto space-y-px">
+              {snap.events.map((ev, i) => (
+                <div key={i} className="flex items-center gap-2 text-xs py-1 border-b border-border/20">
+                  <span className="text-muted-foreground shrink-0 font-mono w-16">
+                    {new Date(ev.date).toLocaleDateString("es-ES", { month: "short", year: "2-digit" })}
+                  </span>
                   <Badge variant={EVENT_BADGE_VARIANT[ev.type] ?? "neutral"}>
                     {EVENT_LABELS[ev.type] ?? ev.type}
                   </Badge>
-                </span>
-                <span className="text-foreground/80 leading-tight">{ev.description}</span>
-                {ev.amountEur != null && (
-                  <span className="ml-auto shrink-0 font-medium">{fmt(ev.amountEur)}</span>
-                )}
-              </div>
-            ))}
-          </div>
+                  <span className="text-foreground/75 truncate">{ev.description}</span>
+                  {ev.amountEur != null && (
+                    <span className="ml-auto shrink-0 font-medium">{fmt(ev.amountEur)}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -512,7 +568,6 @@ export function Perspectivas() {
   const [horizonYears, setHorizonYears] = useState(10);
   const [selectedScenario, setSelectedScenario] = useState<SimScenario>("base");
   const [selectedYear, setSelectedYear] = useState<number | null>(null);
-  const [showDetail, setShowDetail] = useState(false);
   const [showComparison, setShowComparison] = useState(false);
   const [showChart, setShowChart] = useState(true);
 
@@ -706,37 +761,16 @@ export function Perspectivas() {
         {/* Year selector + detail */}
         <Card>
           <CardHeader>
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <CardTitle>Detalle por año</CardTitle>
-              {selectedSnap && (
-                <span className="text-xs text-muted-foreground">
-                  Cierre: <span className="font-semibold text-foreground">{fmt(selectedSnap.closingWealthEur)}</span>
-                  {selectedSnap.annualReturnPct != null && (
-                    <span className={`ml-2 font-medium ${selectedSnap.annualReturnPct >= 0 ? "text-gain" : "text-loss"}`}>
-                      {fmtAnnualPct(selectedSnap.annualReturnPct)}
-                    </span>
-                  )}
-                </span>
-              )}
-            </div>
+            <CardTitle>Detalle por año</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-3">
             <YearSelector
               years={years}
               selected={effectiveYear ?? years[0]}
               onSelect={y => setSelectedYear(y)}
             />
             {selectedSnap && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowDetail(!showDetail)}
-              >
-                {showDetail ? "Ocultar detalle" : "Ver detalle del año"}
-              </Button>
-            )}
-            {showDetail && selectedSnap && (
-              <div className="border-t border-border pt-4">
+              <div className="border-t border-border/50 pt-3">
                 <YearDetail snap={selectedSnap} />
               </div>
             )}
