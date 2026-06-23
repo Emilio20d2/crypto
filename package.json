@@ -1,28 +1,18 @@
 {
-  "name": "crypto-control",
+  "name": "@crypto-control/desktop",
   "version": "0.1.0",
-  "private": true,
-  "description": "Crypto Control - Monorepo",
-  "workspaces": [
-    "apps/*",
-    "packages/*"
-  ],
-  "scripts": {
-    "dev": "npm run rebuild-electron -w @crypto-control/desktop && concurrently -n \"vite,electron\" -c \"cyan,magenta\" \"npm run dev -w web\" \"wait-on tcp:5173 && VITE_DEV_SERVER_URL=http://localhost:5173 npm run dev -w @crypto-control/desktop\"",
-    "build": "npm run build --workspaces --if-present",
-    "pretest": "npm rebuild better-sqlite3",
-    "test": "npm run test --workspaces --if-present",
-    "lint": "npm run lint --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present"
-  },
-  "devDependencies": {
-    "concurrently": "^10.0.3",
-    "electron-builder": "^24.13.3",
-    "playwright-core": "^1.60.0",
-    "typescript": "^5.4.5",
-    "wait-on": "^9.0.10"
-  },
+  "description": "Crypto Control — gestión de cartera cripto con integración Coinbase",
+  "author": "Emilio",
   "dependencies": {
-    "app-builder-bin": "^4.2.0"
+    "@crypto-control/coinbase-sync": "*",
+    "@crypto-control/core": "*",
+    "@crypto-control/database": "*",
+    "@crypto-control/market-data": "*",
+    "7zip-bin": "^5.2.0"
+  },
+  "main": "dist/main.js",
+  "private": true,
+  "devDependencies": {
+    "electron": "^30.5.1"
   }
 }

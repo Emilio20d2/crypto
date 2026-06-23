@@ -58,18 +58,28 @@ describe("calculateSmartBuyAllocation — importe inválido", () => {
 // ── modo plan ─────────────────────────────────────────────────────────────────
 
 describe("calculateSmartBuyAllocation — modo plan", () => {
-  test("sigue el reparto del plan (60/40)", () => {
+  test("cumple el plan y puede corregir infraponderación frente al reparto base", () => {
     const r = calculateSmartBuyAllocation(assets2, positions2, 100, 6_000, "plan", "cash", null);
     const btc = r.recommendations.find(x => x.assetId === "BTC");
     const eth = r.recommendations.find(x => x.assetId === "ETH");
-    expect(btc?.recommendedAmountEur).toBeCloseTo(60);
-    expect(eth?.recommendedAmountEur).toBeCloseTo(40);
+    expect(btc?.baseAmountEur).toBeCloseTo(60);
+    expect(eth?.baseAmountEur).toBeCloseTo(40);
+    expect(btc!.recommendedAmountEur).toBeLessThan(btc!.baseAmountEur);
+    expect(eth!.recommendedAmountEur).toBeGreaterThan(eth!.baseAmountEur);
   });
 
   test("resultado contiene modo y origen", () => {
     const r = calculateSmartBuyAllocation([makeAsset()], {}, 100, null, "plan", "cash", null);
     expect(r.mode).toBe("plan");
     expect(r.originType).toBe("cash");
+  });
+
+  test("una única compra no consume el 100% del importe analizado", () => {
+    const r = calculateSmartBuyAllocation([makeAsset()], { BTC: makePosition() }, 100, 5_000, "plan", "cash", null);
+    expect(r.recommendations[0].recommendedAmountEur).toBeLessThan(100);
+    expect(r.recommendations[0].recommendedPercentage).toBeLessThan(100);
+    expect(r.pendingAmountEur).toBeGreaterThan(0);
+    expect(r.recommendations[0].restrictionsApplied.some(x => /capital sin utilizar/i.test(x))).toBe(true);
   });
 });
 
@@ -89,23 +99,28 @@ describe("calculateSmartBuyAllocation — modo equilibrar", () => {
 // ── activos no elegibles ──────────────────────────────────────────────────────
 
 describe("calculateSmartBuyAllocation — activos no elegibles", () => {
-  test("activo pausado excluido", () => {
+  test("activo pausado queda clasificado y sin importe", () => {
     const assets = [makeAsset({ status: "paused" })];
     const r = calculateSmartBuyAllocation(assets, {}, 100, null, "plan", "cash", null);
-    expect(r.recommendations.length).toBe(0);
-    expect(r.restrictionsApplied.some(x => /activos/i.test(x))).toBe(true);
+    expect(r.recommendations).toHaveLength(1);
+    expect(r.recommendations[0].action).toBe("pausado");
+    expect(r.recommendations[0].recommendedAmountEur).toBe(0);
   });
 
-  test("activo cerrado excluido", () => {
+  test("activo cerrado queda clasificado y sin importe", () => {
     const assets = [makeAsset({ status: "closed" })];
     const r = calculateSmartBuyAllocation(assets, {}, 100, null, "plan", "cash", null);
-    expect(r.recommendations.length).toBe(0);
+    expect(r.recommendations).toHaveLength(1);
+    expect(r.recommendations[0].action).toBe("no_elegible");
+    expect(r.recommendations[0].recommendedAmountEur).toBe(0);
   });
 
-  test("activo retirado excluido", () => {
+  test("activo retirado queda clasificado y sin importe", () => {
     const assets = [makeAsset({ status: "goal_reached" })];
     const r = calculateSmartBuyAllocation(assets, {}, 100, null, "plan", "cash", null);
-    expect(r.recommendations.length).toBe(0);
+    expect(r.recommendations).toHaveLength(1);
+    expect(r.recommendations[0].action).toBe("no_elegible");
+    expect(r.recommendations[0].recommendedAmountEur).toBe(0);
   });
 
   test("objetivo alcanzado excluido de compra normal (cash)", () => {

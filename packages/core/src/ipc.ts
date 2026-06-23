@@ -134,22 +134,47 @@ export interface DiagnosticsReport {
 }
 
 export interface ProjectionScenarioResult {
-  scenario: "conservador" | "base" | "optimista" | "dinamico";
+  scenario: "conservador" | "moderado" | "base" | "favorable" | "muy_favorable" | "optimista" | "dinamico" | "cero";
   label: string;
+  description?: string;
   probability: number | null;
   confidence: number | null;
   summary: {
     initialGrossWealthEur: number;
     finalGrossWealthEur: number;
     finalNetWealthEur: number;
+    historicalCapitalEur: number;
+    totalFutureCapitalEur: number;
     totalCapitalEur: number;
+    estimatedMarketGainEur: number;
+    treasuryInterestEur: number;
+    estimatedFeesEur: number;
+    weightedAnnualReturn: number | null;
     totalRealizedGainEur: number;
     totalUnrealizedGainEur: number;
     totalTaxGeneratedEur: number;
+    totalTaxPendingEur: number;
     finalEurcAvailableEur: number;
     finalCashEur: number;
     finalFiscalReserveEur: number;
+    simulationPolicy?: string;
+    salesZeroExplanation?: string | null;
+    rebuysZeroExplanation?: string | null;
+    hypotheticalSalesCount?: number;
+    hypotheticalRebuysCount?: number;
+    hypotheticalSales?: unknown[];
+    hypotheticalRebuys?: unknown[];
   };
+  hypotheses: Array<{
+    assetId: string;
+    annualGrowthRate: number;
+    volatility: number;
+    correctionDepth: number;
+    source: string | null;
+    hypothesis: string | null;
+    dataQuality: "alta" | "media" | "baja" | null;
+    confidence: number | null;
+  }>;
   chartPoints: Array<{
     date: number;
     grossWealthEur: number;
@@ -160,10 +185,97 @@ export interface ProjectionScenarioResult {
   }>;
   assetResults: Array<{
     assetId: string;
+    initialBalance: number;
+    initialValueEur: number | null;
+    initialAvgCostEur: number | null;
+    balanceBoughtContributions: number;
+    balanceBoughtExtraordinary: number;
+    balanceSold: number;
+    balanceRebought: number;
     finalBalance: number;
+    costContributionsEur: number;
+    costRebuyEur: number;
+    salesProceedsEur: number;
     finalValueEur: number | null;
+    finalPriceEur: number | null;
+    finalAvgCostEur: number | null;
+    unrealizedGainEur: number | null;
     realizedGainEur: number;
+    targetAmount: number | null;
+    targetValueEur: number | null;
     goalReachedProjectedAt: number | null;
+    hypothesis: {
+      annualGrowthRate: number;
+      terminalAnnualRate: number;
+      source: string | null;
+      hypothesis: string | null;
+      dataQuality: "alta" | "media" | "baja" | null;
+      confidence: number | null;
+    } | null;
+    annualPriceTrajectory: Array<{ year: number; priceEur: number }> | null;
+  }>;
+  cycleResults: Array<{
+    cycleId: string;
+    cycleName: string;
+    startDate: number;
+    endDate: number | null;
+    plannedContributionEur: number;
+    simulatedContributionEur: number;
+    extraordinaryContributionEur: number;
+    salesEur: number;
+    rebuysEur: number;
+    taxGeneratedEur: number;
+    eurcGeneratedEur: number;
+    eurcUsedEur: number;
+    buysByAsset: Record<string, number>;
+    goalReachedAssets: string[];
+  }>;
+  goalResults: Array<{
+    id: string;
+    name: string;
+    type: string;
+    targetAmountEur: number;
+    targetDate: number | null;
+    priority: number;
+    currentAssignedEur: number;
+    projectedAssignedEur: number;
+    progress: number;
+    reachedAt: number | null;
+    reachedYear: number | null;
+    isReached: boolean;
+  }>;
+  annualBreakdown: Array<{
+    year: number;
+    inheritedWealthEur: number;
+    contributionsEur: number;
+    salesEur: number;
+    rebuysEur: number;
+    taxEur: number;
+    marketGainEur: number;
+    endWealthEur: number;
+    annualGrowthPct: number | null;
+    eurcAvailableEur: number;
+    fiscalReserveEur: number;
+    scope: "plan" | "extrapol";
+    positions: Record<string, {
+      assetId: string;
+      balance: number;
+      avgCostEur: number | null;
+      priceEur: number | null;
+      valueEur: number | null;
+      unrealizedGainEur: number | null;
+    }>;
+    events: Array<{
+      date: number;
+      type: string;
+      assetId?: string;
+      amountEur?: number;
+      quantity?: number;
+      priceEur?: number;
+      gainEur?: number;
+      taxEur?: number;
+      description: string;
+    }>;
   }>;
 }
 
@@ -173,8 +285,25 @@ export interface ProjectionResult {
     generatedAt: number;
     planId: string;
     planName: string;
+    plans: Array<{
+      id: string;
+      name: string;
+      status: string;
+      baseCurrency: string;
+    }>;
+    cycles: Array<{
+      id: string;
+      planId: string;
+      name: string;
+      startDate: number;
+      endDate: number | null;
+      monthlyAmountEur: number;
+      status: string;
+      assetCount: number;
+    }>;
     historicalCapitalEur: number;
     historicalSalesEur: number;
+    currentPortfolioValueEur: number;
     positionCount: number;
     treasury: {
       cashEur: number;
@@ -202,12 +331,51 @@ export interface ProjectionResult {
   };
   scenarios: ProjectionScenarioResult[];
   comparison: Array<{
-    scenario: "conservador" | "base" | "optimista" | "dinamico";
+    scenario: string;
     label: string;
     finalGrossWealthEur: number;
     finalNetWealthEur: number;
     probability: number | null;
     confidence: number | null;
+  }>;
+  contributionLedger: {
+    generatedAt: number;
+    projectionStartDate: number;
+    horizonDate: number;
+    cycles: Array<{
+      cycleId: string;
+      cycleName: string;
+      planName: string;
+      startDate: number;
+      endDate: number | null;
+      monthlyAmountEur: number;
+      firstMonthIncluded: number | null;
+      lastMonthIncluded: number | null;
+      monthsIncluded: number;
+      totalFutureEur: number;
+    }>;
+    cyclesTotal: number;
+    cyclesIncluded: number;
+    plansTotal: number;
+    plansIncluded: number;
+    totalFutureEur: number;
+    coverageNote: string | null;
+  };
+  wealthFloorViolations: Array<{
+    scenario: string;
+    label: string;
+    floorEur: number;
+    actualEur: number;
+    deficitEur: number;
+    explanation: string;
+  }>;
+  orderingViolations: Array<{
+    date: number;
+    lowerScenario: string;
+    lowerValue: number;
+    higherScenario: string;
+    higherValue: number;
+    explanation: string;
   }>;
   horizonYears: number;
   generatedAt: number;
@@ -238,6 +406,37 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
     listPortfolios: () => Promise<Result<any>>;
     getPortfolioBreakdown: (portfolioUuid: string, currency: string) => Promise<Result<any>>;
     getPortfolioSnapshots: (portfolioUuid: string) => Promise<Result<any>>;
+    previewOrder: (input: {
+      operationType?: "buy" | "sell" | "convert" | "rebuy";
+      mode?: "simulation" | "real";
+      productId?: string;
+      assetId?: string;
+      fromAssetId?: string;
+      toAssetId?: string;
+      side?: "BUY" | "SELL";
+      quoteAmountEur?: number;
+      baseAmount?: number;
+      quoteAmount?: number;
+    }) => Promise<Result<any>>;
+    submitOrder: (input: {
+      operationType?: "buy" | "sell" | "convert" | "rebuy";
+      mode?: "simulation" | "real";
+      productId?: string;
+      assetId?: string;
+      fromAssetId?: string;
+      toAssetId?: string;
+      side?: "BUY" | "SELL";
+      quoteAmountEur?: number;
+      baseAmount?: number;
+      quoteAmount?: number;
+      previewId?: string | null;
+      previewToken?: string | null;
+      confirmationText: string;
+    }) => Promise<Result<any>>;
+    listPendingOrders: () => Promise<Result<any[]>>;
+    listScheduledOperations: () => Promise<Result<any[]>>;
+    createScheduledOperation: (input: any) => Promise<Result<any>>;
+    deleteScheduledOperation: (id: string) => Promise<Result<null>>;
   };
   sentiment: {
     getGlobal: (input: { timeframe: MarketSentimentTimeframe }) => Promise<Result<MarketSentiment>>;
@@ -318,10 +517,13 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
     updateGoal: (id: string, data: Partial<CreatePerspectivesGoalInput>) => Promise<Result<PerspectivesGoal>>;
     deleteGoal: (id: string) => Promise<Result<null>>;
     getConsolidatedSnapshot: () => Promise<Result<PlanConsolidatedSnapshot>>;
-    getProjection: (input?: { horizonYears?: number; complianceRate?: number }) => Promise<Result<ProjectionResult>>;
+    getProjection: (input?: { horizonYears?: number; complianceRate?: number; simulationPolicy?: string }) => Promise<Result<ProjectionResult>>;
+  };
+  persp2: {
+    getSimulation: (input?: { horizonYears?: number; policy?: "plan_base" | "full_strategy" }) => Promise<Result<unknown>>;
   };
   smartBuy: {
-    getRecommendation: (input: { cycleId: string; amount: number; mode?: SmartBuyMode; originType?: "cash" | "eurc" }) => Promise<Result<SmartBuyRecommendation>>;
+    getRecommendation: (input: { cycleId: string; amount: number; mode?: SmartBuyMode; originType?: "cash" | "eurc"; weights?: { planPct?: number; balancePct?: number; opportunityPct?: number; potentialPct?: number }; horizon?: "1-3y" | "3-5y" | "5y+" }) => Promise<Result<SmartBuyRecommendation>>;
   };
   rebuyTiers: {
     list: (input: { cycleId: string }) => Promise<Result<CycleRebuyTier[]>>;

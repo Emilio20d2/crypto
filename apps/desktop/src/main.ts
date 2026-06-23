@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import * as path from "path";
-import { initializeDatabase, runMigrations, getDb, schema } from "@crypto-control/database";
+import { initializeDatabase, runMigrations, ensureEssentialTables, getDb, schema } from "@crypto-control/database";
 import {
   CreateInvestmentAssetSchema,
   CreateInvestmentCycleSchema,
@@ -87,6 +87,23 @@ function finiteOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => {
+          console.warn(`[Timeout] ${label} superó ${timeoutMs}ms`);
+          resolve(null);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function pointChange(points: { time: number; value: number }[]): number | null {
   if (points.length < 2) return null;
   const first = points[0].value;
@@ -171,8 +188,15 @@ function setupDatabase() {
     }
   } catch (e: unknown) {
     console.error("[DB] Fallo en migración:", e instanceof Error ? e.message : String(e));
-    // Un fallo en migración detendría la ejecución si es destructiva, 
-    // pero idealmente deberíamos hacer un backup del SQLite antes (implementación de backup requerida)
+  }
+
+  // Ensure plan/cycle tables exist even if the migration above failed on a legacy DB.
+  // Uses CREATE TABLE IF NOT EXISTS — safe to run multiple times.
+  try {
+    ensureEssentialTables();
+    console.log("[DB] Tablas esenciales verificadas");
+  } catch (e: unknown) {
+    console.error("[DB] Error al verificar tablas esenciales:", e instanceof Error ? e.message : String(e));
   }
 }
 
@@ -683,17 +707,133 @@ function setupIpcHandlers() {
     return request;
   }
 
+  function marketHistoryTimeoutMs(period: string): number {
+    if (period === "1h") return 7000;
+    if (period === "24h") return 8000;
+    if (period === "7d" || period === "30d") return 10_000;
+    return 12_000;
+  }
+
+  function pointTimestampMs(point: { time?: number; timestamp?: number }): number | null {
+    const timestamp = finiteOrNull(point.timestamp);
+    if (timestamp !== null) return timestamp;
+    const seconds = finiteOrNull(point.time);
+    return seconds !== null ? seconds * 1000 : null;
+  }
+
+  async function getCurrentPriceFast(assetId: string): Promise<SnapshotPriceResult> {
+    const meta = getAssetMetadata(assetId);
+    const quoteCurrency = meta?.quoteCurrency ?? "EUR";
+    const cached = await marketCache.getCurrentPrice(assetId, quoteCurrency, { allowStale: true }).catch(() => null);
+    const cachedPrice = finiteOrNull(cached?.price);
+    const cachedFallback: SnapshotPriceResult | null = cached && cachedPrice !== null
+      ? {
+          price: cachedPrice,
+          state: "cached",
+          provider: cached.provider,
+          fetchedAt: cached.fetchedAt,
+          reason: "Ultimo precio valido en cache",
+        }
+      : null;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), SNAPSHOT_PRICE_TIMEOUT_MS);
+    try {
+      const live = await marketService.getCurrentPrice(assetId, controller.signal);
+      const price = finiteOrNull(live.price);
+      if (price !== null) return { ...live, price };
+      return cachedFallback ?? {
+        price: null,
+        state: "unavailable",
+        provider: live.provider ?? "none",
+        fetchedAt: live.fetchedAt ?? Date.now(),
+        reason: live.reason ?? "Precio no disponible",
+      };
+    } catch (error) {
+      return cachedFallback ?? {
+        price: null,
+        state: "unavailable",
+        provider: "none",
+        fetchedAt: Date.now(),
+        reason: error instanceof Error ? error.message : "Precio no disponible",
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async function getCachedHistoricalResult(assetId: string, period: string, quoteCurrency: string, reason?: string) {
+    const cached = await marketCache.getHistoricalPrices(assetId, quoteCurrency, period, { allowStale: true }).catch(() => null);
+    const points = cached ? sanitizePoints(cached) : [];
+    if (points.length < 2) return null;
+    const provider = points.find((point) => point.source)?.source ?? "cache";
+    return {
+      provider,
+      points,
+      requestedPeriod: period,
+      actualInterval: "auto",
+      fetchedAt: Date.now(),
+      isCached: true,
+      cacheStatus: "stale" as const,
+      reason: reason ? `Ultimo historico valido en cache: ${reason}` : "Ultimo historico valido en cache",
+    };
+  }
+
+  async function getHistoricalPricesFast(assetId: string, period: string, quoteCurrency = "EUR") {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), marketHistoryTimeoutMs(period));
+    try {
+      const result = await marketService.getHistoricalPrices(assetId, period, controller.signal);
+      const points = sanitizePoints(result.points);
+      if (points.length >= 2) {
+        return {
+          ...result,
+          points,
+        };
+      }
+
+      const cached = await getCachedHistoricalResult(assetId, period, quoteCurrency, "La fuente devolvio puntos insuficientes");
+      if (cached) return cached;
+      return {
+        ...result,
+        points,
+        reason: result.reason ?? "Historico insuficiente para dibujar la grafica",
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const cached = await getCachedHistoricalResult(assetId, period, quoteCurrency, message);
+      if (cached) return cached;
+      console.warn(`[Market] Historico no disponible para ${assetId} ${period}:`, message);
+      return {
+        provider: "none",
+        points: [],
+        requestedPeriod: period,
+        actualInterval: "auto",
+        fetchedAt: Date.now(),
+        isCached: true,
+        cacheStatus: "miss" as const,
+        reason: `Sin historico disponible: ${message}`,
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   async function buildPerspectivesSnapshot(now = Date.now()): Promise<import("@crypto-control/portfolio").PlanConsolidatedSnapshot> {
-    const planRow = db.select().from(schema.investmentPlans)
+    const planRows = db.select().from(schema.investmentPlans)
       .where(eq(schema.investmentPlans.status, "active"))
       .orderBy(asc(schema.investmentPlans.createdAt))
-      .get();
-    if (!planRow) throw new Error("No hay un plan de inversión activo.");
+      .all();
+    if (planRows.length === 0) throw new Error("No hay un plan de inversión activo.");
+
+    const primaryPlan = planRows[0];
+    const planIds = planRows.map(plan => plan.id);
 
     const cycleRows = db.select().from(schema.investmentCycles)
-      .where(eq(schema.investmentCycles.planId, planRow.id))
-      .orderBy(asc(schema.investmentCycles.startDate))
-      .all();
+      .where(inArray(schema.investmentCycles.planId, planIds))
+      .orderBy(asc(schema.investmentCycles.startDate), asc(schema.investmentCycles.priority))
+      .all()
+      .filter(cycle => cycle.status === "active" || cycle.status === "planned");
     const cycleIds = cycleRows.map(c => c.id);
 
     const allAssetRows = cycleIds.length > 0
@@ -791,7 +931,8 @@ function setupIpcHandlers() {
         type: r.type as "periodica" | "extraordinaria",
         plannedDate: r.plannedDate,
         amountEur: r.amountEur,
-        status: r.status as "pendiente" | "ejecutada" | "saltada",
+        destinationAssetId: r.destination ?? null,
+        status: r.status as "pendiente" | "ejecutada" | "saltada" | "cancelada",
         executedAt: r.executedAt ?? null,
       }));
 
@@ -860,19 +1001,41 @@ function setupIpcHandlers() {
       .map(([id]) => id);
     const totalAssets = assetIds.length || 1;
 
-    const lastRevision = db.select().from(schema.strategyRevisions)
-      .orderBy(desc(schema.strategyRevisions.createdAt))
-      .get();
+    const strategyRevisionRows = cycleIds.length > 0
+      ? db.select().from(schema.strategyRevisions)
+        .where(inArray(schema.strategyRevisions.cycleId, cycleIds))
+        .orderBy(asc(schema.strategyRevisions.effectiveDate))
+        .all()
+      : [];
+    const strategyRevisions: import("@crypto-control/portfolio").SnapshotStrategyRevision[] =
+      strategyRevisionRows
+        .filter(r => r.effectiveDate != null && r.effectiveDate > now)
+        .map(r => ({
+          id: r.id,
+          cycleId: r.cycleId,
+          effectiveDate: r.effectiveDate!,
+          title: r.title,
+          notes: r.notes ?? null,
+          changesJson: r.changesJson ?? "{}",
+        }));
+
+    const lastRevision = strategyRevisionRows[strategyRevisionRows.length - 1] ?? null;
     const strategyVersion = lastRevision
-      ? `rev-${lastRevision.id.slice(0, 8)}`
-      : `plan-${planRow.id.slice(0, 8)}`;
+      ? `multi-rev-${lastRevision.id.slice(0, 8)}`
+      : `multi-${planIds.map(id => id.slice(0, 8)).join("-")}`;
 
     return {
       snapshotId: `snap-${now}`,
       generatedAt: now,
       projectionStartDate: now,
-      planId: planRow.id,
-      planName: planRow.name,
+      planId: primaryPlan.id,
+      planName: planRows.length === 1 ? primaryPlan.name : `${planRows.length} planes activos`,
+      plans: planRows.map(plan => ({
+        id: plan.id,
+        name: plan.name,
+        status: plan.status,
+        baseCurrency: plan.baseCurrency,
+      })),
       cycles,
       positions,
       historicalCapitalEur,
@@ -882,6 +1045,7 @@ function setupIpcHandlers() {
       saleRules,
       rebuyTiers,
       substitutions,
+      strategyRevisions,
       treasury: { cashEur, eurcEur, eurcAvailableEur, fiscalReserveEur, totalLiquidityEur: cashEur + eurcEur },
       prices,
       dataQuality: {
@@ -896,15 +1060,38 @@ function setupIpcHandlers() {
     };
   }
 
-  async function getProjectionDynamicFactors(): Promise<{ fearAndGreedIndex: number | null; btcDominance: number | null }> {
-    const [fearGreed, globalMetrics] = await Promise.all([
+  async function getProjectionDynamicFactors(assetIds: string[] = []): Promise<{
+    fearAndGreedIndex: number | null;
+    btcDominance: number | null;
+    assetSentiment: Record<string, { score: number; direction: string; confidence: number }>;
+  }> {
+    const fearGreedValue = getCachedFearGreed();
+    const uniqueAssets = [...new Set(assetIds)].slice(0, 8); // cap to avoid rate-limit storms
+
+    const [fearGreed, globalMetrics, ...sentimentResults] = await Promise.all([
       withSoftTimeout(fearGreedService.get(), 2500, null),
       withSoftTimeout(globalMetricsService.get(), 3000, null),
+      ...uniqueAssets.map(id =>
+        withSoftTimeout(
+          sentimentService.getAssetSentiment(id, "30d", { fearGreedValue }),
+          3500,
+          null,
+        )
+      ),
     ]);
+
+    const assetSentiment: Record<string, { score: number; direction: string; confidence: number }> = {};
+    uniqueAssets.forEach((id, i) => {
+      const s = sentimentResults[i];
+      if (s && typeof s.score === "number" && Number.isFinite(s.score)) {
+        assetSentiment[id] = { score: s.score, direction: s.direction, confidence: s.confidence };
+      }
+    });
 
     return {
       fearAndGreedIndex: fearGreed ? finiteOrNull(fearGreed.value) : null,
       btcDominance: globalMetrics ? finiteOrNull(globalMetrics.btcDominance) : null,
+      assetSentiment,
     };
   }
 
@@ -937,13 +1124,12 @@ function setupIpcHandlers() {
 
     const assetRows = db.select({ id: schema.assets.id, type: schema.assets.type }).from(schema.assets).all();
     const assetTypeById = new Map(assetRows.map((asset) => [asset.id, asset.type]));
+    // EUR (fiat) excluded; EURC (stablecoin reserve) included at price 1.0 EUR.
     const isPortfolioChartAsset = (assetId: string) =>
       assetId !== "EUR" &&
-      assetId !== "EURC" &&
       assetTypeById.get(assetId) !== "fiat";
 
-    // Collect all unique crypto assets from legs. EUR/EURC are liquidity and
-    // are excluded from the portfolio price curve; they live in Tesorería.
+    // Collect all unique crypto + EURC assets from legs. EUR fiat excluded.
     const heldAssets = new Set<string>();
     for (const tx of txs) {
       for (const leg of tx.legs) {
@@ -975,16 +1161,18 @@ function setupIpcHandlers() {
       return result;
     }
 
-    function priceAtOrBefore(prices: { time: number; price: number }[], ts: number): number | null {
+    function priceAtOrBefore(prices: { time: number; price: number }[], ts: number, maxAgeMs: number | null): number | null {
       if (!prices.length) return null;
       let lo = 0, hi = prices.length - 1;
-      let result: number | null = null;
+      let result: { time: number; price: number } | null = null;
       while (lo <= hi) {
         const mid = (lo + hi) >> 1;
-        if (prices[mid].time <= ts) { result = prices[mid].price; lo = mid + 1; }
+        if (prices[mid].time <= ts) { result = prices[mid]; lo = mid + 1; }
         else hi = mid - 1;
       }
-      return result;
+      if (!result) return null;
+      if (maxAgeMs !== null && ts - result.time > maxAgeMs) return null;
+      return result.price;
     }
 
     // Same period strings Mercado's own per-asset chart uses, so the
@@ -997,6 +1185,24 @@ function setupIpcHandlers() {
     };
     const requestedPeriod = input?.period;
     const marketPeriod = requestedPeriod ? MARKET_PERIOD_BY_PERIOD[requestedPeriod] : undefined;
+    const periodWindowMs = requestedPeriod === "1h"
+      ? 60 * 60 * 1000
+      : requestedPeriod === "24h"
+        ? 24 * 60 * 60 * 1000
+        : requestedPeriod === "1w"
+          ? 7 * 24 * 60 * 60 * 1000
+          : requestedPeriod === "1m"
+            ? 30 * 24 * 60 * 60 * 1000
+            : null;
+    const maxPriceCarryMs = requestedPeriod === "1h"
+      ? 15 * 60 * 1000
+      : requestedPeriod === "24h"
+        ? 45 * 60 * 1000
+        : requestedPeriod === "1w"
+          ? 3 * 60 * 60 * 1000
+          : requestedPeriod === "1m"
+            ? 18 * 60 * 60 * 1000
+            : null;
 
     // Fetch price history for each asset: period-matched live fetch first
     // (mirrors Mercado, same Coinbase→cache→CoinGecko→stale fallback chain),
@@ -1026,26 +1232,50 @@ function setupIpcHandlers() {
         .map((row) => ({ time: row.timestamp, price: row.price, source: row.provider }));
     }
 
+    function cleanPricePoints(points: { time: number; price: number }[]): { time: number; price: number }[] {
+      const now = Date.now();
+      const start = periodWindowMs !== null ? now - periodWindowMs - (maxPriceCarryMs ?? 0) : null;
+      return points
+        .filter((point) => Number.isFinite(point.time) && Number.isFinite(point.price) && point.price > 0)
+        .filter((point) => start === null || point.time >= start)
+        .sort((a, b) => a.time - b.time);
+    }
+
+    function hasUsableShortPeriodPrices(points: { time: number; price: number }[]): boolean {
+      if (marketPeriod !== "1h" && marketPeriod !== "24h") return points.length > 1;
+      if (points.length < (marketPeriod === "1h" ? 10 : 8)) return false;
+      const now = Date.now();
+      const latest = points[points.length - 1];
+      if (!latest || now - latest.time > (maxPriceCarryMs ?? 0) * 2) return false;
+      return true;
+    }
+
     async function loadPricesForAsset(assetId: string): Promise<void> {
+      if (assetId === "EURC") {
+        // EURC is EUR-pegged: price handled directly in valueAtMs as 1.0 EUR.
+        // No market-price fetch or anchor points needed here.
+        priceSourceByAsset[assetId] = "eur-peg";
+        return;
+      }
       if (marketPeriod) {
         const cachedExact = loadCachedPricesForAsset(assetId, marketPeriod);
-        if (cachedExact.length > 1) {
-          pricesByAsset[assetId] = cachedExact.map((point) => ({ time: point.time, price: point.price }));
+        const cleanedCachedExact = cleanPricePoints(cachedExact.map((point) => ({ time: point.time, price: point.price })));
+        if (hasUsableShortPeriodPrices(cleanedCachedExact)) {
+          pricesByAsset[assetId] = cleanedCachedExact;
           priceSourceByAsset[assetId] = `${cachedExact[0].source}(cache:${marketPeriod})`;
-          marketPointCountByAsset[assetId] = cachedExact.length;
-          totalPricePoints += cachedExact.length;
+          marketPointCountByAsset[assetId] = cleanedCachedExact.length;
+          totalPricePoints += cleanedCachedExact.length;
           return;
         }
 
         try {
-          const result = await marketService.getHistoricalPrices(assetId, marketPeriod);
-          if (result.points.length > 1) {
-            pricesByAsset[assetId] = result.points
-              .map(p => ({ time: p.timestamp, price: p.price }))
-              .sort((a, b) => a.time - b.time);
+          const result = await getHistoricalPricesFast(assetId, marketPeriod);
+          const cleaned = cleanPricePoints(result.points.map(p => ({ time: pointTimestampMs(p) ?? 0, price: p.value })));
+          if (hasUsableShortPeriodPrices(cleaned)) {
+            pricesByAsset[assetId] = cleaned;
             priceSourceByAsset[assetId] = result.provider;
-            marketPointCountByAsset[assetId] = result.points.length;
-            totalPricePoints += result.points.length;
+            marketPointCountByAsset[assetId] = cleaned.length;
+            totalPricePoints += cleaned.length;
             return;
           }
         } catch {
@@ -1061,14 +1291,13 @@ function setupIpcHandlers() {
       if (marketPeriod === "1h" || marketPeriod === "24h") {
         const rescuePeriod = marketPeriod === "1h" ? "24h" : "7d";
         try {
-          const rescueResult = await marketService.getHistoricalPrices(assetId, rescuePeriod);
-          if (rescueResult.points.length > 1) {
-            pricesByAsset[assetId] = rescueResult.points
-              .map(p => ({ time: p.timestamp, price: p.price }))
-              .sort((a, b) => a.time - b.time);
+          const rescueResult = await getHistoricalPricesFast(assetId, rescuePeriod);
+          const rescueCleaned = cleanPricePoints(rescueResult.points.map(p => ({ time: pointTimestampMs(p) ?? 0, price: p.value })));
+          if (hasUsableShortPeriodPrices(rescueCleaned)) {
+            pricesByAsset[assetId] = rescueCleaned;
             priceSourceByAsset[assetId] = `${rescueResult.provider}(${rescuePeriod}-rescue)`;
-            marketPointCountByAsset[assetId] = rescueResult.points.length;
-            totalPricePoints += rescueResult.points.length;
+            marketPointCountByAsset[assetId] = rescueCleaned.length;
+            totalPricePoints += rescueCleaned.length;
             return;
           }
         } catch {
@@ -1129,10 +1358,10 @@ function setupIpcHandlers() {
 
       // 3. Live API fallback (fetches + caches to priceHistory, broad 1y data)
       try {
-        const result = await marketService.getHistoricalPrices(assetId, "1y");
+        const result = await getHistoricalPricesFast(assetId, "1y");
         if (result.points.length > 0) {
           pricesByAsset[assetId] = result.points
-            .map(p => ({ time: p.timestamp, price: p.price }))
+            .map(p => ({ time: pointTimestampMs(p) ?? 0, price: p.value }))
             .sort((a, b) => a.time - b.time);
           priceSourceByAsset[assetId] = result.provider;
           totalPricePoints += result.points.length;
@@ -1152,12 +1381,18 @@ function setupIpcHandlers() {
         const qty = getQtyAt(assetEvents[assetId] ?? [], ts);
         if (qty <= 0) continue;
         hasHolding = true;
+        // EURC is EUR-pegged: 1 EURC = 1.000 EUR at all historical timestamps.
+        // Bypass priceAtOrBefore (which would reject time=0 via maxPriceCarryMs).
+        if (assetId === "EURC") {
+          totalValue += qty * 1.0;
+          continue;
+        }
         const prices = pricesByAsset[assetId];
         if (!prices || prices.length === 0) {
           complete = false;
           continue;
         }
-        const price = priceAtOrBefore(prices, ts);
+        const price = priceAtOrBefore(prices, ts, maxPriceCarryMs);
         if (price === null || price <= 0) {
           complete = false;
           continue;
@@ -1209,6 +1444,17 @@ function setupIpcHandlers() {
       console.log(`[Cartera] Granularidad: ${step ?? "irregular"}s`);
       console.log(`[Cartera] Assets usados: ${[...heldAssets].join(", ")}`);
       console.log(`[Cartera] Fuentes de precio usadas: ${JSON.stringify(priceSourceByAsset)}`);
+      for (const assetId of heldAssets) {
+        const prices = pricesByAsset[assetId] ?? [];
+        const uniquePrices = new Set(prices.map((point) => point.price.toFixed(8))).size;
+        const minPrice = prices.length ? Math.min(...prices.map((point) => point.price)) : null;
+        const maxPrice = prices.length ? Math.max(...prices.map((point) => point.price)) : null;
+        console.log(`[Cartera] Asset ${assetId}: points=${prices.length}, uniquePrices=${uniquePrices}, min=${minPrice ?? "-"}, max=${maxPrice ?? "-"}, source=${priceSourceByAsset[assetId] ?? "none"}`);
+      }
+      const uniquePortfolioValues = new Set(points.map((point) => point.value.toFixed(6))).size;
+      const minPortfolioValue = points.length ? Math.min(...points.map((point) => point.value)) : null;
+      const maxPortfolioValue = points.length ? Math.max(...points.map((point) => point.value)) : null;
+      console.log(`[Cartera] Portfolio stats: uniqueValues=${uniquePortfolioValues}, min=${minPortfolioValue ?? "-"}, max=${maxPortfolioValue ?? "-"}`);
       if (marketPoints > 0 && points.length !== marketPoints) {
         console.log(`[Cartera] Portfolio points (${points.length}) !== Market points (${marketPoints}): la rejilla de cartera usa el mismo paso temporal, pero omite minutos sin holding (>0) o sin precio resoluble — no se interpola ni se rellena con datos inventados.`);
       }
@@ -1328,17 +1574,13 @@ function setupIpcHandlers() {
   }));
 
   ipcMain.handle("market:get-current-price", withResult(async (_, input: {assetId: string, quoteCurrency?: string}) => {
-    const priceRes = await marketService.getCurrentPrice(input.assetId);
+    const priceRes = await getCurrentPriceFast(input.assetId);
     return CurrentPriceResultSchema.parse(priceRes);
   }));
 
   ipcMain.handle("market:get-historical-prices", withResult(async (_, input: {assetId: string, period: string, quoteCurrency?: string}) => {
-    const result = await marketService.getHistoricalPrices(input.assetId, input.period);
-    const sanitizedPoints = sanitizePoints(result.points);
-    return HistoricalPriceResultSchema.parse({
-      ...result,
-      points: sanitizedPoints
-    });
+    const result = await getHistoricalPricesFast(input.assetId, input.period, input.quoteCurrency || "EUR");
+    return HistoricalPriceResultSchema.parse(result);
   }));
 
   ipcMain.handle("market:get-overview", withResult(async (_, input: {assetId: string, quoteCurrency?: string}) => {
@@ -1355,21 +1597,21 @@ function setupIpcHandlers() {
       if (snapshot) break;
     }
 
-    const priceSettled = await Promise.resolve(marketService.getCurrentPrice(input.assetId)).then(
+    const priceSettled = await Promise.resolve(getCurrentPriceFast(input.assetId)).then(
       (data) => ({ status: "fulfilled" as const, data }),
       () => ({ status: "rejected" as const })
     );
-    const historySettled = await Promise.resolve(marketService.getHistoricalPrices(input.assetId, "24h")).then(
+    const historySettled = await Promise.resolve(getHistoricalPricesFast(input.assetId, "24h", quoteCurrency)).then(
       (data) => ({ status: "fulfilled" as const, data }),
       () => ({ status: "rejected" as const })
     );
 
-    const historyPoints = historySettled.status === "fulfilled" ? sanitizePoints(historySettled.data.points) : [];
+    const historyPoints = historySettled.status === "fulfilled" ? historySettled.data.points : [];
     const values = historyPoints.map((point) => point.value).filter((value) => Number.isFinite(value));
     const high24h = values.length > 0 ? Math.max(...values) : null;
     const low24h = values.length > 0 ? Math.min(...values) : null;
-    const currentPrice = finiteOrNull(snapshot?.price)
-      ?? (priceSettled.status === "fulfilled" ? finiteOrNull(priceSettled.data.price) : null)
+    const currentPrice = (priceSettled.status === "fulfilled" ? finiteOrNull(priceSettled.data.price) : null)
+      ?? finiteOrNull(snapshot?.price)
       ?? (historyPoints.length > 0 ? historyPoints[historyPoints.length - 1].value : null);
     const fetchedCandidates = [
       finiteOrNull(snapshot?.capturedAt),
@@ -1387,7 +1629,7 @@ function setupIpcHandlers() {
       marketCap: finiteOrNull(snapshot?.marketCap),
       dominance: null,
       fetchedAt: fetchedCandidates.length > 0 ? Math.max(...fetchedCandidates) : null,
-      provider: snapshot ? "coinbase" : priceSettled.status === "fulfilled" ? priceSettled.data.provider : historySettled.status === "fulfilled" ? historySettled.data.provider : "local",
+      provider: priceSettled.status === "fulfilled" && priceSettled.data.provider !== "none" ? priceSettled.data.provider : snapshot ? "coinbase" : historySettled.status === "fulfilled" ? historySettled.data.provider : "local",
     });
   }));
 
@@ -1423,6 +1665,115 @@ function setupIpcHandlers() {
 
   function getCachedBtcDominance(): number | null {
     return globalMetricsService.getLastValid(GLOBAL_METRICS_TTL_MS * 2)?.btcDominance ?? null;
+  }
+
+  type MediaSignal = {
+    assetId: string;
+    score: number;
+    confidence: "alta" | "media" | "baja";
+    state: "live" | "cached" | "unavailable";
+    sourceSummary: string[];
+    headlines: string[];
+    analystMentions: number;
+    mediaItems: number;
+    updatedAt: number;
+  };
+
+  const mediaSignalCache = new Map<string, { expiresAt: number; signal: MediaSignal }>();
+  const MEDIA_SIGNAL_TTL_MS = 30 * 60 * 1000;
+
+  function emptyMediaSignal(assetId: string, reason: string): MediaSignal {
+    return {
+      assetId,
+      score: 0,
+      confidence: "baja",
+      state: "unavailable",
+      sourceSummary: [reason],
+      headlines: [],
+      analystMentions: 0,
+      mediaItems: 0,
+      updatedAt: Date.now(),
+    };
+  }
+
+  function scoreMediaItems(assetId: string, items: { title?: string; body?: string; source?: string }[]): MediaSignal {
+    const positiveTerms = [
+      "bullish", "rally", "surge", "upgrade", "outperform", "inflow", "adoption",
+      "partnership", "accumulation", "breakout", "approval", "record inflows",
+      "alcista", "subida", "acumulacion", "adopcion",
+    ];
+    const negativeTerms = [
+      "bearish", "crash", "selloff", "sell-off", "downgrade", "outflow", "lawsuit",
+      "hack", "exploit", "regulatory", "delist", "liquidation", "plunge",
+      "bajista", "caida", "demanda", "salidas",
+    ];
+    const analystTerms = [
+      "analyst", "analysts", "research", "report", "forecast", "predicts", "target",
+      "glassnode", "cryptoquant", "coinshares", "messari", "santiment", "into the block",
+      "analista", "analistas", "informe",
+    ];
+
+    let positive = 0;
+    let negative = 0;
+    let analystMentions = 0;
+    const headlines: string[] = [];
+
+    for (const item of items.slice(0, 20)) {
+      const title = String(item.title ?? "").trim();
+      const body = String(item.body ?? "").slice(0, 500);
+      const text = `${title} ${body}`.toLowerCase();
+      if (title && headlines.length < 4) headlines.push(title);
+      for (const term of positiveTerms) if (text.includes(term)) positive += 1;
+      for (const term of negativeTerms) if (text.includes(term)) negative += 1;
+      for (const term of analystTerms) if (text.includes(term)) analystMentions += 1;
+    }
+
+    const mediaItems = items.length;
+    const raw = mediaItems > 0 ? ((positive - negative) / Math.max(1, Math.min(mediaItems, 20))) * 100 : 0;
+    const score = Math.max(-100, Math.min(100, Math.round(raw)));
+    const confidence: MediaSignal["confidence"] =
+      mediaItems >= 8 && analystMentions >= 2 ? "alta" :
+      mediaItems >= 4 ? "media" : "baja";
+    return {
+      assetId,
+      score,
+      confidence,
+      state: "live",
+      sourceSummary: [
+        `CryptoCompare News: ${mediaItems} titulares`,
+        analystMentions > 0 ? `${analystMentions} menciones de analistas/informes` : "sin consenso de analistas detectado",
+        `sesgo medios ${score > 15 ? "positivo" : score < -15 ? "negativo" : "neutral"}`,
+      ],
+      headlines,
+      analystMentions,
+      mediaItems,
+      updatedAt: Date.now(),
+    };
+  }
+
+  async function getMediaSignal(assetId: string): Promise<MediaSignal> {
+    const key = assetId.toUpperCase();
+    const cached = mediaSignalCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      return { ...cached.signal, state: cached.signal.state === "live" ? "cached" : cached.signal.state };
+    }
+
+    try {
+      const url = `https://min-api.cryptocompare.com/data/v2/news/?lang=EN&sortOrder=latest&categories=${encodeURIComponent(key)}`;
+      const response = await withTimeout(fetch(url), 3500, `media:${key}`);
+      if (!response || !response.ok) {
+        const fallback = cached?.signal ?? emptyMediaSignal(key, "Medios/analistas no disponibles: fuente pública sin respuesta");
+        return { ...fallback, state: cached ? "cached" : "unavailable" };
+      }
+      const json = await response.json() as { Data?: Array<{ title?: string; body?: string; source?: string; categories?: string }> };
+      const items = Array.isArray(json.Data) ? json.Data : [];
+      const signal = scoreMediaItems(key, items);
+      mediaSignalCache.set(key, { expiresAt: Date.now() + MEDIA_SIGNAL_TTL_MS, signal });
+      return signal;
+    } catch (error) {
+      const fallback = cached?.signal ?? emptyMediaSignal(key, error instanceof Error ? `Medios/analistas no disponibles: ${error.message}` : "Medios/analistas no disponibles");
+      return { ...fallback, state: cached ? "cached" : "unavailable" };
+    }
   }
 
   ipcMain.handle("sentiment:get-asset", withResult(async (_, input: { assetId: string; timeframe: string }) => {
@@ -2204,6 +2555,565 @@ function setupIpcHandlers() {
     };
   }));
 
+  type OperationType = "buy" | "sell" | "convert" | "rebuy";
+  type OperationMode = "simulation" | "real";
+  type CoinbaseTradeInput = {
+    operationType?: OperationType;
+    mode?: OperationMode;
+    productId?: string;
+    assetId?: string;
+    fromAssetId?: string;
+    toAssetId?: string;
+    side?: "BUY" | "SELL";
+    quoteAmountEur?: number;
+    quoteAmount?: number;
+    baseAmount?: number;
+    previewId?: string | null;
+    previewToken?: string | null;
+    confirmationText?: string;
+  };
+  type CoinbaseOrderRequest = {
+    product_id: string;
+    side: "BUY" | "SELL";
+    order_configuration: {
+      market_market_ioc: {
+        quote_size?: string;
+        base_size?: string;
+      };
+    };
+  };
+  type CoinbaseOrderPreview = Record<string, unknown> & {
+    preview_id?: string;
+    order_total?: unknown;
+    commission_total?: unknown;
+    base_size?: unknown;
+    quote_size?: unknown;
+    slippage?: unknown;
+  };
+  type CoinbaseCreateOrder = CoinbaseOrderRequest & {
+    client_order_id: string;
+    preview_id?: string;
+  };
+  type CoinbaseOrderResult = {
+    success?: boolean;
+    success_response?: { order_id?: string };
+    error_response?: { message?: string; error_details?: string; error?: string };
+    order_id?: string;
+  };
+  type CoinbaseOperationClient = {
+    getProduct(productId: string): Promise<{ trading_disabled?: boolean; cancel_only?: boolean; view_only?: boolean }>;
+    previewOrder(request: CoinbaseOrderRequest): Promise<CoinbaseOrderPreview>;
+    createOrder(request: CoinbaseCreateOrder): Promise<CoinbaseOrderResult>;
+    getOrder(orderId: string): Promise<unknown>;
+  };
+  type OperationRouteStep = {
+    id: string;
+    label: string;
+    productId: string;
+    side: "BUY" | "SELL";
+    request: CoinbaseOrderRequest;
+    sourceAsset: string;
+    destinationAsset: string;
+    preview: CoinbaseOrderPreview | Record<string, unknown>;
+    clientOrderId: string;
+  };
+  type StoredOperationPreview = {
+    token: string;
+    operationType: OperationType;
+    mode: OperationMode;
+    routeType: "direct" | "multi_step";
+    sourceAsset: string;
+    destinationAsset: string;
+    fundingSource: "EUR" | "EURC libre" | "Cripto";
+    generatedAt: number;
+    expiresAt: number;
+    submittedAt: number | null;
+    input: CoinbaseTradeInput;
+    route: OperationRouteStep[];
+    balances: Record<string, number>;
+    warnings: string[];
+    costAnalysis: ReturnType<typeof analyzeCoinbaseCosts>;
+  };
+  type SubmittedOrderRecord = {
+    id: string;
+    token: string;
+    operationType: OperationType;
+    submittedAt: number;
+    routeType: string;
+    orders: CoinbaseOrderResult[];
+  };
+  type ScheduledCondition = {
+    type: "price_lte" | "price_gte";
+    assetId: string;
+    value: number;
+  };
+  type ScheduledOperationRecord = {
+    id: string;
+    operationType: OperationType;
+    mode: "review";
+    status: "programada_revision" | "condicion_cumplida" | "cancelada";
+    createdAt: number;
+    plannedAt: number | null;
+    frequency: string;
+    maxExecutions: number | null;
+    input: CoinbaseTradeInput;
+    note: string;
+    condicion?: ScheduledCondition;
+  };
+
+  const PREVIEW_EXPIRY_MS = 90_000;
+  const PREVIEW_SETTINGS_KEY = "coinbase:operation-previews";
+  const SUBMITTED_SETTINGS_KEY = "coinbase:submitted-orders";
+  const SCHEDULED_SETTINGS_KEY = "coinbase:scheduled-operations";
+
+  function getSettingValue(key: string): string | null {
+    return db.select().from(schema.settings).where(eq(schema.settings.key, key)).get()?.value ?? null;
+  }
+
+  function setSettingValue(key: string, value: string): void {
+    db.insert(schema.settings).values({ key, value })
+      .onConflictDoUpdate({ target: schema.settings.key, set: { value } })
+      .run();
+  }
+
+  function readJsonSetting<T>(key: string, fallback: T): T {
+    const raw = getSettingValue(key);
+    if (!raw) return fallback;
+    try {
+      return JSON.parse(raw) as T;
+    } catch {
+      return fallback;
+    }
+  }
+
+  function writeJsonSetting<T>(key: string, value: T): void {
+    setSettingValue(key, JSON.stringify(value));
+  }
+
+  function normalizeAssetId(value: unknown): string {
+    return String(value ?? "").trim().toUpperCase();
+  }
+
+  function finitePositive(value: unknown, label: string): number {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) throw new Error(`${label} debe ser mayor que cero.`);
+    return n;
+  }
+
+  function numberFromCoinbaseMoney(value: unknown): number | null {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    }
+    if (value && typeof value === "object" && "value" in value) {
+      const n = Number((value as { value?: unknown }).value);
+      return Number.isFinite(n) ? n : null;
+    }
+    return null;
+  }
+
+  function getAssetBalance(assetId: string): number {
+    const row = db.select().from(schema.accounts).where(eq(schema.accounts.assetId, assetId)).all()
+      .reduce((sum, account) => sum + (Number.isFinite(account.balance) ? account.balance : 0), 0);
+    return Math.max(0, row);
+  }
+
+  function analyzeCoinbaseCosts(previews: Array<CoinbaseOrderPreview | Record<string, unknown>>, amountHint: number | null) {
+    const commission = previews.reduce((sum, preview) => sum + (numberFromCoinbaseMoney((preview as { commission_total?: unknown }).commission_total) ?? 0), 0);
+    const total = previews.reduce((sum, preview) => sum + (numberFromCoinbaseMoney((preview as { order_total?: unknown }).order_total) ?? 0), 0);
+    const amount = amountHint && amountHint > 0 ? amountHint : total;
+    const slippage = previews.reduce((sum, preview) => sum + Math.abs(Number((preview as { slippage?: unknown }).slippage ?? 0) || 0), 0);
+    const friction = commission + slippage;
+    const feePct = amount > 0 ? (commission / amount) * 100 : 0;
+    const frictionPct = amount > 0 ? (friction / amount) * 100 : 0;
+    const level = frictionPct >= 3 ? "muy_alto" : frictionPct >= 1.5 ? "alto" : frictionPct >= 0.5 ? "moderado" : "bajo";
+    return {
+      amount,
+      commission,
+      slippage,
+      spread: 0,
+      friction,
+      feePct: Math.round(feePct * 100) / 100,
+      frictionPct: Math.round(frictionPct * 100) / 100,
+      level,
+      message: `La comisión representa ${feePct.toFixed(2)}% del importe. Coste operativo ${level.replace("_", " ")}.`,
+    };
+  }
+
+  function marketOrder(productId: string, side: "BUY" | "SELL", size: { quote?: number; base?: number }): CoinbaseOrderRequest {
+    const market_market_ioc: { quote_size?: string; base_size?: string } = {};
+    if (size.quote !== undefined) market_market_ioc.quote_size = String(Math.round(size.quote * 100_000_000) / 100_000_000);
+    if (size.base !== undefined) market_market_ioc.base_size = String(size.base);
+    if (!market_market_ioc.quote_size && !market_market_ioc.base_size) throw new Error("La orden necesita importe o cantidad.");
+    return {
+      product_id: productId,
+      side,
+      order_configuration: { market_market_ioc },
+    };
+  }
+
+  function ensureProductTradable(product: { trading_disabled?: boolean; cancel_only?: boolean; view_only?: boolean }, productId: string): void {
+    if (product.trading_disabled || product.cancel_only || product.view_only) {
+      throw new Error(`Coinbase no permite operar ahora el par ${productId}.`);
+    }
+  }
+
+  async function getTradableProductOrNull(client: CoinbaseOperationClient, productId: string) {
+    try {
+      const product = await client.getProduct(productId);
+      ensureProductTradable(product, productId);
+      return product;
+    } catch {
+      return null;
+    }
+  }
+
+  function inferLegacyOperation(input: CoinbaseTradeInput): OperationType {
+    if (input.operationType) return input.operationType;
+    return input.side === "SELL" ? "sell" : "buy";
+  }
+
+  function syntheticPreview(request: CoinbaseOrderRequest, amount: number, baseAmount: number | null): CoinbaseOrderPreview {
+    return {
+      preview_id: `sim-${crypto.randomUUID()}`,
+      order_total: { value: amount.toFixed(2), currency: request.product_id.split("-")[1] ?? "EUR" },
+      commission_total: { value: "0.00", currency: request.product_id.split("-")[1] ?? "EUR" },
+      base_size: baseAmount !== null ? { value: String(baseAmount), currency: request.product_id.split("-")[0] ?? "" } : undefined,
+      quote_size: { value: amount.toFixed(2), currency: request.product_id.split("-")[1] ?? "EUR" },
+      est_average_filled_price: "simulación",
+      slippage: "0",
+    };
+  }
+
+  async function buildOperationPreview(input: CoinbaseTradeInput, client: CoinbaseOperationClient | null): Promise<StoredOperationPreview> {
+    const operationType = inferLegacyOperation(input);
+    const mode: OperationMode = input.mode === "simulation" ? "simulation" : "real";
+    const token = crypto.randomUUID();
+    const now = Date.now();
+    const warnings: string[] = [];
+    const route: OperationRouteStep[] = [];
+    let routeType: "direct" | "multi_step" = "direct";
+    let sourceAsset = "EUR";
+    let destinationAsset = "";
+    let fundingSource: "EUR" | "EURC libre" | "Cripto" = "EUR";
+    let amountForAnalysis: number | null = null;
+
+    const addStep = async (step: Omit<OperationRouteStep, "preview" | "clientOrderId"> & { amountHint: number; baseHint: number | null }) => {
+      const preview = mode === "simulation"
+        ? syntheticPreview(step.request, step.amountHint, step.baseHint)
+        : await client!.previewOrder(step.request);
+      route.push({ ...step, preview, clientOrderId: crypto.randomUUID() });
+      return preview;
+    };
+
+    if (operationType === "buy") {
+      const assetId = normalizeAssetId(input.assetId ?? input.toAssetId);
+      const quoteAmount = finitePositive(input.quoteAmountEur ?? input.quoteAmount, "El importe EUR");
+      if (!assetId) throw new Error("Selecciona el activo a comprar.");
+      sourceAsset = "EUR";
+      destinationAsset = assetId;
+      fundingSource = "EUR";
+      const eurBalance = getAssetBalance("EUR");
+      if (eurBalance > 0 && quoteAmount > eurBalance) throw new Error("Saldo EUR insuficiente para esta compra ordinaria.");
+      const productId = normalizeAssetId(input.productId) || `${assetId}-EUR`;
+      if (mode === "real") {
+        const product = await client!.getProduct(productId);
+        ensureProductTradable(product, productId);
+      }
+      const request = marketOrder(productId, "BUY", { quote: quoteAmount });
+      await addStep({ id: "buy-eur", label: "Compra con EUR", productId, side: "BUY", request, sourceAsset, destinationAsset, amountHint: quoteAmount, baseHint: null });
+      amountForAnalysis = quoteAmount;
+    } else if (operationType === "rebuy") {
+      const assetId = normalizeAssetId(input.assetId ?? input.toAssetId);
+      const quoteAmount = finitePositive(input.quoteAmountEur ?? input.quoteAmount, "El importe EURC libre");
+      if (!assetId) throw new Error("Selecciona el activo de recompra.");
+      const treasury = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance());
+      if (quoteAmount > treasury.freeRebuyLiquidity) throw new Error("EURC libre insuficiente. La reserva fiscal no puede utilizarse.");
+      const eurcBalance = getAssetBalance("EURC");
+      if (eurcBalance > 0 && quoteAmount > eurcBalance) throw new Error("Saldo físico EURC insuficiente para esta recompra.");
+      sourceAsset = "EURC";
+      destinationAsset = assetId;
+      fundingSource = "EURC libre";
+      const productId = normalizeAssetId(input.productId) || `${assetId}-EURC`;
+      if (mode === "real") {
+        const product = await client!.getProduct(productId);
+        ensureProductTradable(product, productId);
+      }
+      const request = marketOrder(productId, "BUY", { quote: quoteAmount });
+      await addStep({ id: "rebuy-eurc", label: "Recompra con EURC libre", productId, side: "BUY", request, sourceAsset, destinationAsset, amountHint: quoteAmount, baseHint: null });
+      amountForAnalysis = quoteAmount;
+    } else if (operationType === "sell") {
+      const assetId = normalizeAssetId(input.assetId ?? input.fromAssetId);
+      const baseAmount = finitePositive(input.baseAmount, "La cantidad a vender");
+      if (!assetId) throw new Error("Selecciona el activo a vender.");
+      const balance = getAssetBalance(assetId);
+      if (balance > 0 && baseAmount >= balance) throw new Error("Venta total bloqueada: debe quedar una posición residual.");
+      sourceAsset = assetId;
+      destinationAsset = "EURC";
+      fundingSource = "Cripto";
+      const directProduct = `${assetId}-EURC`;
+      const directTradable = mode === "real" ? await getTradableProductOrNull(client!, directProduct) : { product_id: directProduct };
+      if (directTradable) {
+        const request = marketOrder(directProduct, "SELL", { base: baseAmount });
+        await addStep({ id: "sell-direct-eurc", label: "Venta directa a EURC", productId: directProduct, side: "SELL", request, sourceAsset, destinationAsset, amountHint: 0, baseHint: baseAmount });
+      } else {
+        routeType = "multi_step";
+        warnings.push("Coinbase no ofrece ruta directa a EURC para este par; se previsualiza ruta multipaso CRIPTO → EUR → EURC.");
+        const sellProduct = `${assetId}-EUR`;
+        const eurcProduct = "EURC-EUR";
+        const sellProductInfo = await client!.getProduct(sellProduct);
+        ensureProductTradable(sellProductInfo, sellProduct);
+        const eurcProductInfo = await client!.getProduct(eurcProduct);
+        ensureProductTradable(eurcProductInfo, eurcProduct);
+        const sellRequest = marketOrder(sellProduct, "SELL", { base: baseAmount });
+        const sellPreview = await addStep({ id: "sell-to-eur", label: "Paso 1: vender cripto a EUR", productId: sellProduct, side: "SELL", request: sellRequest, sourceAsset, destinationAsset: "EUR", amountHint: 0, baseHint: baseAmount });
+        const eurAmount = numberFromCoinbaseMoney(sellPreview.order_total) ?? 0;
+        if (eurAmount <= 0) throw new Error("Coinbase no devolvió importe EUR estimado para preparar el segundo paso.");
+        const eurcRequest = marketOrder(eurcProduct, "BUY", { quote: eurAmount });
+        await addStep({ id: "buy-eurc", label: "Paso 2: comprar EURC con EUR", productId: eurcProduct, side: "BUY", request: eurcRequest, sourceAsset: "EUR", destinationAsset: "EURC", amountHint: eurAmount, baseHint: null });
+        amountForAnalysis = eurAmount;
+      }
+    } else {
+      const fromAssetId = normalizeAssetId(input.fromAssetId ?? input.assetId);
+      const toAssetId = normalizeAssetId(input.toAssetId);
+      const baseAmount = finitePositive(input.baseAmount, "La cantidad origen");
+      if (!fromAssetId || !toAssetId || fromAssetId === toAssetId) throw new Error("Selecciona activo origen y destino distintos.");
+      if (fromAssetId === "EURC" || toAssetId === "EURC") throw new Error("EURC no se usa como intermedio en conversiones ordinarias.");
+      const balance = getAssetBalance(fromAssetId);
+      if (balance > 0 && baseAmount > balance) throw new Error("Saldo insuficiente del activo origen.");
+      sourceAsset = fromAssetId;
+      destinationAsset = toAssetId;
+      fundingSource = "Cripto";
+      const directProduct = `${fromAssetId}-${toAssetId}`;
+      const inverseProduct = `${toAssetId}-${fromAssetId}`;
+      const directTradable = mode === "real" ? await getTradableProductOrNull(client!, directProduct) : { product_id: directProduct };
+      if (directTradable) {
+        const request = marketOrder(directProduct, "SELL", { base: baseAmount });
+        await addStep({ id: "convert-direct", label: "Conversión directa", productId: directProduct, side: "SELL", request, sourceAsset, destinationAsset, amountHint: 0, baseHint: baseAmount });
+      } else {
+        const inverseTradable = mode === "real" ? await getTradableProductOrNull(client!, inverseProduct) : null;
+        if (!inverseTradable) throw new Error(`Coinbase no ofrece conversión directa ${fromAssetId} → ${toAssetId}.`);
+        const request = marketOrder(inverseProduct, "BUY", { quote: baseAmount });
+        await addStep({ id: "convert-inverse", label: "Conversión directa inversa", productId: inverseProduct, side: "BUY", request, sourceAsset, destinationAsset, amountHint: 0, baseHint: baseAmount });
+      }
+    }
+
+    const balances: Record<string, number> = {
+      EUR: getAssetBalance("EUR"),
+      EURC: getAssetBalance("EURC"),
+      [sourceAsset]: getAssetBalance(sourceAsset),
+      [destinationAsset]: getAssetBalance(destinationAsset),
+    };
+    const costAnalysis = analyzeCoinbaseCosts(route.map(step => step.preview), amountForAnalysis);
+    return {
+      token,
+      operationType,
+      mode,
+      routeType,
+      sourceAsset,
+      destinationAsset,
+      fundingSource,
+      generatedAt: now,
+      expiresAt: now + PREVIEW_EXPIRY_MS,
+      submittedAt: null,
+      input,
+      route,
+      balances,
+      warnings,
+      costAnalysis,
+    };
+  }
+
+  function storeOperationPreview(preview: StoredOperationPreview): void {
+    const previews = readJsonSetting<StoredOperationPreview[]>(PREVIEW_SETTINGS_KEY, [])
+      .filter(item => item.expiresAt > Date.now() - 10 * 60_000)
+      .slice(-20);
+    previews.push(preview);
+    writeJsonSetting(PREVIEW_SETTINGS_KEY, previews);
+  }
+
+  function updateStoredPreview(preview: StoredOperationPreview): void {
+    const previews = readJsonSetting<StoredOperationPreview[]>(PREVIEW_SETTINGS_KEY, []);
+    writeJsonSetting(PREVIEW_SETTINGS_KEY, previews.map(item => item.token === preview.token ? preview : item));
+  }
+
+  function appendSubmittedOrder(record: SubmittedOrderRecord): void {
+    const records = readJsonSetting<SubmittedOrderRecord[]>(SUBMITTED_SETTINGS_KEY, []).slice(-100);
+    records.push(record);
+    writeJsonSetting(SUBMITTED_SETTINGS_KEY, records);
+  }
+
+  ipcMain.handle("coinbase:preview-order", withResult(async (_, input: CoinbaseTradeInput) => {
+    const mode: OperationMode = input.mode === "simulation" ? "simulation" : "real";
+    let client: CoinbaseOperationClient | null = null;
+    if (mode === "real") {
+      const creds = credsMgr.getCredentials();
+      if (!creds) throw new Error("No hay credenciales de Coinbase. Conecta Coinbase primero.");
+      const rawClient = new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem);
+      client = rawClient as unknown as CoinbaseOperationClient;
+      const permissions = await rawClient.getKeyPermissions();
+      if (!permissions.can_view) throw new Error("La API Key de Coinbase no tiene permiso de lectura para preparar órdenes.");
+    }
+    const preview = await buildOperationPreview({ ...input, mode }, client);
+    storeOperationPreview(preview);
+    return preview;
+  }));
+
+  ipcMain.handle("coinbase:submit-order", withResult(async (_, input: CoinbaseTradeInput) => {
+    if (input.mode === "simulation") {
+      return {
+        success: true,
+        simulated: true,
+        message: "SIMULACIÓN — NO SE ENVIÓ NINGUNA ORDEN A COINBASE",
+        submittedAt: Date.now(),
+      };
+    }
+    if (input.confirmationText !== "CONFIRMAR") {
+      throw new Error("Confirmación requerida: escribe CONFIRMAR antes de enviar una orden real.");
+    }
+    const token = input.previewToken ?? null;
+    if (!token) throw new Error("Falta el identificador de preview. Solicita una nueva previsualización.");
+    const previews = readJsonSetting<StoredOperationPreview[]>(PREVIEW_SETTINGS_KEY, []);
+    const stored = previews.find(item => item.token === token);
+    if (!stored) throw new Error("Preview no encontrado o ya descartado. Solicita uno nuevo.");
+    if (stored.submittedAt) throw new Error("Esta previsualización ya fue enviada. Protección frente a doble clic activada.");
+    if (stored.expiresAt <= Date.now()) throw new Error("Cotización caducada. Solicita un nuevo preview antes de confirmar.");
+
+    const creds = credsMgr.getCredentials();
+    if (!creds) throw new Error("No hay credenciales de Coinbase. Conecta Coinbase primero.");
+    const client = new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem);
+    const permissions = await client.getKeyPermissions();
+    if (!permissions.can_trade) throw new Error("La API Key de Coinbase no tiene permiso de trading.");
+
+    const orderResults: CoinbaseOrderResult[] = [];
+    for (const step of stored.route) {
+      const product = await client.getProduct(step.productId);
+      ensureProductTradable(product, step.productId);
+      const request: CoinbaseCreateOrder = {
+        ...step.request,
+        client_order_id: step.clientOrderId,
+        preview_id: (step.preview as { preview_id?: string }).preview_id ?? undefined,
+      };
+      const order = await client.createOrder(request);
+      if (!order.success) {
+        const msg = order.error_response?.message || order.error_response?.error_details || order.error_response?.error || "Coinbase rechazó la orden.";
+        throw new Error(msg);
+      }
+      orderResults.push(order);
+    }
+
+    stored.submittedAt = Date.now();
+    updateStoredPreview(stored);
+    appendSubmittedOrder({
+      id: crypto.randomUUID(),
+      token: stored.token,
+      operationType: stored.operationType,
+      submittedAt: stored.submittedAt,
+      routeType: stored.routeType,
+      orders: orderResults,
+    });
+
+    const syncDb = getDb();
+    const syncService = new CoinbaseSyncService(syncDb, schema, client);
+    void syncService.syncWithErrorHandling()
+      .then(() => getPortfolioService().recalculateFifo())
+      .catch((error: unknown) => console.warn("[Coinbase] Sync tras orden falló:", error instanceof Error ? error.message : String(error)));
+
+    return {
+      success: true,
+      operationType: stored.operationType,
+      routeType: stored.routeType,
+      orders: orderResults,
+      sync: "started",
+    };
+  }));
+
+  ipcMain.handle("coinbase:list-pending-orders", withResult(async () => {
+    const records = readJsonSetting<SubmittedOrderRecord[]>(SUBMITTED_SETTINGS_KEY, []);
+    const creds = credsMgr.getCredentials();
+    if (!creds) return records.map(record => ({ ...record, coinbaseStatus: null, statusSource: "local" }));
+    const client = new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem);
+    return Promise.all(records.slice().reverse().map(async (record) => {
+      const statuses = await Promise.all(record.orders.map(async (order) => {
+        const orderId = order.success_response?.order_id ?? order.order_id ?? null;
+        if (!orderId) return null;
+        try {
+          return await (client as unknown as CoinbaseOperationClient).getOrder(orderId);
+        } catch {
+          return null;
+        }
+      }));
+      return { ...record, coinbaseStatus: statuses, statusSource: "coinbase" };
+    }));
+  }));
+
+  ipcMain.handle("coinbase:list-scheduled-operations", withResult(async () => {
+    const records = readJsonSetting<ScheduledOperationRecord[]>(SCHEDULED_SETTINGS_KEY, [])
+      .filter(item => item.status !== "cancelada");
+
+    // Evaluate price conditions for pending records
+    const evaluated = await Promise.all(records.map(async (item) => {
+      if (!item.condicion || item.status === "condicion_cumplida") return item;
+      try {
+        const assetId = item.condicion.assetId;
+        const priceResult = await marketService.getCurrentPriceEur(assetId);
+        const currentPrice = priceResult?.price ?? null;
+        if (currentPrice == null) return item;
+        const met = item.condicion.type === "price_lte"
+          ? currentPrice <= item.condicion.value
+          : currentPrice >= item.condicion.value;
+        if (met) {
+          const updated = { ...item, status: "condicion_cumplida" as const };
+          // Persist updated status
+          const all = readJsonSetting<ScheduledOperationRecord[]>(SCHEDULED_SETTINGS_KEY, []);
+          writeJsonSetting(SCHEDULED_SETTINGS_KEY, all.map(r => r.id === item.id ? updated : r));
+          return updated;
+        }
+      } catch {
+        // Non-fatal: condition evaluation failure doesn't block listing
+      }
+      return item;
+    }));
+
+    return evaluated;
+  }));
+
+  ipcMain.handle("coinbase:create-scheduled-operation", withResult(async (_, input: CoinbaseTradeInput & { plannedAt?: number | null; frequency?: string; maxExecutions?: number | null; autoExecution?: boolean; condicion?: ScheduledCondition }) => {
+    if (input.autoExecution) {
+      throw new Error("La ejecución automática real requiere un servicio persistente con límites explícitos. Por seguridad, esta versión programa para revisar.");
+    }
+    const operationType = inferLegacyOperation(input);
+    const condicion: ScheduledCondition | undefined = input.condicion && (input.condicion.type === "price_lte" || input.condicion.type === "price_gte") && typeof input.condicion.value === "number"
+      ? { type: input.condicion.type, assetId: normalizeAssetId(input.condicion.assetId), value: input.condicion.value }
+      : undefined;
+    const record: ScheduledOperationRecord = {
+      id: crypto.randomUUID(),
+      operationType,
+      mode: "review",
+      status: "programada_revision",
+      createdAt: Date.now(),
+      plannedAt: typeof input.plannedAt === "number" ? input.plannedAt : null,
+      frequency: String(input.frequency ?? "una_vez"),
+      maxExecutions: typeof input.maxExecutions === "number" ? input.maxExecutions : null,
+      input,
+      note: condicion
+        ? `Condición: precio ${condicion.type === "price_lte" ? "≤" : "≥"} ${condicion.value} EUR para ${condicion.assetId}. Al cumplirse se requiere nuevo preview y confirmación.`
+        : "Programada para revisar: al activarse debe obtener un nuevo preview y pedir confirmación. No se ejecuta con React cerrado ni con el backend detenido.",
+      condicion,
+    };
+    const records = readJsonSetting<ScheduledOperationRecord[]>(SCHEDULED_SETTINGS_KEY, []);
+    records.push(record);
+    writeJsonSetting(SCHEDULED_SETTINGS_KEY, records);
+    return record;
+  }));
+
+  ipcMain.handle("coinbase:delete-scheduled-operation", withResult(async (_, id: string) => {
+    const records = readJsonSetting<ScheduledOperationRecord[]>(SCHEDULED_SETTINGS_KEY, []);
+    writeJsonSetting(SCHEDULED_SETTINGS_KEY, records.map(record => record.id === id ? { ...record, status: "cancelada" as const } : record));
+    return null;
+  }));
+
   ipcMain.handle("coinbase:sync", withResult(async () => {
     const creds = credsMgr.getCredentials();
     if (!creds) throw new Error("No hay credenciales de Coinbase. Conéctate primero.");
@@ -2934,12 +3844,30 @@ function setupIpcHandlers() {
     // Health per asset (G5)
     const fearGreedValue = getCachedFearGreed();
     const healthMap = new Map<string, ReturnType<typeof assessAssetHealth>>();
+    const mediaMap = new Map<string, MediaSignal>();
     for (const assetRow of assetRows) {
-      const [assetSentiment, btcSentiment] = await Promise.all([
-        sentimentService.getAssetSentiment(assetRow.assetId, "30d", { fearGreedValue }).catch(() => null),
-        assetRow.assetId === "BTC" ? Promise.resolve(null) : sentimentService.getAssetSentiment("BTC", "30d", { fearGreedValue }).catch(() => null),
+      const [assetSentiment, btcSentiment, mediaSignal] = await Promise.all([
+        withTimeout(sentimentService.getAssetSentiment(assetRow.assetId, "30d", { fearGreedValue }).catch(() => null), 3500, `strategy:sentiment:${assetRow.assetId}`),
+        assetRow.assetId === "BTC" ? Promise.resolve(null) : withTimeout(sentimentService.getAssetSentiment("BTC", "30d", { fearGreedValue }).catch(() => null), 3500, "strategy:sentiment:BTC"),
+        getMediaSignal(assetRow.assetId).catch(() => emptyMediaSignal(assetRow.assetId, "Medios/analistas no disponibles")),
       ]);
       healthMap.set(assetRow.assetId, assessAssetHealth({ assetSentiment, btcSentiment, isRetiredFromStrategy: false }));
+      mediaMap.set(assetRow.assetId, mediaSignal);
+    }
+
+    const allocationRows = await withTimeout(
+      getPortfolioService().getAllocation().catch(() => [] as { assetId: string; valueEur: number }[]),
+      5000,
+      "strategy:allocation"
+    ) ?? [];
+    const allocationByAsset = new Map((allocationRows as { assetId: string; valueEur: number }[]).map((item) => [item.assetId, item.valueEur]));
+
+    function mediaReason(assetId: string): string {
+      const media = mediaMap.get(assetId);
+      if (!media) return "Medios/analistas: sin datos.";
+      const base = `Medios/analistas: ${media.sourceSummary.join(" · ")}.`;
+      const headlines = media.headlines.length > 0 ? ` Titulares: ${media.headlines.slice(0, 2).join(" | ")}.` : "";
+      return `${base}${headlines}`;
     }
 
     // G3 — Propuestas de venta parcial
@@ -2948,6 +3876,10 @@ function setupIpcHandlers() {
       const health = healthMap.get(assetRow.assetId);
       if (!health) continue;
       const phase = marketPhaseResult.phase;
+      const media = mediaMap.get(assetRow.assetId);
+      const mediaScore = media && media.state !== "unavailable" ? media.score : 0;
+      const mediaNegative = Boolean(media && media.state !== "unavailable" && mediaScore <= -30);
+      const mediaPositive = Boolean(media && media.state !== "unavailable" && mediaScore >= 30);
 
       let type: "mantener" | "vigilar" | "venta_parcial" | "recogida_beneficios";
       let percentageSuggested: number | null = null;
@@ -2955,28 +3887,40 @@ function setupIpcHandlers() {
       let riskLevel: "bajo" | "moderado" | "alto" | "muy_alto";
 
       if (health.estadoEstrategico === "sustitucion_recomendada") {
-        type = "venta_parcial"; percentageSuggested = 100; riskLevel = "muy_alto";
-        reason = `Deterioro severo detectado. Salida total recomendada. ${health.reasoning}`;
+        type = "venta_parcial"; percentageSuggested = 60; riskLevel = "muy_alto";
+        reason = `Deterioro severo detectado. Reducción fuerte propuesta conservando una posición residual del 40%. ${health.reasoning}`;
       } else if (health.estadoEstrategico === "deterioro") {
         type = "venta_parcial"; percentageSuggested = 30; riskLevel = "alto";
-        reason = `Activo en deterioro. Reducción del 30% para limitar exposición. ${health.reasoning}`;
+        reason = `Activo en deterioro. Reducción del 30% para limitar exposición. ${health.reasoning} ${mediaReason(assetRow.assetId)}`;
+      } else if (mediaNegative && health.estadoEstrategico === "vigilancia") {
+        type = "venta_parcial"; percentageSuggested = 20; riskLevel = "alto";
+        reason = `Señal negativa en medios/analistas y activo en vigilancia. Propuesta de reducción parcial del 20% para proteger capital. ${health.reasoning} ${mediaReason(assetRow.assetId)}`;
       } else if (health.estadoEstrategico === "vigilancia") {
         type = "vigilar"; riskLevel = "moderado";
-        reason = `Activo en zona de vigilancia. Monitorear evolución antes de actuar. ${health.reasoning}`;
+        reason = `Activo en zona de vigilancia. Monitorear evolución antes de actuar. ${health.reasoning} ${mediaReason(assetRow.assetId)}`;
+      } else if ((phase === "euforia" || phase === "distribucion") && mediaPositive) {
+        type = "recogida_beneficios";
+        percentageSuggested = phase === "euforia" ? 30 : 20;
+        riskLevel = "bajo";
+        reason = `Mercado en ${phase} con tono positivo de medios/analistas. Propuesta de recoger beneficios (${percentageSuggested}%) sin cerrar la posición completa. ${mediaReason(assetRow.assetId)}`;
       } else if ((phase === "euforia" || phase === "distribucion") && (health.estadoEstrategico === "excelente" || health.estadoEstrategico === "buena")) {
         type = "recogida_beneficios";
         percentageSuggested = phase === "euforia" ? 30 : 20;
         riskLevel = "bajo";
-        reason = `El mercado está en fase de ${phase === "euforia" ? "euforia" : "distribución"}. Considerar recoger beneficios (${percentageSuggested}%) mientras el activo mantiene buen estado.`;
+        reason = `El mercado está en fase de ${phase === "euforia" ? "euforia" : "distribución"}. Considerar recoger beneficios (${percentageSuggested}%) mientras el activo mantiene buen estado. ${mediaReason(assetRow.assetId)}`;
       } else {
         type = "mantener"; riskLevel = "bajo";
         reason = health.estadoEstrategico === "excelente"
-          ? "Activo en excelente estado. Mantener y continuar acumulando según el plan."
-          : "Activo estable. Mantener posición y seguir el plan de inversión.";
+          ? `Activo en excelente estado. Mantener y continuar acumulando según el plan. ${mediaReason(assetRow.assetId)}`
+          : `Activo estable. Mantener posición y seguir el plan de inversión. ${mediaReason(assetRow.assetId)}`;
       }
+      const allocationValueEur = allocationByAsset.get(assetRow.assetId);
+      const estimatedProceedsEur = percentageSuggested !== null && typeof allocationValueEur === "number"
+        ? Math.round((allocationValueEur * percentageSuggested) * 100) / 10_000
+        : null;
 
       partialSaleProposals.push(PartialSaleProposalSchema.parse({
-        assetId: assetRow.assetId, type, percentageSuggested, reason, riskLevel, estimatedProceedsEur: null,
+        assetId: assetRow.assetId, type, percentageSuggested, reason, riskLevel, estimatedProceedsEur,
       }));
     }
 
@@ -2984,31 +3928,63 @@ function setupIpcHandlers() {
     const treasury = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance());
     const freeRebuyLiquidity = treasury.freeRebuyLiquidity;
     const rebuyProposals = [];
+    const dbTiers = db.select().from(schema.cycleRebuyTiers)
+      .where(eq(schema.cycleRebuyTiers.cycleId, input.cycleId))
+      .orderBy(schema.cycleRebuyTiers.drawdownPercentage)
+      .all();
+    const tierDefs: Array<[number, number, string]> = dbTiers
+      .filter(t => t.usagePercentage > 0 && t.usagePercentage < 100)
+      .sort((a, b) => Math.abs(a.drawdownPercentage) - Math.abs(b.drawdownPercentage))
+      .map(t => [t.drawdownPercentage, t.usagePercentage / 100, `Regla configurada: ${t.name ?? `corrección ${Math.abs(t.drawdownPercentage)}%`}`]);
 
-    if (freeRebuyLiquidity >= 10 && assetRows.length > 0) {
+    if (assetRows.length > 0) {
       for (const assetRow of assetRows) {
+        const health = healthMap.get(assetRow.assetId);
+        if (health?.estadoEstrategico === "sustitucion_recomendada" || health?.estadoEstrategico === "deterioro") continue;
+        const media = mediaMap.get(assetRow.assetId);
+        const mediaScore = media && media.state !== "unavailable" ? media.score : 0;
+        const phaseSupportsRebuy = marketPhaseResult.phase === "capitulacion" || marketPhaseResult.phase === "acumulacion";
+        const mediaSupportsRebuy = Boolean(media && media.state !== "unavailable" && mediaScore <= -20);
+        if (!phaseSupportsRebuy && !mediaSupportsRebuy) continue;
+
         const fraction = assetRow.allocationPercentage !== null ? assetRow.allocationPercentage / 100 : 1 / assetRows.length;
         const assetLiquidity = freeRebuyLiquidity * fraction;
+        if (freeRebuyLiquidity < 10) {
+          rebuyProposals.push(RebuyProposalSchema.parse({
+            assetId: assetRow.assetId,
+            triggerDropPercentage: marketPhaseResult.phase === "capitulacion" ? -15 : -25,
+            proposedAmountEur: 0,
+            reason: `Propuesta automática pendiente: ${marketPhaseResult.phase === "capitulacion" ? "capitulación/miedo extremo" : "corrección potencial"} detectada, pero no hay EURC libre para ejecutar recompras. ${mediaReason(assetRow.assetId)}`,
+            availableLiquidityEur: 0,
+          }));
+          continue;
+        }
+
+        if (tierDefs.length === 0) {
+          rebuyProposals.push(RebuyProposalSchema.parse({
+            assetId: assetRow.assetId,
+            triggerDropPercentage: marketPhaseResult.phase === "capitulacion" ? -15 : -25,
+            proposedAmountEur: 0,
+            reason: `No hay escalones de recompra configurados. Configura porcentajes por tramo para que la propuesta use solo EURC libre y mantenga liquidez residual. ${mediaReason(assetRow.assetId)}`,
+            availableLiquidityEur: Math.round(assetLiquidity * 100) / 100,
+          }));
+          continue;
+        }
+
         if (assetLiquidity < 5) continue;
 
-        // Use configured DB tiers; fall back to defaults if none exist
-        const dbTiers = db.select().from(schema.cycleRebuyTiers)
-          .where(eq(schema.cycleRebuyTiers.cycleId, input.cycleId))
-          .orderBy(schema.cycleRebuyTiers.drawdownPercentage)
-          .all();
-        const tierDefs: Array<[number, number, string]> = dbTiers.length > 0
-          ? dbTiers.map(t => [t.drawdownPercentage, t.usagePercentage / 100, `Corrección ${Math.abs(t.drawdownPercentage)}%`])
-          : [[-15, 0.3, "Corrección moderada"], [-25, 0.5, "Corrección fuerte"], [-40, 0.7, "Corrección extrema"]];
+        let remainingAssetLiquidity = assetLiquidity;
         for (const [drop, deployFraction, label] of tierDefs) {
-          const amount = Math.round(assetLiquidity * deployFraction * 100) / 100;
+          const amount = Math.round(remainingAssetLiquidity * deployFraction * 100) / 100;
           if (amount < 5) continue;
           rebuyProposals.push(RebuyProposalSchema.parse({
             assetId: assetRow.assetId,
             triggerDropPercentage: drop,
             proposedAmountEur: amount,
-            reason: `${label} (${drop}%): desplegar ${Math.round(deployFraction * 100)}% de la liquidez asignada a ${assetRow.assetId} (${assetLiquidity.toFixed(0)} EUR disponibles de ${freeRebuyLiquidity.toFixed(0)} EUR libres totales).`,
-            availableLiquidityEur: Math.round(assetLiquidity * 100) / 100,
+            reason: `${label} (${drop}%): desplegar ${Math.round(deployFraction * 100)}% del EURC libre restante asignado a ${assetRow.assetId} (${remainingAssetLiquidity.toFixed(0)} EUR de ${freeRebuyLiquidity.toFixed(0)} EUR libres totales). ${mediaReason(assetRow.assetId)}`,
+            availableLiquidityEur: Math.round(remainingAssetLiquidity * 100) / 100,
           }));
+          remainingAssetLiquidity = Math.max(0, remainingAssetLiquidity - amount);
         }
       }
     }
@@ -3101,31 +4077,77 @@ function setupIpcHandlers() {
     return await buildPerspectivesSnapshot();
   }));
 
-  ipcMain.handle("perspectives:getProjection", withResult(async (_, input?: { horizonYears?: number; complianceRate?: number }) => {
-    const { runAllScenarios, compareScenarios, SPANISH_FISCAL_CONFIG_2024 } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+  ipcMain.handle("perspectives:getProjection", withResult(async (_, input?: { horizonYears?: number; complianceRate?: number; simulationPolicy?: string }) => {
+    const { runAllScenarios, compareScenarios, validateWealthFloor, validateScenarioOrdering, buildContributionLedger, SPANISH_FISCAL_CONFIG_2024 } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
     const now = Date.now();
     const horizonYears = Math.min(Math.max(input?.horizonYears ?? 10, 1), 30);
     const horizonDate = now + horizonYears * 365.25 * 24 * 3600 * 1000;
     const complianceRate = Math.min(Math.max(input?.complianceRate ?? 1.0, 0), 1);
+    const VALID_POLICIES = new Set(["plan_base", "confirmed_only", "confirmed_plus_proposals", "full_strategy"]);
+    const simulationPolicy = VALID_POLICIES.has(input?.simulationPolicy ?? "") ? input!.simulationPolicy! : "confirmed_plus_proposals";
     const snapshot = await buildPerspectivesSnapshot(now);
-    const dynamicFactors = await getProjectionDynamicFactors();
+    const portfolioAssetIds = [
+      ...Object.keys(snapshot.positions),
+      ...snapshot.cycles.flatMap(c => c.assets.map(a => a.assetId)),
+    ].filter(id => id !== "EURC" && id !== "EUR");
+    const dynamicFactors = await getProjectionDynamicFactors(portfolioAssetIds);
 
     const scenarioSet = runAllScenarios(
       snapshot,
       horizonDate,
-      { complianceRate },
+      { complianceRate, projectExtraordinaryContributions: true, simulationPolicy: simulationPolicy as any },
       SPANISH_FISCAL_CONFIG_2024,
       now,
       dynamicFactors,
     );
     const comparison = compareScenarios(scenarioSet);
+    const wealthFloorViolations = validateWealthFloor(scenarioSet);
+    const orderingViolations = validateScenarioOrdering(scenarioSet);
+    const contributionLedger = buildContributionLedger(
+      snapshot.cycles,
+      snapshot.planName,
+      now,
+      horizonDate,
+      snapshot.plans?.length ?? 1,
+    );
+    const goalRows = db.select().from(schema.perspectivesGoals)
+      .orderBy(asc(schema.perspectivesGoals.priority), asc(schema.perspectivesGoals.createdAt))
+      .all();
 
     const LABELS: Record<string, string> = {
-      conservador: "Conservador", base: "Base", optimista: "Optimista", dinamico: "Dinámico",
+      conservador: "Conservador", moderado: "Moderado", base: "Base",
+      favorable: "Favorable", muy_favorable: "Muy favorable",
+      optimista: "Optimista", dinamico: "Dinámico actual", cero: "Control 0%",
     };
 
-    const scenarios = (["conservador", "base", "optimista", "dinamico"] as const).map(s => {
+    const scenarios = (["conservador", "moderado", "base", "favorable", "muy_favorable", "optimista", "dinamico", "cero"] as const).map(s => {
       const out = scenarioSet[s];
+      const hypothesisByAsset = new Map(out.scenarioHypotheses.assetRates.map(rate => [rate.assetId, rate]));
+      let priorityTargetBefore = 0;
+      const goalResults = goalRows.map(goal => {
+        const targetAmountEur = goal.targetAmountEur;
+        const currentAssignedEur = Math.min(targetAmountEur, Math.max(0, out.summary.initialGrossWealthEur - priorityTargetBefore));
+        const projectedAssignedEur = Math.min(targetAmountEur, Math.max(0, out.summary.finalNetWealthEur - priorityTargetBefore));
+        const reachedPeriod = out.periods.find(period =>
+          Math.max(0, period.netWealthEur - priorityTargetBefore) >= targetAmountEur
+        ) ?? null;
+        priorityTargetBefore += targetAmountEur;
+        return {
+          id: goal.id,
+          name: goal.name,
+          type: goal.type,
+          targetAmountEur,
+          targetDate: goal.targetDate ?? null,
+          priority: goal.priority,
+          currentAssignedEur: Math.round(currentAssignedEur * 100) / 100,
+          projectedAssignedEur: Math.round(projectedAssignedEur * 100) / 100,
+          progress: targetAmountEur > 0 ? Math.min(1, projectedAssignedEur / targetAmountEur) : 0,
+          reachedAt: reachedPeriod?.date ?? null,
+          reachedYear: reachedPeriod ? new Date(reachedPeriod.date).getFullYear() : null,
+          isReached: reachedPeriod != null,
+        };
+      });
+
       return {
         scenario: s,
         label: LABELS[s],
@@ -3135,14 +4157,44 @@ function setupIpcHandlers() {
           initialGrossWealthEur: out.summary.initialGrossWealthEur,
           finalGrossWealthEur: out.summary.finalGrossWealthEur,
           finalNetWealthEur: out.summary.finalNetWealthEur,
+          historicalCapitalEur: out.summary.historicalCapitalEur,
+          totalFutureCapitalEur: out.summary.totalFutureCapitalEur,
           totalCapitalEur: out.summary.totalCapitalEur,
+          estimatedMarketGainEur: out.summary.estimatedMarketGainEur,
+          treasuryInterestEur: out.summary.treasuryInterestEur,
+          estimatedFeesEur: out.summary.estimatedFeesEur,
+          weightedAnnualReturn: out.summary.weightedAnnualReturn,
+          xirrAnnual: out.summary.xirrAnnual ?? null,
+          twrAnnual: out.summary.twrAnnual ?? null,
+          roiAccumulated: out.summary.roiAccumulated ?? null,
+          controlCeroWealth: out.summary.controlCeroWealth ?? null,
+          control5pctWealth: out.summary.control5pctWealth ?? null,
+          control7pctWealth: out.summary.control7pctWealth ?? null,
           totalRealizedGainEur: out.summary.totalRealizedGainEur,
           totalUnrealizedGainEur: out.summary.totalUnrealizedGainEur,
           totalTaxGeneratedEur: out.summary.totalTaxGeneratedEur,
+          totalTaxPendingEur: out.summary.totalTaxPendingEur,
           finalEurcAvailableEur: out.summary.finalEurcAvailableEur,
           finalCashEur: out.summary.finalCashEur,
           finalFiscalReserveEur: out.summary.finalFiscalReserveEur,
+          simulationPolicy: out.summary.simulationPolicy,
+          salesZeroExplanation: out.summary.salesZeroExplanation ?? null,
+          rebuysZeroExplanation: out.summary.rebuysZeroExplanation ?? null,
+          hypotheticalSalesCount: out.summary.hypotheticalSales.length,
+          hypotheticalRebuysCount: out.summary.hypotheticalRebuys.length,
+          hypotheticalSales: out.summary.hypotheticalSales.slice(0, 5),
+          hypotheticalRebuys: out.summary.hypotheticalRebuys.slice(0, 5),
         },
+        hypotheses: out.scenarioHypotheses.assetRates.map(rate => ({
+          assetId: rate.assetId,
+          annualGrowthRate: rate.annualGrowthRate,
+          volatility: rate.volatility,
+          correctionDepth: rate.correctionDepth,
+          source: rate.source ?? null,
+          hypothesis: rate.hypothesis ?? null,
+          dataQuality: rate.dataQuality ?? null,
+          confidence: rate.confidence ?? null,
+        })),
         chartPoints: out.periods.map(p => ({
           date: p.date,
           grossWealthEur: p.grossWealthEur,
@@ -3151,15 +4203,122 @@ function setupIpcHandlers() {
           cashEur: p.cashEur,
           eurcAvailableEur: p.eurcAvailableEur,
         })),
+        annualBreakdown: (() => {
+          const lastCycleEndMs = snapshot.cycles.reduce((max, c) =>
+            c.endDate != null ? Math.max(max, c.endDate) : max, 0);
+
+          if (out.periods.length === 0) return [];
+
+          // last period of each year, and all periods per year (for events)
+          const byYear = new Map<number, typeof out.periods[0]>();
+          const periodsByYear = new Map<number, (typeof out.periods[0])[]>();
+          for (const p of out.periods) {
+            const y = new Date(p.date).getUTCFullYear();
+            byYear.set(y, p);
+            if (!periodsByYear.has(y)) periodsByYear.set(y, []);
+            periodsByYear.get(y)!.push(p);
+          }
+
+          let prevWealth = out.summary.initialGrossWealthEur;
+          let prevFutureCapital = 0;
+          let prevSales = 0;
+          let prevRebuys = 0;
+          let prevTax = 0;
+
+          return [...byYear.entries()].sort((a, b) => a[0] - b[0]).map(([year, last]) => {
+            const contributions = last.futureCapitalEur - prevFutureCapital;
+            const sales = last.totalSalesEur - prevSales;
+            const rebuys = last.totalRebuysEur - prevRebuys;
+            const tax = last.taxGeneratedEur - prevTax;
+            const marketGain = last.grossWealthEur - prevWealth - contributions;
+            const yearEndMs = new Date(Date.UTC(year, 11, 31)).getTime();
+            const annualGrowthPct = prevWealth > 0
+              ? Math.round(((last.grossWealthEur - prevWealth) / prevWealth) * 10000) / 100
+              : null;
+
+            // collect all events from this year's periods
+            const yearEvents = (periodsByYear.get(year) ?? []).flatMap(p => p.events ?? []);
+
+            const row = {
+              year,
+              inheritedWealthEur: Math.round(prevWealth * 100) / 100,
+              contributionsEur: Math.round(contributions * 100) / 100,
+              salesEur: Math.round(sales * 100) / 100,
+              rebuysEur: Math.round(rebuys * 100) / 100,
+              taxEur: Math.round(tax * 100) / 100,
+              marketGainEur: Math.round(marketGain * 100) / 100,
+              endWealthEur: Math.round(last.grossWealthEur * 100) / 100,
+              annualGrowthPct,
+              eurcAvailableEur: Math.round((last.eurcAvailableEur ?? 0) * 100) / 100,
+              fiscalReserveEur: Math.round((last.fiscalReserveEur ?? 0) * 100) / 100,
+              scope: (lastCycleEndMs > 0 && yearEndMs > lastCycleEndMs ? "extrapol" : "plan") as "plan" | "extrapol",
+              positions: last.positions ?? {},
+              events: yearEvents,
+            };
+
+            prevWealth = last.grossWealthEur;
+            prevFutureCapital = last.futureCapitalEur;
+            prevSales = last.totalSalesEur;
+            prevRebuys = last.totalRebuysEur;
+            prevTax = last.taxGeneratedEur;
+            return row;
+          });
+        })(),
         assetResults: out.assetResults.map(a => ({
           assetId: a.assetId,
+          initialBalance: a.initialBalance,
+          initialValueEur: a.initialValueEur,
+          initialAvgCostEur: a.initialAvgCostEur,
+          balanceBoughtContributions: a.balanceBoughtContributions,
+          balanceBoughtExtraordinary: a.balanceBoughtExtraordinary,
+          balanceSold: a.balanceSold,
+          balanceRebought: a.balanceRebought,
           finalBalance: a.finalBalance,
+          costContributionsEur: a.costContributionsEur,
+          costRebuyEur: a.costRebuyEur,
+          salesProceedsEur: a.salesProceedsEur,
           finalValueEur: a.finalValueEur,
+          finalPriceEur: a.finalPriceEur,
+          finalAvgCostEur: a.finalAvgCostEur,
+          unrealizedGainEur: a.unrealizedGainEur,
           realizedGainEur: a.realizedGainEur,
+          targetAmount: a.targetAmount,
+          targetValueEur: a.targetValueEur,
           goalReachedProjectedAt: a.goalReachedProjectedAt,
+          hypothesis: hypothesisByAsset.has(a.assetId)
+            ? {
+              annualGrowthRate: hypothesisByAsset.get(a.assetId)!.annualGrowthRate,
+              terminalAnnualRate: hypothesisByAsset.get(a.assetId)!.terminalAnnualRate ?? 0,
+              source: hypothesisByAsset.get(a.assetId)!.source ?? null,
+              hypothesis: hypothesisByAsset.get(a.assetId)!.hypothesis ?? null,
+              dataQuality: hypothesisByAsset.get(a.assetId)!.dataQuality ?? null,
+              confidence: hypothesisByAsset.get(a.assetId)!.confidence ?? null,
+            }
+            : null,
+          annualPriceTrajectory: a.annualPriceTrajectory ?? null,
         })),
+        cycleResults: out.cycleResults.map(cycle => ({
+          cycleId: cycle.cycleId,
+          cycleName: cycle.cycleName,
+          startDate: cycle.startDate,
+          endDate: cycle.endDate,
+          plannedContributionEur: cycle.plannedContributionEur,
+          simulatedContributionEur: cycle.simulatedContributionEur,
+          extraordinaryContributionEur: cycle.extraordinaryContributionEur,
+          salesEur: cycle.salesEur,
+          rebuysEur: cycle.rebuysEur,
+          taxGeneratedEur: cycle.taxGeneratedEur,
+          eurcGeneratedEur: cycle.eurcGeneratedEur,
+          eurcUsedEur: cycle.eurcUsedEur,
+          buysByAsset: cycle.buysByAsset,
+          goalReachedAssets: cycle.goalReachedAssets,
+        })),
+        goalResults,
       };
     });
+
+    const currentPortfolioValueEur = Object.values(snapshot.positions)
+      .reduce((sum, position) => sum + (position.currentValueEur ?? 0), 0);
 
     return {
       snapshot: {
@@ -3167,8 +4326,20 @@ function setupIpcHandlers() {
         generatedAt: snapshot.generatedAt,
         planId: snapshot.planId,
         planName: snapshot.planName,
+        plans: snapshot.plans ?? [],
+        cycles: snapshot.cycles.map(cycle => ({
+          id: cycle.id,
+          planId: cycle.planId,
+          name: cycle.name,
+          startDate: cycle.startDate,
+          endDate: cycle.endDate,
+          monthlyAmountEur: cycle.monthlyAmountEur,
+          status: cycle.status,
+          assetCount: cycle.assets.length,
+        })),
         historicalCapitalEur: snapshot.historicalCapitalEur,
         historicalSalesEur: snapshot.historicalSalesEur,
+        currentPortfolioValueEur,
         positionCount: Object.keys(snapshot.positions).length,
         treasury: snapshot.treasury,
         dataQuality: snapshot.dataQuality,
@@ -3178,21 +4349,226 @@ function setupIpcHandlers() {
       },
       scenarios,
       comparison,
+      contributionLedger,
+      wealthFloorViolations,
+      orderingViolations,
       horizonYears,
       generatedAt: now,
     };
   }));
 
-  // --- COMPRA INTELIGENTE: rebalanceo proporcional sin ejecución automática ---
+  // --- PERSPECTIVAS v2: motor de simulación mensual por activo (nuevo desde cero) ---
 
-  ipcMain.handle("smartBuy:getRecommendation", withResult(async (_, input: { cycleId: string; amount: number }) => {
+  ipcMain.handle("persp2:getSimulation", withResult(async (_, input?: {
+    horizonYears?: number;
+    policy?: "plan_base" | "full_strategy";
+  }) => {
+    const { runPerspectivesSimulation, DEFAULT_SPANISH_TAX_BANDS } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    const now = Date.now();
+    const horizonYears = Math.min(Math.max(input?.horizonYears ?? 10, 1), 30);
+    const horizonDate = now + horizonYears * 365.25 * 24 * 3600 * 1000;
+
+    // Read active plan + cycles
+    const planRows = db.select().from(schema.investmentPlans)
+      .where(eq(schema.investmentPlans.status, "active"))
+      .orderBy(asc(schema.investmentPlans.createdAt))
+      .all();
+    if (planRows.length === 0) throw new Error("No hay un plan de inversión activo.");
+    const planIds = planRows.map(p => p.id);
+
+    const cycleRows = db.select().from(schema.investmentCycles)
+      .where(inArray(schema.investmentCycles.planId, planIds))
+      .orderBy(asc(schema.investmentCycles.startDate), asc(schema.investmentCycles.priority))
+      .all()
+      .filter(c => c.status === "active" || c.status === "planned");
+    const cycleIds = cycleRows.map(c => c.id);
+
+    const allAssetRows = cycleIds.length > 0
+      ? db.select().from(schema.investmentAssets)
+        .where(inArray(schema.investmentAssets.cycleId, cycleIds))
+        .all()
+      : [];
+
+    const saleRuleRows = cycleIds.length > 0
+      ? db.select().from(schema.partialSaleRules)
+        .where(inArray(schema.partialSaleRules.cycleId, cycleIds))
+        .all()
+      : [];
+
+    const rebuyTierRows = cycleIds.length > 0
+      ? db.select().from(schema.cycleRebuyTiers)
+        .where(inArray(schema.cycleRebuyTiers.cycleId, cycleIds))
+        .all()
+      : [];
+
+    const substitutionRows = cycleIds.length > 0
+      ? db.select().from(schema.assetSubstitutions)
+        .where(inArray(schema.assetSubstitutions.cycleId, cycleIds))
+        .all()
+        .filter(r => r.status === "programada" && r.toAssetId != null)
+      : [];
+
+    const revisionRows = cycleIds.length > 0
+      ? db.select().from(schema.strategyRevisions)
+        .where(inArray(schema.strategyRevisions.cycleId, cycleIds))
+        .orderBy(asc(schema.strategyRevisions.effectiveDate))
+        .all()
+        .filter(r => r.effectiveDate > now)
+      : [];
+
+    // Build SimCycles
+    const cycles = cycleRows.map(c => ({
+      id: c.id,
+      planId: c.planId,
+      name: c.name,
+      startDate: c.startDate,
+      endDate: c.endDate ?? null,
+      monthlyAmountEur: c.monthlyAmountEur,
+      assets: allAssetRows
+        .filter(a => a.cycleId === c.id)
+        .map(a => ({
+          id: a.id,
+          assetId: a.assetId,
+          allocationType: (a.allocationType ?? "percentage") as "percentage" | "amount",
+          allocationValue: a.allocationValue ?? 0,
+          allocationPercentage: a.allocationPercentage ?? null,
+          fixedAmountEur: a.fixedAmountEur ?? null,
+          targetAmount: a.targetAmount ?? null,
+          targetValueEur: a.targetValueEur ?? null,
+          startDate: a.startDate ?? c.startDate,
+          endDate: a.endDate ?? null,
+          status: (a.status ?? "active") as "active" | "paused" | "closed" | "goal_reached",
+        })),
+      saleRules: saleRuleRows
+        .filter(r => r.cycleId === c.id)
+        .map(r => ({
+          id: r.id,
+          assetId: r.assetId ?? null,
+          triggerType: (r.conditionType ?? "gain_multiple") as "gain_multiple" | "price_target" | "portfolio_weight",
+          triggerValue: r.conditionValue ?? 0,
+          sellPercentage: r.sellPercentage,
+          status: (r.status === "activa" ? "active" : "cancelled") as "active" | "pending" | "triggered" | "cancelled",
+          triggeredAt: r.lastTriggeredAt ?? null,
+        })),
+      rebuyTiers: rebuyTierRows
+        .filter(r => r.cycleId === c.id)
+        .map(r => ({
+          id: r.id,
+          assetId: r.assetId ?? null,
+          drawdownPercentage: r.drawdownPercentage,
+          usagePercentage: r.usagePercentage,
+          referenceType: (r.referenceType === "last_sale" ? "last_sale" : r.referenceType === "cycle_peak" ? "cycle_peak" : null) as "last_sale" | "cycle_peak" | null,
+          status: (r.status === "activa" ? "active" : "cancelled") as "active" | "triggered" | "cancelled",
+        })),
+      substitutions: substitutionRows
+        .filter(r => r.cycleId === c.id)
+        .map(r => ({
+          id: r.id,
+          fromAssetId: r.fromAssetId,
+          toAssetId: r.toAssetId!,
+          effectiveDate: r.effectiveDate,
+          status: "pending" as const,
+        })),
+      revisions: revisionRows
+        .filter(r => r.cycleId === c.id)
+        .map(r => ({
+          id: r.id,
+          effectiveDate: r.effectiveDate,
+          changesJson: r.changesJson ?? "{}",
+        })),
+    }));
+
+    // Read current portfolio positions + lots
+    const portfolioService = getPortfolioService();
+    const portfolioPositions = (await portfolioService.getPositions()).positions as Record<string, {
+      balance: number; averagePriceEur: number | null; totalInvestedEur: number;
+    }>;
+
+    const lotRows = db.select().from(schema.lots)
+      .orderBy(asc(schema.lots.date))
+      .all()
+      .filter(l => l.remainingAmount != null && l.remainingAmount > 0);
+
+    const investablePositionIds = Object.entries(portfolioPositions)
+      .filter(([assetId, pos]) => isInvestableAsset(assetId) && pos.balance > 1e-12)
+      .map(([assetId]) => assetId);
+
+    const allSimAssetIds = Array.from(new Set([
+      ...investablePositionIds,
+      ...allAssetRows.map(a => a.assetId).filter(isInvestableAsset),
+    ]));
+
+    // Fetch current prices
+    const prices: Record<string, number | null> = {};
+    await Promise.all(allSimAssetIds.map(async (assetId) => {
+      const r = await getSnapshotPrice(assetId);
+      prices[assetId] = finiteOrNull(r.price);
+    }));
+
+    const currentPositions = investablePositionIds.map(assetId => ({
+      assetId,
+      balance: portfolioPositions[assetId]?.balance ?? 0,
+      avgCostEur: finiteOrNull(portfolioPositions[assetId]?.averagePriceEur ?? null),
+      currentPriceEur: prices[assetId] ?? null,
+    }));
+
+    const currentLots = lotRows
+      .filter(l => isInvestableAsset(l.assetId))
+      .map(l => ({
+        id: l.id,
+        assetId: l.assetId,
+        date: l.date,
+        remainingAmount: l.remainingAmount ?? 0,
+        unitAcquisitionPriceEur: l.unitAcquisitionPriceEur ?? 0,
+      }));
+
+    const historicalCapitalEur = investablePositionIds.reduce(
+      (s, id) => s + (portfolioPositions[id]?.totalInvestedEur ?? 0), 0
+    );
+
+    const treasurySummary = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance());
+    const eurcFree = Math.max(0, (treasurySummary?.eurcBalance ?? 0) - (treasurySummary?.fiscalReserveBalance ?? 0));
+    const eurcFiscalReserve = treasurySummary?.fiscalReserveBalance ?? 0;
+    const eurCash = treasurySummary?.cashBalance ?? 0;
+
+    const simInput = {
+      now,
+      horizonDate,
+      currentPositions,
+      currentLots,
+      eurcFree,
+      eurcFiscalReserve,
+      eurCash,
+      historicalCapitalEur,
+      cycles,
+      options: {
+        policy: (input?.policy ?? "full_strategy") as "plan_base" | "full_strategy",
+        commissionRate: 0.004,
+        taxBands: DEFAULT_SPANISH_TAX_BANDS,
+      },
+    };
+
+    return runPerspectivesSimulation(simInput);
+  }));
+
+  // --- COMPRA INTELIGENTE: recomendación explicable sin ejecución automática ---
+
+  ipcMain.handle("smartBuy:getRecommendation", withResult(async (_, input: {
+    cycleId: string;
+    amount: number;
+    mode?: "plan" | "equilibrar" | "oportunidad" | "mixto" | "potencial";
+    originType?: "cash" | "eurc";
+    weights?: { planPct?: number; balancePct?: number; opportunityPct?: number; potentialPct?: number };
+    horizon?: "1-3y" | "3-5y" | "5y+";
+  }) => {
+    const { calculateSmartBuyAllocation } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
     const db = getDb();
+    const requestedEurcForSmartBuy = input.originType === "eurc";
+    const smartBuyOrigin: "cash" = "cash";
+    const smartBuyOriginRestriction = "Compra Inteligente usa aportaciones EUR; las recompras usan la reserva/liquidez EURC en Ventas/Recompras.";
 
     const assetRows = db.select().from(schema.investmentAssets)
-      .where(and(
-        eq(schema.investmentAssets.cycleId, input.cycleId),
-        eq(schema.investmentAssets.status, "active"),
-      ))
+      .where(eq(schema.investmentAssets.cycleId, input.cycleId))
       .all();
 
     const now = Date.now();
@@ -3204,81 +4580,128 @@ function setupIpcHandlers() {
         totalPortfolioValueEur: null,
         recommendations: [],
         hasOpportunities: false,
-        restrictionsApplied: ["Sin activos activos en el ciclo"],
+        restrictionsApplied: requestedEurcForSmartBuy
+          ? [smartBuyOriginRestriction, "Sin activos activos en el ciclo"]
+          : ["Sin activos activos en el ciclo"],
+        pendingAmountEur: input.amount,
         dataQuality: "sin_datos" as const,
+        mode: input.mode ?? "plan",
+        originType: smartBuyOrigin,
         generatedAt: now,
       };
     }
 
-    const portfolioResult = await getPortfolioService().getPositions();
-    const positions: Record<string, { balance: number; averagePriceEur: number | null; totalInvestedEur: number }> = portfolioResult.positions as Record<string, { balance: number; averagePriceEur: number | null; totalInvestedEur: number }>;
+    const [portfolioResult, allocations] = await Promise.all([
+      withTimeout(getPortfolioService().getPositions().catch(() => ({ positions: {} })), 7000, "smartBuy:positions"),
+      withTimeout(getPortfolioService().getAllocation().catch(() => [] as { assetId: string; valueEur: number }[]), 7000, "smartBuy:allocation"),
+    ]);
+    const safePortfolioResult = portfolioResult ?? { positions: {} };
+    const safeAllocations = allocations ?? [];
+    const allocationMap = new Map(safeAllocations.map((a: { assetId: string; valueEur: number }) => [a.assetId, a]));
+    const totalPortfolioValue = safeAllocations.reduce((sum: number, a: { valueEur: number }) => sum + a.valueEur, 0);
+    const positionRows = safePortfolioResult.positions as Record<string, { balance: number; averagePriceEur: number | null; hasPendingValuation?: boolean }>;
+    const planAssetIds = new Set(assetRows.map((asset) => asset.assetId));
+    const assets = assetRows.map((asset) => ({
+      assetId: asset.assetId,
+      status: asset.status ?? "active",
+      targetAllocationPct: asset.allocationPercentage ?? null,
+      goalReachedAt: asset.goalReachedAt ?? null,
+      priority: asset.priority ?? null,
+      isInPlan: true,
+    }));
 
-    const allocations = await getPortfolioService().getAllocation();
-    const allocationMap = new Map(allocations.map((a: { assetId: string; valueEur: number }) => [a.assetId, a]));
-    const totalPortfolioValue = allocations.reduce((sum: number, a: { valueEur: number }) => sum + a.valueEur, 0);
-    const projectedTotal = totalPortfolioValue + input.amount;
+    if (input.mode === "potencial") {
+      for (const [assetId, position] of Object.entries(positionRows)) {
+        if (planAssetIds.has(assetId) || (position.balance ?? 0) <= 0) continue;
+        assets.push({
+          assetId,
+          status: "active",
+          targetAllocationPct: null,
+          goalReachedAt: null,
+          priority: 999,
+          isInPlan: false,
+        });
+      }
+    }
 
-    let totalUnderweight = 0;
-    const assetData = assetRows.map(asset => {
-      const allocation = allocationMap.get(asset.assetId);
-      const position = positions[asset.assetId];
-      const currentValueEur = allocation ? allocation.valueEur : 0;
-      const targetPct = (asset.allocationPercentage ?? 0) / 100;
-      const targetValueEur = projectedTotal * targetPct;
-      const underweightEur = Math.max(0, targetValueEur - currentValueEur);
-      totalUnderweight += underweightEur;
-      return { asset, targetPct, currentValueEur, targetValueEur, underweightEur, position };
-    });
+    async function buildSmartPosition(assetId: string) {
+      const local = positionRows[assetId];
+      const allocation = allocationMap.get(assetId);
+      const balance = local?.balance ?? 0;
+      let currentPriceEur: number | null = balance > 0 && allocation?.valueEur ? allocation.valueEur / balance : null;
+      const currentValueEur = allocation?.valueEur ?? (balance > 0 && currentPriceEur !== null ? balance * currentPriceEur : null);
 
-    let hasOpportunities = false;
-    const recommendations = assetData.map(({ asset, targetPct, currentValueEur, targetValueEur, underweightEur, position }) => {
-      const baseAmount = Math.round(targetPct * input.amount * 100) / 100;
-      const recommendedAmountEur = totalUnderweight > 0
-        ? Math.round((underweightEur / totalUnderweight) * input.amount * 100) / 100
-        : baseAmount;
+      let priceChange24hPct: number | null = null;
+      let priceChange7dPct: number | null = null;
+      let drawdownFromRecentHighPct: number | null = null;
 
-      const balance = position?.balance ?? 0;
-      const avgCostPerUnit = position?.averagePriceEur ?? null;
-      const currentPricePerUnit = balance > 0 && currentValueEur > 0 ? currentValueEur / balance : null;
-      const isOpportunity = avgCostPerUnit !== null && currentPricePerUnit !== null && currentPricePerUnit < avgCostPerUnit * 0.95;
-      if (isOpportunity) hasOpportunities = true;
+      const [priceResult, history] = await Promise.all([
+        currentPriceEur === null || !Number.isFinite(currentPriceEur)
+          ? withTimeout(marketService.getCurrentPriceEur(assetId).catch(() => null), 3500, `smartBuy:price:${assetId}`)
+          : Promise.resolve(null),
+        withTimeout(marketService.getHistoricalPrices(assetId, "7d").catch(() => null), 4500, `smartBuy:history:${assetId}`),
+      ]);
 
-      const opportunityReason = isOpportunity && currentPricePerUnit !== null && avgCostPerUnit !== null
-        ? `Precio actual (${currentPricePerUnit.toFixed(2)} €/u) está un ${((1 - currentPricePerUnit / avgCostPerUnit) * 100).toFixed(1)}% por debajo del coste medio (${avgCostPerUnit.toFixed(2)} €/u)`
-        : null;
+      if ((currentPriceEur === null || !Number.isFinite(currentPriceEur)) && priceResult?.price) {
+        currentPriceEur = priceResult.price;
+      }
 
-      const isUnderweight = currentValueEur < targetValueEur;
-      const reason = isUnderweight
-        ? `${asset.assetId} está infraponderado: ${currentValueEur.toFixed(0)} € actuales vs ${targetValueEur.toFixed(0)} € objetivo (${asset.allocationPercentage ?? 0}% del total proyectado).`
-        : `${asset.assetId} está en o por encima de su objetivo: ${currentValueEur.toFixed(0)} € actuales vs ${targetValueEur.toFixed(0)} € objetivo.`;
+      if (history) {
+        const points = [...history.points]
+          .filter((point: { price: number; timestamp: number }) => Number.isFinite(point.price) && point.price > 0)
+          .sort((a: { timestamp: number }, b: { timestamp: number }) => a.timestamp - b.timestamp);
+        const latest = currentPriceEur ?? points.at(-1)?.price ?? null;
+        if (latest !== null && points.length > 0) {
+          if (currentPriceEur === null || !Number.isFinite(currentPriceEur)) currentPriceEur = latest;
+          const first7d = points[0]?.price ?? null;
+          const first24h = points.find((point: { timestamp: number }) => point.timestamp >= now - 24 * 60 * 60 * 1000)?.price ?? null;
+          const high = points.reduce((max: number, point: { price: number }) => Math.max(max, point.price), 0);
+          priceChange7dPct = first7d ? ((latest - first7d) / first7d) * 100 : null;
+          priceChange24hPct = first24h ? ((latest - first24h) / first24h) * 100 : null;
+          drawdownFromRecentHighPct = high > 0 ? ((latest - high) / high) * 100 : null;
+        }
+      }
 
       return {
-        assetId: asset.assetId,
-        recommendedAmountEur,
-        baseAmountEur: baseAmount,
-        deviationFromBaseEur: Math.round((recommendedAmountEur - baseAmount) * 100) / 100,
-        targetAllocationPct: asset.allocationPercentage ?? null,
-        currentValueEur: currentValueEur > 0 ? Math.round(currentValueEur * 100) / 100 : null,
-        targetValueEur: Math.round(targetValueEur * 100) / 100,
-        isUnderweight,
-        isOpportunity,
-        opportunityReason,
-        confidenceLevel: (position && currentValueEur > 0 ? "alta" : position ? "media" : "baja") as "alta" | "media" | "baja",
-        reason,
+        assetId,
+        balance,
+        currentValueEur: currentValueEur !== null && Number.isFinite(currentValueEur) ? currentValueEur : null,
+        averagePriceEur: local?.hasPendingValuation ? null : local?.averagePriceEur ?? null,
+        currentPriceEur: currentPriceEur !== null && Number.isFinite(currentPriceEur) ? currentPriceEur : null,
+        priceChange24hPct,
+        priceChange7dPct,
+        drawdownFromRecentHighPct,
       };
-    });
+    }
 
-    const dataQuality = allocations.length > 0 ? "completo" as const : "parcial" as const;
+    const smartPositions = Object.fromEntries(
+      await Promise.all(assets.map(async (asset) => [asset.assetId, await buildSmartPosition(asset.assetId)]))
+    );
+    const treasurySummary = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance());
+    const result = calculateSmartBuyAllocation(
+      assets,
+      smartPositions,
+      Number(input.amount),
+      totalPortfolioValue > 0 ? Math.round(totalPortfolioValue * 100) / 100 : null,
+      input.mode ?? "plan",
+      smartBuyOrigin,
+      {
+        eurcBalance: treasurySummary.eurcBalance,
+        fiscalReserveBalance: treasurySummary.fiscalReserveBalance,
+        freeRebuyLiquidity: treasurySummary.freeRebuyLiquidity,
+      },
+      30,
+      now,
+      { weights: input.weights, horizon: input.horizon }
+    );
 
     return {
+      ...result,
       cycleId: input.cycleId,
-      analyzedAmountEur: input.amount,
-      totalPortfolioValueEur: Math.round(totalPortfolioValue * 100) / 100,
-      recommendations,
-      hasOpportunities,
-      restrictionsApplied: [],
-      dataQuality,
-      generatedAt: now,
+      originType: smartBuyOrigin,
+      restrictionsApplied: requestedEurcForSmartBuy
+        ? [smartBuyOriginRestriction, ...result.restrictionsApplied]
+        : result.restrictionsApplied,
     };
   }));
 
@@ -3318,6 +4741,12 @@ function setupIpcHandlers() {
     const db = getDb();
     const now = Date.now();
     const id = data.id ?? crypto.randomUUID();
+    if (!Number.isFinite(data.drawdownPercentage) || data.drawdownPercentage <= 0 || data.drawdownPercentage > 100) {
+      throw new Error("La caída del escalón debe estar entre 0 y 100%.");
+    }
+    if (!Number.isFinite(data.usagePercentage) || data.usagePercentage <= 0 || data.usagePercentage >= 100) {
+      throw new Error("El porcentaje de EURC debe ser mayor que 0 y menor que 100%; siempre debe quedar EURC residual.");
+    }
     db.insert(schema.cycleRebuyTiers)
       .values({
         id, cycleId: data.cycleId,
@@ -3372,7 +4801,7 @@ function setupIpcHandlers() {
     const tiers = tierRows.map(mapRebuyTier).filter(t => t.status === "activa");
 
     const treasurySummary = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance());
-    const availableLiquidityEur = Math.max(0, (treasurySummary?.eurcBalance ?? 0) - (treasurySummary?.fiscalReserveBalance ?? 0));
+    const availableLiquidityEur = Math.max(0, treasurySummary?.freeRebuyLiquidity ?? ((treasurySummary?.eurcBalance ?? 0) - (treasurySummary?.fiscalReserveBalance ?? 0)));
 
     const allocations = await getPortfolioService().getAllocation();
     const prices: Record<string, number | null> = {};
@@ -3451,18 +4880,20 @@ function setupIpcHandlers() {
   }));
 
   ipcMain.handle("partialSaleRules:update", withResult(async (_, id: string, data: import("@crypto-control/core").UpdatePartialSaleRuleInput) => {
+    const { UpdatePartialSaleRuleSchema } = require("@crypto-control/core") as typeof import("@crypto-control/core");
+    const parsed = UpdatePartialSaleRuleSchema.parse(data);
     const db = getDb();
     const now = Date.now();
     const updates: Record<string, unknown> = { updatedAt: now };
-    if (data.name !== undefined) updates.name = data.name;
-    if (data.conditionType !== undefined) updates.conditionType = data.conditionType;
-    if (data.conditionValue !== undefined) updates.conditionValue = data.conditionValue;
-    if (data.conditionValue2 !== undefined) updates.conditionValue2 = data.conditionValue2;
-    if (data.sellPercentage !== undefined) updates.sellPercentage = data.sellPercentage;
-    if (data.priority !== undefined) updates.priority = data.priority;
-    if (data.status !== undefined) updates.status = data.status;
-    if (data.effectiveDate !== undefined) updates.effectiveDate = data.effectiveDate;
-    if (data.notes !== undefined) updates.notes = data.notes;
+    if (parsed.name !== undefined) updates.name = parsed.name;
+    if (parsed.conditionType !== undefined) updates.conditionType = parsed.conditionType;
+    if (parsed.conditionValue !== undefined) updates.conditionValue = parsed.conditionValue;
+    if (parsed.conditionValue2 !== undefined) updates.conditionValue2 = parsed.conditionValue2;
+    if (parsed.sellPercentage !== undefined) updates.sellPercentage = parsed.sellPercentage;
+    if (parsed.priority !== undefined) updates.priority = parsed.priority;
+    if (parsed.status !== undefined) updates.status = parsed.status;
+    if (parsed.effectiveDate !== undefined) updates.effectiveDate = parsed.effectiveDate;
+    if (parsed.notes !== undefined) updates.notes = parsed.notes;
     db.update(schema.partialSaleRules).set(updates).where(eq(schema.partialSaleRules.id, id)).run();
     const row = db.select().from(schema.partialSaleRules).where(eq(schema.partialSaleRules.id, id)).get();
     if (!row) throw new Error("Regla no encontrada");
@@ -3754,6 +5185,193 @@ function setupIpcHandlers() {
     console.log(`[HTTP] API bridge on port ${HTTP_PORT}`);
   });
   app.on("will-quit", () => apiServer.close());
+
+  // ── Trade alerts ──────────────────────────────────────────────────────────
+
+  interface SellAlert {
+    assetId: string;
+    currentPriceEur: number;
+    avgCostEur: number;
+    gainPct: number;
+    suggestedSellPct: number;   // fraction of position (e.g. 0.10)
+    suggestedQtyUnits: number;
+    suggestedAmountEur: number;
+    tier: 50 | 100 | 200;
+  }
+  interface RebuyAlert {
+    assetId: string;
+    currentPriceEur: number;
+    lastSalePriceEur: number;
+    drawdownPct: number;
+    eurcToUseEur: number;       // EUR to deploy in this tier
+    suggestedQtyUnits: number;
+    tier: 15 | 25 | 40;
+  }
+  interface TradeAlertsResult {
+    sellAlerts: SellAlert[];
+    rebuyAlerts: RebuyAlert[];
+    eurcAvailableEur: number;
+    checkedAt: number;
+  }
+
+  const SELL_TIERS: { gainPct: number; sellPct: number; tier: 50 | 100 | 200 }[] = [
+    { gainPct: 200, sellPct: 0.20, tier: 200 },
+    { gainPct: 100, sellPct: 0.15, tier: 100 },
+    { gainPct:  50, sellPct: 0.10, tier:  50 },
+  ];
+  const REBUY_TIERS: { drawdownPct: number; eurcPct: number; tier: 15 | 25 | 40 }[] = [
+    { drawdownPct: 40, eurcPct: 0.50, tier: 40 },
+    { drawdownPct: 25, eurcPct: 0.30, tier: 25 },
+    { drawdownPct: 15, eurcPct: 0.20, tier: 15 },
+  ];
+
+  async function computeTradeAlerts(): Promise<TradeAlertsResult> {
+    const db = getDb();
+    const now = Date.now();
+
+    // 1. Portfolio positions (balance + avg cost)
+    const posResult = await getPortfolioService().getPositions().catch(() => ({ positions: {} }));
+    const positions = posResult.positions as Record<string, { balance: number; averagePriceEur: number | null }>;
+
+    // 2. Current prices (fast cached)
+    const assetIds = Object.keys(positions).filter(id => (positions[id].balance ?? 0) > 1e-12 && id !== "EURC");
+    const priceMap: Record<string, number | null> = {};
+    await Promise.all(
+      assetIds.map(async id => {
+        const r = await getCurrentPriceFast(id).catch(() => null);
+        priceMap[id] = r?.price ?? null;
+      })
+    );
+
+    // 3. Last sale price per asset (from realizedGains, most recent per assetId)
+    const allGains = db.select().from(schema.realizedGains).orderBy(desc(schema.realizedGains.date)).all();
+    const lastSalePriceByAsset: Record<string, number> = {};
+    for (const g of allGains) {
+      if (!lastSalePriceByAsset[g.assetId] && g.amountSold > 0) {
+        lastSalePriceByAsset[g.assetId] = g.saleValueEur / g.amountSold;
+      }
+    }
+
+    // 4. EURC available (from treasury)
+    const coinbaseEurc = getCoinbaseEurcBalance?.() ?? 0;
+    const treasurySummary = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), coinbaseEurc);
+    const eurcAvailableEur = Math.max(0, (treasurySummary as any).eurcAvailableEur ?? 0);
+
+    const sellAlerts: SellAlert[] = [];
+    const rebuyAlerts: RebuyAlert[] = [];
+
+    for (const assetId of assetIds) {
+      const pos = positions[assetId];
+      const price = priceMap[assetId];
+      if (price == null || price <= 0) continue;
+      const avgCost = pos.averagePriceEur;
+      if (avgCost == null || avgCost <= 0) continue;
+      const balance = pos.balance;
+      if (balance < 1e-12) continue;
+
+      // Sell alerts
+      const gainPct = (price / avgCost - 1) * 100;
+      for (const t of SELL_TIERS) {
+        if (gainPct >= t.gainPct) {
+          const qty = balance * t.sellPct;
+          sellAlerts.push({
+            assetId,
+            currentPriceEur: price,
+            avgCostEur: avgCost,
+            gainPct,
+            suggestedSellPct: t.sellPct,
+            suggestedQtyUnits: qty,
+            suggestedAmountEur: qty * price,
+            tier: t.tier,
+          });
+          break; // only highest tier per asset
+        }
+      }
+
+      // Rebuy alerts
+      const lastSalePrice = lastSalePriceByAsset[assetId] ?? null;
+      if (lastSalePrice != null && lastSalePrice > 0 && price < lastSalePrice && eurcAvailableEur > 0) {
+        const drawdownPct = (lastSalePrice - price) / lastSalePrice * 100;
+        for (const t of REBUY_TIERS) {
+          if (drawdownPct >= t.drawdownPct) {
+            const eurcToUse = eurcAvailableEur * t.eurcPct;
+            rebuyAlerts.push({
+              assetId,
+              currentPriceEur: price,
+              lastSalePriceEur: lastSalePrice,
+              drawdownPct,
+              eurcToUseEur: eurcToUse,
+              suggestedQtyUnits: eurcToUse / price,
+              tier: t.tier,
+            });
+            break; // only highest tier per asset
+          }
+        }
+      }
+    }
+
+    return { sellAlerts, rebuyAlerts, eurcAvailableEur, checkedAt: now };
+  }
+
+  ipcMain.handle("trade:get-alerts", withResult(async () => computeTradeAlerts()));
+
+  // Background checker: every 15 minutes; OS notification + IPC push on new alerts
+  const { Notification } = require("electron") as typeof import("electron");
+  const notifiedSellKeys = new Set<string>();
+  const notifiedRebuyKeys = new Set<string>();
+
+  async function runTradeAlertCheck() {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    try {
+      const result = await computeTradeAlerts();
+
+      for (const a of result.sellAlerts) {
+        const key = `sell-${a.assetId}-${a.tier}`;
+        if (!notifiedSellKeys.has(key)) {
+          notifiedSellKeys.add(key);
+          new Notification({
+            title: `📈 Venta parcial recomendada: ${a.assetId}`,
+            body: `+${a.gainPct.toFixed(0)}% de ganancia → vender ${(a.suggestedSellPct * 100).toFixed(0)}% (${a.suggestedQtyUnits.toFixed(6)} ${a.assetId} ≈ ${a.suggestedAmountEur.toFixed(2)} €)`,
+            silent: false,
+          }).show();
+        }
+      }
+
+      for (const a of result.rebuyAlerts) {
+        const key = `rebuy-${a.assetId}-${a.tier}`;
+        if (!notifiedRebuyKeys.has(key)) {
+          notifiedRebuyKeys.add(key);
+          new Notification({
+            title: `📉 Recompra recomendada: ${a.assetId}`,
+            body: `-${a.drawdownPct.toFixed(0)}% desde última venta → usar ${a.eurcToUseEur.toFixed(2)} € EURC (${a.suggestedQtyUnits.toFixed(6)} ${a.assetId})`,
+            silent: false,
+          }).show();
+        }
+      }
+
+      // Clear "notified" keys when the condition is no longer active, so future alerts fire again
+      for (const key of [...notifiedSellKeys]) {
+        const [, assetId, tierStr] = key.split("-");
+        const still = result.sellAlerts.some(a => a.assetId === assetId && String(a.tier) === tierStr);
+        if (!still) notifiedSellKeys.delete(key);
+      }
+      for (const key of [...notifiedRebuyKeys]) {
+        const parts = key.split("-"); // rebuy-ASSETID-TIER
+        const assetId = parts[1];
+        const tierStr = parts[2];
+        const still = result.rebuyAlerts.some(a => a.assetId === assetId && String(a.tier) === tierStr);
+        if (!still) notifiedRebuyKeys.delete(key);
+      }
+
+      mainWindow.webContents.send("trade:new-alerts", result);
+    } catch (e) {
+      console.error("[TradeAlerts] check failed:", e);
+    }
+  }
+
+  // Run immediately on startup (delayed 30s to let prices load) then every 15 min
+  setTimeout(() => runTradeAlertCheck(), 30_000);
+  setInterval(() => runTradeAlertCheck(), 15 * 60 * 1000);
 
 }
 

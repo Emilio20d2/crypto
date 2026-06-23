@@ -199,13 +199,11 @@ describe("evaluatePartialSaleRule — estado y validaciones", () => {
     expect(r.isTriggered).toBe(false);
   });
 
-  test("nunca vende más del 100% de la posición", () => {
+  test("rechaza venta del 100% para mantener posición residual", () => {
     const r = evaluatePartialSaleRule(makeRule({ sellPercentage: 100 }), makePosition({ balance: 0.5 }), marketHigh);
-    expect(r.isTriggered).toBe(true);
-    // 100% es válido, remainingBalance debe ser ~0
-    expect(r.preview?.remainingBalance).toBeCloseTo(0);
-    // No se puede superar la posición
-    expect(r.preview?.quantityToSell).toBeLessThanOrEqual(0.5 + 0.0001);
+    expect(r.isTriggered).toBe(false);
+    expect(r.preview).toBeNull();
+    expect(r.notTriggeredReason).toMatch(/inválido/i);
   });
 });
 
@@ -225,6 +223,36 @@ describe("evaluatePartialSaleRules — batch", () => {
     expect(results[0].isTriggered).toBe(true);
     expect(results[1].rule.id).toBe("r1");
     expect(results[1].isTriggered).toBe(false);
+  });
+
+  test("dos tramos alcanzados se calculan sobre la posición restante", () => {
+    const rules = [
+      makeRule({ id: "r1", conditionType: "gain_percentage", conditionValue: 50, sellPercentage: 10, priority: 1 }),
+      makeRule({ id: "r2", conditionType: "gain_percentage", conditionValue: 100, sellPercentage: 15, priority: 2 }),
+    ];
+    const positions = { BTC: makePosition({ balance: 1, averagePriceEur: 50_000, totalInvestedEur: 50_000 }) };
+    const markets = { BTC: { currentPriceEur: 110_000, marketPhase: null, isEuphoria: false } };
+    const results = evaluatePartialSaleRules(rules, positions, markets);
+    expect(results[0].preview?.quantityToSell).toBeCloseTo(0.1);
+    expect(results[0].preview?.remainingBalance).toBeCloseTo(0.9);
+    expect(results[1].preview?.quantityToSell).toBeCloseTo(0.135);
+    expect(results[1].preview?.remainingBalance).toBeCloseTo(0.765);
+    expect(results[1].preview?.remainingPercentage).toBeCloseTo(85);
+  });
+
+  test("varios tramos agresivos no liquidan la posición", () => {
+    const rules = [
+      makeRule({ id: "r1", conditionValue: 80_000, sellPercentage: 60, priority: 1 }),
+      makeRule({ id: "r2", conditionValue: 90_000, sellPercentage: 60, priority: 2 }),
+    ];
+    const results = evaluatePartialSaleRules(
+      rules,
+      { BTC: makePosition({ balance: 1, totalInvestedEur: 50_000 }) },
+      { BTC: marketHigh },
+    );
+    expect(results.every(r => r.isTriggered)).toBe(true);
+    expect(results[0].preview?.remainingBalance).toBeCloseTo(0.4);
+    expect(results[1].preview?.remainingBalance).toBeCloseTo(0.16);
   });
 
   test("preparar venta no ejecuta la venta", () => {

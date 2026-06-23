@@ -1,759 +1,826 @@
 import { useState, useMemo } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  ChartNoAxesCombined, Target, TrendingUp, PlusCircle, Trash2,
-  AlertCircle, Info, Pencil, CheckCircle2, RefreshCw, AlertTriangle,
-} from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { ChartNoAxesCombined, ChevronLeft, ChevronRight } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "../components/Card";
 import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/Card";
-import { Input } from "../components/Input";
+import { EmptyState } from "../components/EmptyState";
+import { ErrorState } from "../components/ErrorState";
+import { LoadingState } from "../components/LoadingState";
 import { PageToolbar } from "../components/PageToolbar";
-import type { PerspectivesGoal, PerspectivesGoalType, ProjectionResult, ProjectionScenarioResult } from "@crypto-control/core";
+import { SegmentedControl } from "../components/SegmentedControl";
+// formatMoney no se usa aquí: el formatter local (_eur2) garantiza max 2 decimales
 
-// ─── helpers ────────────────────────────────────────────────────────────────
+// ─── Types (mirrors packages/portfolio/src/perspectives/types.ts) ────────────
 
-const api = () => window.cryptoControl;
+type SimScenario = "conservador" | "moderado" | "base" | "favorable" | "optimista";
 
-function fmt(v: number | null | undefined) {
-  if (v == null || !isFinite(v)) return "—";
-  return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(v);
+interface AnnualAssetPosition {
+  assetId: string;
+  balance: number;
+  avgCostEur: number | null;
+  priceEur: number | null;
+  valueEur: number | null;
+  unrealizedGainEur: number | null;
+  totalBought: number;
+  totalSold: number;
+  totalRebuys: number;
+  goalReached: boolean;
+  failed: boolean;
 }
 
-function pct(v: number | null | undefined) {
-  if (v == null || !isFinite(v)) return "—";
-  return `${(v * 100).toFixed(0)}%`;
-}
-
-function dateToTs(s: string): number | null {
-  if (!s) return null;
-  const d = new Date(s);
-  return isNaN(d.getTime()) ? null : d.getTime();
-}
-
-function tsToDate(ts: number | null): string {
-  if (!ts) return "";
-  return new Date(ts).toISOString().slice(0, 10);
-}
-
-function yearOf(ts: number) {
-  return new Date(ts).getFullYear();
-}
-
-const SCENARIO_COLORS: Record<string, string> = {
-  conservador: "var(--color-muted-fg)",
-  base: "var(--color-primary)",
-  optimista: "var(--color-success)",
-  dinamico: "var(--color-warning)",
-};
-
-const GOAL_TYPE_LABELS: Record<string, string> = {
-  patrimonio: "Patrimonio general",
-  vivienda: "Vivienda",
-  jubilacion: "Jubilación",
-  independencia_financiera: "Independencia financiera",
-  capital_objetivo: "Capital objetivo",
-  personalizado: "Personalizado",
-};
-
-// ─── Goal form ──────────────────────────────────────────────────────────────
-
-interface GoalFormState {
-  name: string;
+interface SimEvent {
+  date: number;
   type: string;
-  targetAmountEur: string;
-  targetDate: string;
-  notes: string;
+  assetId?: string;
+  amountEur?: number;
+  quantity?: number;
+  priceEur?: number;
+  gainEur?: number;
+  taxEur?: number;
+  description: string;
 }
 
-const EMPTY_GOAL_FORM: GoalFormState = {
-  name: "", type: "personalizado", targetAmountEur: "", targetDate: "", notes: "",
+interface AnnualSnapshot {
+  year: number;
+  scope: "plan" | "extrapol";
+  openingWealthEur: number;
+  closingWealthEur: number;
+  closingGrossEur: number;
+  contributionsEur: number;
+  marketGainEur: number;
+  salesEur: number;
+  rebuysEur: number;
+  commissionsEur: number;
+  taxEur: number;
+  eurcReinvestedEur: number;
+  fiscalReserveEur: number;
+  eurcFreeEur: number;
+  eurCashEur: number;
+  annualReturnPct: number | null;
+  positions: Record<string, AnnualAssetPosition>;
+  events: SimEvent[];
+}
+
+interface ScenarioSummary {
+  scenario: SimScenario;
+  initialWealthEur: number;
+  finalNetWealthEur: number;
+  totalContributionsEur: number;
+  totalHistoricalCapitalEur: number;
+  totalMarketGainEur: number;
+  totalSalesEur: number;
+  totalRebuysEur: number;
+  totalCommissionsEur: number;
+  totalTaxEur: number;
+  totalEurcReinvestedEur: number;
+  xirr: number | null;
+  maxDrawdownPct: number | null;
+}
+
+interface ScenarioResult {
+  scenario: SimScenario;
+  label: string;
+  annualSnapshots: AnnualSnapshot[];
+  summary: ScenarioSummary;
+}
+
+interface ValidationResult {
+  rule: string;
+  passed: boolean;
+  detail: string;
+}
+
+interface PerspectivesSimulation {
+  computedAt: number;
+  startYear: number;
+  endYear: number;
+  horizonDate: number;
+  scenarios: ScenarioResult[];
+  validations: ValidationResult[];
+}
+
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+const SCENARIOS: SimScenario[] = ["conservador", "moderado", "base", "favorable", "optimista"];
+const SCENARIO_LABELS: Record<SimScenario, string> = {
+  conservador: "Conservador",
+  moderado:    "Moderado",
+  base:        "Base",
+  favorable:   "Favorable",
+  optimista:   "Optimista",
+};
+const HORIZON_OPTIONS = [3, 5, 7, 10, 15, 20];
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+// Siempre 2 decimales máx (formatMoney usa 4 para valores < €100)
+const _eur2 = new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 2 });
+
+function fmt(v: number | null | undefined): string {
+  if (v == null || !isFinite(v)) return "—";
+  return _eur2.format(v);
+}
+
+function fmtSign(v: number | null | undefined): string {
+  if (v == null || !isFinite(v)) return "—";
+  return `${v >= 0 ? "+" : ""}${_eur2.format(v)}`;
+}
+
+function fmtPct(v: number | null | undefined, decimals = 1): string {
+  if (v == null || !isFinite(v)) return "—";
+  return `${v >= 0 ? "+" : ""}${(v * 100).toFixed(decimals)}%`;
+}
+
+function fmtAnnualPct(v: number | null | undefined): string {
+  if (v == null || !isFinite(v)) return "—";
+  return `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`;
+}
+
+const EVENT_BADGE_VARIANT: Record<string, "success" | "danger" | "warning" | "info" | "neutral"> = {
+  sale: "warning",
+  rebuy: "success",
+  purchase: "info",
+  asset_failed: "danger",
+  asset_deteriorated: "danger",
+  goal_reached: "success",
+  substitution: "info",
+  reinvestment: "neutral",
 };
 
-// ─── Main component ─────────────────────────────────────────────────────────
+const EVENT_LABELS: Record<string, string> = {
+  purchase: "Compra", sale: "Venta", rebuy: "Recompra",
+  reinvestment: "Reinversión", tax_reserve: "Reserva fiscal",
+  goal_reached: "Objetivo", asset_deteriorated: "Deterioro",
+  asset_failed: "Fallido", substitution: "Sustitución",
+  strategy_revision: "Revisión", cycle_change: "Ciclo",
+  contribution: "Aportación",
+};
 
-export function Perspectivas() {
-  const qc = useQueryClient();
+// ─── Sub-components ───────────────────────────────────────────────────────────
 
-  const [horizonYears, setHorizonYears] = useState(10);
-  const [activeScenario, setActiveScenario] = useState<"conservador" | "base" | "optimista" | "dinamico">("base");
-
-  const [showGoalForm, setShowGoalForm] = useState(false);
-  const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
-  const [goalForm, setGoalForm] = useState<GoalFormState>(EMPTY_GOAL_FORM);
-
-  // ── projection query ──────────────────────────────────────────────────────
-  const projectionQ = useQuery({
-    queryKey: ["perspectives:getProjection", horizonYears],
-    queryFn: async () => {
-      const r = await api().perspectives.getProjection({ horizonYears });
-      if (!r.ok) throw new Error(r.error?.message ?? "Error al calcular proyección");
-      return r.data as ProjectionResult;
-    },
-    staleTime: 5 * 60_000,
-    retry: 1,
-  });
-
-  // ── goals query ───────────────────────────────────────────────────────────
-  const goalsQ = useQuery({
-    queryKey: ["perspectives:getGoals"],
-    queryFn: async () => {
-      const r = await api().perspectives.getGoals();
-      if (!r.ok) throw new Error(r.error?.message ?? "Error");
-      return r.data;
-    },
-    staleTime: 30_000,
-  });
-
-  // ── mutations ─────────────────────────────────────────────────────────────
-  const createGoal = useMutation({
-    mutationFn: (data: GoalFormState) =>
-      api().perspectives.createGoal({
-        name: data.name,
-        type: data.type as PerspectivesGoalType,
-        targetAmountEur: parseFloat(data.targetAmountEur),
-        targetDate: dateToTs(data.targetDate),
-        notes: data.notes || null,
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["perspectives:getGoals"] });
-      setShowGoalForm(false);
-      setGoalForm(EMPTY_GOAL_FORM);
-    },
-  });
-
-  const updateGoal = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: GoalFormState }) =>
-      api().perspectives.updateGoal(id, {
-        name: data.name,
-        type: data.type as PerspectivesGoalType,
-        targetAmountEur: parseFloat(data.targetAmountEur),
-        targetDate: dateToTs(data.targetDate),
-        notes: data.notes || null,
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["perspectives:getGoals"] });
-      setEditingGoalId(null);
-      setGoalForm(EMPTY_GOAL_FORM);
-    },
-  });
-
-  const deleteGoal = useMutation({
-    mutationFn: (id: string) => api().perspectives.deleteGoal(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["perspectives:getGoals"] }),
-  });
-
-  // ── derived data ──────────────────────────────────────────────────────────
-  const projection = projectionQ.data;
-  const activeScenarioData = useMemo<ProjectionScenarioResult | null>(
-    () => projection?.scenarios.find(s => s.scenario === activeScenario) ?? null,
-    [projection, activeScenario],
-  );
-
-  const currentValueEur = projection?.snapshot.positions
-    ? Object.values(projection.snapshot.positions).reduce((s, p) => s + (p.currentValueEur ?? 0), 0)
-    : 0;
-
-  function goalEta(goal: PerspectivesGoal): string | null {
-    if (!activeScenarioData) return null;
-    for (const pt of activeScenarioData.chartPoints) {
-      if (pt.netWealthEur >= goal.targetAmountEur) {
-        return String(yearOf(pt.date));
-      }
-    }
-    return null;
-  }
-
-  const dataScore = projection?.snapshot.dataQuality.overallScore ?? null;
-
-  // ── render ────────────────────────────────────────────────────────────────
-  return (
-    <section className="page-stack">
-      <PageToolbar
-        title="Perspectivas"
-        meta="Motor de proyección — simulación hipotética, sin ejecutar operaciones"
-      />
-
-      {/* ── Sección 1: Estado del plan ── */}
-      <PlanSnapshotSection projection={projection} loading={projectionQ.isLoading} error={projectionQ.error} />
-
-      {/* ── Sección 2: 4 escenarios (comparativa) ── */}
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            <ChartNoAxesCombined size={16} />
-            Proyección — 4 escenarios
-          </CardTitle>
-          <div className="flex gap-2 items-center">
-            <label className="text-sm text-muted">Horizonte:</label>
-            <select
-              className="ui-select"
-              style={{ width: 100 }}
-              value={horizonYears}
-              onChange={e => setHorizonYears(parseInt(e.target.value))}
-            >
-              {[3, 5, 10, 15, 20, 30].map(y => (
-                <option key={y} value={y}>{y} años</option>
-              ))}
-            </select>
-            {projectionQ.isFetching && <RefreshCw size={14} className="animate-spin text-muted" />}
-          </div>
-        </CardHeader>
-        <CardContent>
-          {projectionQ.isLoading && <p className="text-muted text-sm">Calculando proyección…</p>}
-          {projectionQ.error && (
-            <div className="empty-state-inline">
-              <AlertCircle size={16} />
-              <span>{String(projectionQ.error)}</span>
-            </div>
-          )}
-          {projection && (
-            <>
-              <div className="perspectives-summary-grid">
-                <div className="perspectives-current-card">
-                  <span className="label">Valor actual</span>
-                  <span className="value">{fmt(currentValueEur)}</span>
-                  <span className="sub">Tesorería: {fmt(projection.snapshot.treasury.totalLiquidityEur)}</span>
-                  <span className="sub">Invertido: {fmt(projection.snapshot.historicalCapitalEur)}</span>
-                </div>
-                {(["conservador", "base", "optimista", "dinamico"] as const).map(s => {
-                  const sc = projection.scenarios.find(x => x.scenario === s);
-                  if (!sc) return null;
-                  return (
-                    <div
-                      key={s}
-                      className={`perspectives-scenario-card ${s} ${activeScenario === s ? "active" : ""}`}
-                      onClick={() => setActiveScenario(s)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={e => e.key === "Enter" && setActiveScenario(s)}
-                    >
-                      <span className="label">{sc.label}</span>
-                      <span className="value">{fmt(sc.summary.finalNetWealthEur)}</span>
-                      <span className="sub">Bruto: {fmt(sc.summary.finalGrossWealthEur)}</span>
-                      <span className="sub">Impuesto: {fmt(sc.summary.totalTaxGeneratedEur)}</span>
-                      {sc.probability != null && (
-                        <span className="sub">Probabilidad: {pct(sc.probability)}</span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Comparison table */}
-              <div className="perspectives-cycle-table-wrapper" style={{ marginTop: "1rem" }}>
-                <table className="perspectives-cycle-table">
-                  <thead>
-                    <tr>
-                      <th>Escenario</th>
-                      <th className="text-right">Capital total</th>
-                      <th className="text-right">Plusvalía realizada</th>
-                      <th className="text-right">No realizada</th>
-                      <th className="text-right">Impuesto</th>
-                      <th className="text-right">Patrimonio neto</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {projection.scenarios.map(sc => (
-                      <tr
-                        key={sc.scenario}
-                        className={activeScenario === sc.scenario ? "selected" : ""}
-                        style={{ cursor: "pointer" }}
-                        onClick={() => setActiveScenario(sc.scenario)}
-                      >
-                        <td>
-                          <span
-                            style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: SCENARIO_COLORS[sc.scenario], marginRight: 6 }}
-                          />
-                          {sc.label}
-                        </td>
-                        <td className="text-right">{fmt(sc.summary.totalCapitalEur)}</td>
-                        <td className={`text-right ${sc.summary.totalRealizedGainEur > 0 ? "text-success" : ""}`}>
-                          {sc.summary.totalRealizedGainEur > 0 ? "+" : ""}{fmt(sc.summary.totalRealizedGainEur)}
-                        </td>
-                        <td className={`text-right ${sc.summary.totalUnrealizedGainEur > 0 ? "text-success" : ""}`}>
-                          {sc.summary.totalUnrealizedGainEur > 0 ? "+" : ""}{fmt(sc.summary.totalUnrealizedGainEur)}
-                        </td>
-                        <td className="text-right text-muted">{fmt(sc.summary.totalTaxGeneratedEur)}</td>
-                        <td className="text-right font-medium">{fmt(sc.summary.finalNetWealthEur)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* ── Sección 3: Gráfico evolutivo ── */}
-      {activeScenarioData && (
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              <TrendingUp size={16} />
-              Evolución — {activeScenarioData.label}
-            </CardTitle>
-            <Badge variant="neutral">Simulación mensual</Badge>
-          </CardHeader>
-          <CardContent>
-            <ScenarioChart
-              scenarios={projection!.scenarios}
-              activeScenario={activeScenario}
-              horizonYears={horizonYears}
-            />
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ── Sección 4: Objetivos ── */}
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            <Target size={16} />
-            Objetivos de inversión
-          </CardTitle>
-          <Button
-            size="sm" variant="secondary"
-            onClick={() => { setShowGoalForm(true); setEditingGoalId(null); setGoalForm(EMPTY_GOAL_FORM); }}
-          >
-            <PlusCircle size={14} />
-            Nuevo objetivo
-          </Button>
-        </CardHeader>
-        <CardContent>
-          {(showGoalForm || editingGoalId) && (
-            <GoalForm
-              form={goalForm}
-              onChange={setGoalForm}
-              loading={createGoal.isPending || updateGoal.isPending}
-              onSave={() => {
-                if (!goalForm.name || !goalForm.targetAmountEur) return;
-                if (editingGoalId) {
-                  updateGoal.mutate({ id: editingGoalId, data: goalForm });
-                } else {
-                  createGoal.mutate(goalForm);
-                }
-              }}
-              onCancel={() => { setShowGoalForm(false); setEditingGoalId(null); setGoalForm(EMPTY_GOAL_FORM); }}
-            />
-          )}
-
-          {goalsQ.isLoading && <p className="text-muted text-sm">Cargando…</p>}
-          {!goalsQ.isLoading && (goalsQ.data?.length ?? 0) === 0 && !showGoalForm && (
-            <div className="empty-state-inline">
-              <Target size={16} />
-              <span>Sin objetivos definidos. Añade tu primera meta de inversión.</span>
-            </div>
-          )}
-
-          {(goalsQ.data ?? []).map(goal => {
-            const progress = Math.min(1, currentValueEur / goal.targetAmountEur);
-            const eta = goalEta(goal);
-            return (
-              <div key={goal.id} className="perspectives-goal-row">
-                <div className="goal-header">
-                  <div className="goal-meta">
-                    <span className="goal-name">{goal.name}</span>
-                    <Badge variant="neutral">{GOAL_TYPE_LABELS[goal.type] ?? goal.type}</Badge>
-                    {eta && <Badge variant="success">ETA: {eta}</Badge>}
-                    {!eta && activeScenarioData && (
-                      <Badge variant="warning">Fuera del horizonte ({horizonYears}a)</Badge>
-                    )}
-                  </div>
-                  <div className="goal-actions">
-                    <button
-                      className="ui-button ui-button-ghost ui-button-sm"
-                      onClick={() => {
-                        setEditingGoalId(goal.id);
-                        setShowGoalForm(false);
-                        setGoalForm({
-                          name: goal.name, type: goal.type,
-                          targetAmountEur: String(goal.targetAmountEur),
-                          targetDate: tsToDate(goal.targetDate),
-                          notes: goal.notes ?? "",
-                        });
-                      }}
-                    >
-                      <Pencil size={14} />
-                    </button>
-                    <button
-                      className="ui-button ui-button-ghost ui-button-sm"
-                      onClick={() => { if (confirm(`¿Eliminar objetivo "${goal.name}"?`)) deleteGoal.mutate(goal.id); }}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="goal-progress-row">
-                  <div className="goal-progress-bar">
-                    <div className="goal-progress-fill" style={{ width: `${progress * 100}%` }} />
-                  </div>
-                  <div className="goal-progress-labels">
-                    <span className="text-sm">{fmt(currentValueEur)}</span>
-                    <span className="text-sm font-medium">{pct(progress)}</span>
-                    <span className="text-sm">{fmt(goal.targetAmountEur)}</span>
-                  </div>
-                </div>
-
-                {goal.targetDate && (
-                  <p className="text-sm text-muted">
-                    Fecha objetivo: {new Date(goal.targetDate).toLocaleDateString("es-ES")}
-                  </p>
-                )}
-                {goal.notes && <p className="text-sm text-muted">{goal.notes}</p>}
-              </div>
-            );
-          })}
-        </CardContent>
-      </Card>
-
-      {/* ── Sección 5: Calidad de datos e hipótesis ── */}
-      <DataQualitySection projection={projection} dataScore={dataScore} />
-    </section>
-  );
-}
-
-// ─── Sección 1: Estado del plan ─────────────────────────────────────────────
-
-function PlanSnapshotSection({
-  projection, loading, error,
+function YearSelector({
+  years,
+  selected,
+  onSelect,
 }: {
-  projection: ProjectionResult | undefined;
-  loading: boolean;
-  error: Error | null;
+  years: number[];
+  selected: number;
+  onSelect: (y: number) => void;
 }) {
-  if (loading) {
-    return (
-      <Card>
-        <CardHeader><CardTitle>Estado del plan</CardTitle></CardHeader>
-        <CardContent><p className="text-muted text-sm">Cargando estado…</p></CardContent>
-      </Card>
-    );
-  }
-
-  if (error || !projection) {
-    return (
-      <Card>
-        <CardHeader><CardTitle>Estado del plan</CardTitle></CardHeader>
-        <CardContent>
-          <div className="empty-state-inline">
-            <AlertCircle size={16} />
-            <span>
-              {!projection && !error
-                ? "Sin plan activo. Crea un plan de inversión primero."
-                : "Error al cargar el estado del plan."
-              }
-            </span>
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  const snap = projection.snapshot;
-  const treasury = snap.treasury;
-  const dq = snap.dataQuality;
-  const scoreVariant = dq.overallScore >= 0.9 ? "success" : dq.overallScore >= 0.6 ? "warning" : "danger";
-
-  const positions = Object.values(snap.positions);
-  const totalPortfolioValueEur = positions.reduce((s, p) => s + (p.currentValueEur ?? 0), 0);
+  const idx = years.indexOf(selected);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Estado del plan</CardTitle>
-        <div className="flex gap-2 items-center">
-          <Badge variant={scoreVariant}>
-            Calidad: {(dq.overallScore * 100).toFixed(0)}%
-          </Badge>
-          {dq.missingPrices.length > 0 && (
-            <Badge variant="warning">Sin precio: {dq.missingPrices.join(", ")}</Badge>
-          )}
-        </div>
-      </CardHeader>
-      <CardContent>
-        <div className="perspectives-summary-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
-          <div className="perspectives-current-card">
-            <span className="label">Cartera</span>
-            <span className="value">{new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(totalPortfolioValueEur)}</span>
-            <span className="sub">{snap.positionCount} activos · {snap.planName}</span>
-          </div>
-          <div className="perspectives-current-card">
-            <span className="label">Tesorería — Cash</span>
-            <span className="value">{new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(treasury.cashEur)}</span>
-            <span className="sub">Para aportaciones DCA</span>
-          </div>
-          <div className="perspectives-current-card">
-            <span className="label">EURC disponible</span>
-            <span className="value">{new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(treasury.eurcAvailableEur)}</span>
-            <span className="sub">Reserva fiscal: {new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(treasury.fiscalReserveEur)}</span>
-          </div>
-          <div className="perspectives-current-card">
-            <span className="label">Capital invertido</span>
-            <span className="value">{new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(snap.historicalCapitalEur)}</span>
-            <span className="sub">Versión: {snap.strategyVersion}</span>
-          </div>
-        </div>
-
-        {positions.length > 0 && (
-          <div className="perspectives-cycle-table-wrapper" style={{ marginTop: "1rem" }}>
-            <table className="perspectives-cycle-table">
-              <thead>
-                <tr>
-                  <th>Activo</th>
-                  <th className="text-right">Saldo</th>
-                  <th className="text-right">Precio actual</th>
-                  <th className="text-right">Valor</th>
-                  <th className="text-right">Coste medio</th>
-                </tr>
-              </thead>
-              <tbody>
-                {positions.map(p => (
-                  <tr key={p.assetId}>
-                    <td>{p.assetId}</td>
-                    <td className="text-right">{p.balance.toFixed(6)}</td>
-                    <td className="text-right">{p.currentPriceEur != null ? new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(p.currentPriceEur) : "—"}</td>
-                    <td className="text-right">{p.currentValueEur != null ? new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(p.currentValueEur) : "—"}</td>
-                    <td className="text-right text-muted">{p.avgCostEur != null ? new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(p.avgCostEur) : "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-// ─── Sección 3: Gráfico evolutivo ───────────────────────────────────────────
-
-function ScenarioChart({
-  scenarios,
-  activeScenario,
-  horizonYears,
-}: {
-  scenarios: ProjectionScenarioResult[];
-  activeScenario: string;
-  horizonYears: number;
-}) {
-  const active = scenarios.find(s => s.scenario === activeScenario);
-  if (!active || active.chartPoints.length === 0) {
-    return (
-      <div className="empty-state-inline">
-        <Info size={16} />
-        <span>Sin datos para el horizonte de {horizonYears} años.</span>
-      </div>
-    );
-  }
-
-  const points = active.chartPoints;
-  const maxWealth = Math.max(...points.map(p => p.grossWealthEur));
-  const h = 200;
-  const w = 100; // percentage units
-
-  // Simple SVG polyline chart
-  const toXY = (i: number, value: number) => ({
-    x: (i / (points.length - 1)) * w,
-    y: h - (value / (maxWealth || 1)) * h * 0.9,
-  });
-
-  const grossLine = points.map((p, i) => {
-    const { x, y } = toXY(i, p.grossWealthEur);
-    return `${x},${y}`;
-  }).join(" ");
-
-  const netLine = points.map((p, i) => {
-    const { x, y } = toXY(i, p.netWealthEur);
-    return `${x},${y}`;
-  }).join(" ");
-
-  const portfolioLine = points.map((p, i) => {
-    const { x, y } = toXY(i, p.portfolioValueEur);
-    return `${x},${y}`;
-  }).join(" ");
-
-  const color = SCENARIO_COLORS[activeScenario] ?? "var(--color-primary)";
-
-  const first = points[0];
-  const last = points[points.length - 1];
-  const fmtEur = (v: number) => new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(v);
-
-  return (
-    <div>
-      <div style={{ display: "flex", gap: "1.5rem", marginBottom: "0.75rem", flexWrap: "wrap" }}>
-        <span className="text-sm"><span style={{ color }} className="font-medium">—</span> Patrimonio bruto</span>
-        <span className="text-sm"><span className="text-muted font-medium">- -</span> Patrimonio neto</span>
-        <span className="text-sm"><span className="text-muted font-medium">···</span> Cartera</span>
-      </div>
-      <svg
-        viewBox={`0 0 ${w} ${h}`}
-        style={{ width: "100%", height: 200, overflow: "visible" }}
-        preserveAspectRatio="none"
+    <div className="flex items-center gap-2 flex-wrap">
+      <button
+        type="button"
+        onClick={() => idx > 0 && onSelect(years[idx - 1])}
+        disabled={idx <= 0}
+        className="p-1 rounded hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
+        aria-label="Año anterior"
       >
-        <polyline points={grossLine} fill="none" stroke={color} strokeWidth="0.8" vectorEffect="non-scaling-stroke" />
-        <polyline points={netLine} fill="none" stroke={color} strokeWidth="0.6" strokeDasharray="2,1" vectorEffect="non-scaling-stroke" opacity="0.7" />
-        <polyline points={portfolioLine} fill="none" stroke="var(--color-muted-fg)" strokeWidth="0.5" strokeDasharray="1,1.5" vectorEffect="non-scaling-stroke" opacity="0.5" />
-      </svg>
-      <div className="perspectives-cycle-table-wrapper" style={{ marginTop: "0.75rem" }}>
-        <table className="perspectives-cycle-table">
+        <ChevronLeft className="w-4 h-4" />
+      </button>
+
+      <div className="fiscal-year-selector" role="group" aria-label="Seleccionar año">
+        {years.map(y => (
+          <button
+            key={y}
+            type="button"
+            className={`fiscal-year-btn${y === selected ? " fiscal-year-btn--active" : ""}`}
+            onClick={() => onSelect(y)}
+          >
+            {y}
+          </button>
+        ))}
+      </div>
+
+      <button
+        type="button"
+        onClick={() => idx < years.length - 1 && onSelect(years[idx + 1])}
+        disabled={idx >= years.length - 1}
+        className="p-1 rounded hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
+        aria-label="Año siguiente"
+      >
+        <ChevronRight className="w-4 h-4" />
+      </button>
+    </div>
+  );
+}
+
+// ─── Annual summary table ─────────────────────────────────────────────────────
+
+function AnnualTable({ snapshots }: { snapshots: AnnualSnapshot[] }) {
+  if (snapshots.length === 0) return null;
+  const totalContrib = snapshots.reduce((s, r) => s + r.contributionsEur, 0);
+  const totalMarket = snapshots.reduce((s, r) => s + r.marketGainEur, 0);
+  const totalSales = snapshots.reduce((s, r) => s + r.salesEur, 0);
+  const totalRebuys = snapshots.reduce((s, r) => s + r.rebuysEur, 0);
+  const totalTax = snapshots.reduce((s, r) => s + r.taxEur, 0);
+
+  return (
+    <div className="space-y-2">
+      <div className="responsive-table persp-table">
+        <table>
           <thead>
             <tr>
-              <th></th>
-              <th className="text-right">Patrimonio bruto</th>
-              <th className="text-right">Patrimonio neto</th>
-              <th className="text-right">Cartera</th>
-              <th className="text-right">EURC disponible</th>
+              <th>Año</th>
+              <th className="num">Apertura neta</th>
+              <th className="num">Aportaciones</th>
+              <th className="num">Resultado mercado</th>
+              <th className="num">Ventas ⓘ</th>
+              <th className="num">Recompras ⓘ</th>
+              <th className="num">Impuesto</th>
+              <th className="num">Cierre neto</th>
+              <th className="num">TWR anual</th>
             </tr>
           </thead>
           <tbody>
-            <tr>
-              <td className="text-muted">Hoy</td>
-              <td className="text-right">{fmtEur(first.grossWealthEur)}</td>
-              <td className="text-right">{fmtEur(first.netWealthEur)}</td>
-              <td className="text-right">{fmtEur(first.portfolioValueEur)}</td>
-              <td className="text-right">{fmtEur(first.eurcAvailableEur)}</td>
-            </tr>
-            <tr>
-              <td className="font-medium">En {horizonYears} años</td>
-              <td className="text-right font-medium">{fmtEur(last.grossWealthEur)}</td>
-              <td className="text-right font-medium">{fmtEur(last.netWealthEur)}</td>
-              <td className="text-right">{fmtEur(last.portfolioValueEur)}</td>
-              <td className="text-right">{fmtEur(last.eurcAvailableEur)}</td>
-            </tr>
+            {snapshots.map(s => (
+              <tr key={s.year} className={s.scope === "extrapol" ? "opacity-70" : ""}>
+                <td>
+                  <span style={{ fontWeight: 600 }}>{s.year}</span>
+                  {s.scope === "extrapol" && <span className="ml-1 text-xs text-muted-foreground">*</span>}
+                </td>
+                <td className="num">{fmt(s.openingWealthEur)}</td>
+                <td className="num">{fmt(s.contributionsEur)}</td>
+                <td className={`num ${s.marketGainEur >= 0 ? "text-gain" : "text-loss"}`}>
+                  {fmtSign(s.marketGainEur)}
+                </td>
+                <td className="num text-muted-foreground">{s.salesEur > 0 ? fmt(s.salesEur) : "—"}</td>
+                <td className="num text-muted-foreground">{s.rebuysEur > 0 ? fmt(s.rebuysEur) : "—"}</td>
+                <td className="num">{s.taxEur > 0 ? fmt(s.taxEur) : "—"}</td>
+                <td className="num" style={{ fontWeight: 600 }}>{fmt(s.closingWealthEur)}</td>
+                <td className={`num ${(s.annualReturnPct ?? 0) >= 0 ? "text-gain" : "text-loss"}`}>
+                  {s.annualReturnPct != null ? fmtAnnualPct(s.annualReturnPct) : "—"}
+                </td>
+              </tr>
+            ))}
           </tbody>
+          <tfoot>
+            <tr>
+              <td><strong>Total</strong></td>
+              <td className="num">{fmt(snapshots[0]?.openingWealthEur)}</td>
+              <td className="num">{fmt(totalContrib)}</td>
+              <td className={`num ${totalMarket >= 0 ? "text-gain" : "text-loss"}`}>{fmtSign(totalMarket)}</td>
+              <td className="num text-muted-foreground">{totalSales > 0 ? fmt(totalSales) : "—"}</td>
+              <td className="num text-muted-foreground">{totalRebuys > 0 ? fmt(totalRebuys) : "—"}</td>
+              <td className="num">{totalTax > 0 ? fmt(totalTax) : "—"}</td>
+              <td className="num"><strong>{fmt(snapshots.at(-1)?.closingWealthEur)}</strong></td>
+              <td className="num"></td>
+            </tr>
+          </tfoot>
         </table>
       </div>
-      <p className="text-sm text-muted" style={{ marginTop: "0.5rem" }}>
-        Escenario {active.label} · {points.length} periodos mensuales ·
-        <strong> Simulación hipotética, no asesoramiento financiero.</strong>
+      <p className="text-xs text-muted-foreground">
+        ⓘ Ventas y Recompras son movimientos internos (cripto ↔ EURC). No se suman ni restan al patrimonio — son informativas.
+        {snapshots.some(s => s.scope === "extrapol") && " · * Años extrapolados fuera del plan explícito."}
       </p>
     </div>
   );
 }
 
-// ─── Sección 5: Calidad e hipótesis ─────────────────────────────────────────
+// ─── Year detail section ──────────────────────────────────────────────────────
 
-function DataQualitySection({
-  projection,
-  dataScore,
-}: {
-  projection: ProjectionResult | undefined;
-  dataScore: number | null;
-}) {
-  const dq = projection?.snapshot.dataQuality;
+function YearDetail({ snap }: { snap: AnnualSnapshot }) {
+  const [eventsOpen, setEventsOpen] = useState(false);
+  const positions = Object.values(snap.positions).filter(p => p.balance > 0 || p.failed);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Calidad de datos e hipótesis</CardTitle>
-        {dataScore != null && (
-          <Badge variant={dataScore >= 0.9 ? "success" : dataScore >= 0.6 ? "warning" : "neutral"}>
-            Score: {(dataScore * 100).toFixed(0)}%
-          </Badge>
-        )}
-      </CardHeader>
-      <CardContent>
-        {!projection && (
-          <p className="text-muted text-sm">Sin datos de proyección disponibles.</p>
-        )}
-        {projection && dq && (
-          <div className="perspectives-confidence-grid">
-            <div className="confidence-item">
-              {dq.missingPrices.length === 0
-                ? <CheckCircle2 size={16} className="text-success" />
-                : <AlertTriangle size={16} className="text-warning" />}
-              <span>
-                {dq.missingPrices.length === 0
-                  ? "Todos los activos tienen precio"
-                  : `Sin precio: ${dq.missingPrices.join(", ")}`}
-              </span>
-            </div>
-            <div className="confidence-item">
-              {dq.missingCosts.length === 0
-                ? <CheckCircle2 size={16} className="text-success" />
-                : <AlertTriangle size={16} className="text-warning" />}
-              <span>
-                {dq.missingCosts.length === 0
-                  ? "Todos los activos tienen coste base"
-                  : `Sin coste base: ${dq.missingCosts.join(", ")}`}
-              </span>
-            </div>
-            <div className="confidence-item">
-              <CheckCircle2 size={16} className="text-success" />
-              <span>Versión fiscal: {projection.snapshot.fiscalVersion} (tramos 19/21/23/27/28%)</span>
-            </div>
-            <div className="confidence-item">
-              <CheckCircle2 size={16} className="text-success" />
-              <span>Versión estrategia: {projection.snapshot.strategyVersion}</span>
-            </div>
-            {dq.notes.map((note, i) => (
-              <div key={i} className="confidence-item">
-                <Info size={16} className="text-muted" />
-                <span>{note}</span>
-              </div>
-            ))}
+    <div className="space-y-3">
+      {/* Flujos del año */}
+      <div className="persp-kpi-grid">
+        <div className="persp-kpi">
+          <span className="persp-kpi-label">Apertura neta</span>
+          <span className="persp-kpi-value">{fmt(snap.openingWealthEur)}</span>
+        </div>
+        <div className="persp-kpi">
+          <span className="persp-kpi-label">Aportaciones</span>
+          <span className="persp-kpi-value">{fmt(snap.contributionsEur)}</span>
+        </div>
+        <div className={`persp-kpi ${snap.marketGainEur >= 0 ? "kpi-pos" : "kpi-neg"}`}>
+          <span className="persp-kpi-label">Resultado mercado</span>
+          <span className="persp-kpi-value">{fmtSign(snap.marketGainEur)}</span>
+        </div>
+        <div className={`persp-kpi ${snap.closingWealthEur >= snap.openingWealthEur ? "kpi-pos" : "kpi-neg"}`}>
+          <span className="persp-kpi-label">Cierre neto</span>
+          <span className="persp-kpi-value">{fmt(snap.closingWealthEur)}</span>
+        </div>
+        {snap.annualReturnPct != null && (
+          <div className={`persp-kpi ${snap.annualReturnPct >= 0 ? "kpi-pos" : "kpi-neg"}`}>
+            <span className="persp-kpi-label">TWR anual</span>
+            <span className="persp-kpi-value">{fmtAnnualPct(snap.annualReturnPct)}</span>
           </div>
         )}
-        <div className="perspectives-confidence-label" style={{ marginTop: "1rem" }}>
-          <p className="text-sm text-muted">
-            Las proyecciones son escenarios hipotéticos calculados con el motor de proyección interno.
-            Tasas de crecimiento: Conservador +8%/año BTC · Base +15%/año BTC · Optimista +35%/año BTC.
-            Los escenarios no garantizan rentabilidades futuras y no modifican el plan ni ejecutan operaciones.
-          </p>
+        {snap.salesEur > 0 && (
+          <div className="persp-kpi kpi-warn">
+            <span className="persp-kpi-label">Ventas ⓘ</span>
+            <span className="persp-kpi-value">{fmt(snap.salesEur)}</span>
+          </div>
+        )}
+        {snap.rebuysEur > 0 && (
+          <div className="persp-kpi kpi-pos">
+            <span className="persp-kpi-label">Recompras ⓘ</span>
+            <span className="persp-kpi-value">{fmt(snap.rebuysEur)}</span>
+          </div>
+        )}
+        {snap.taxEur > 0 && (
+          <div className="persp-kpi kpi-warn">
+            <span className="persp-kpi-label">Impuesto</span>
+            <span className="persp-kpi-value">{fmt(snap.taxEur)}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Tesorería */}
+      {(snap.eurcFreeEur > 0.01 || snap.fiscalReserveEur > 0.01 || snap.eurCashEur > 0.01) && (
+        <div className="persp-kpi-grid">
+          {snap.eurcFreeEur > 0.01 && (
+            <div className="persp-kpi">
+              <span className="persp-kpi-label">EURC libre</span>
+              <span className="persp-kpi-value">{fmt(snap.eurcFreeEur)}</span>
+            </div>
+          )}
+          {snap.fiscalReserveEur > 0.01 && (
+            <div className="persp-kpi kpi-warn">
+              <span className="persp-kpi-label">Reserva fiscal</span>
+              <span className="persp-kpi-value">{fmt(snap.fiscalReserveEur)}</span>
+            </div>
+          )}
+          {snap.eurCashEur > 0.01 && (
+            <div className="persp-kpi">
+              <span className="persp-kpi-label">Cash EUR</span>
+              <span className="persp-kpi-value">{fmt(snap.eurCashEur)}</span>
+            </div>
+          )}
         </div>
-      </CardContent>
-    </Card>
+      )}
+
+      {/* Posiciones compactas */}
+      {positions.length > 0 && (
+        <div className="responsive-table persp-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Activo</th>
+                <th className="num">Saldo</th>
+                <th className="num">Precio</th>
+                <th className="num">Valor</th>
+                <th className="num">G/P lat.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {positions.map(p => (
+                <tr key={p.assetId}>
+                  <td>
+                    <span className="font-mono font-semibold text-xs">{p.assetId.toUpperCase()}</span>
+                    {p.failed && <Badge variant="danger" style={{ marginLeft: 4 }}>Fallido</Badge>}
+                    {p.goalReached && <Badge variant="success" style={{ marginLeft: 4 }}>Obj.</Badge>}
+                  </td>
+                  <td className="num font-mono text-xs">{p.balance.toPrecision(4)}</td>
+                  <td className="num">{fmt(p.priceEur)}</td>
+                  <td className="num" style={{ fontWeight: 600 }}>{fmt(p.valueEur)}</td>
+                  <td className={`num ${(p.unrealizedGainEur ?? 0) >= 0 ? "text-gain" : "text-loss"}`}>
+                    {p.unrealizedGainEur != null ? fmtSign(p.unrealizedGainEur) : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Eventos colapsables */}
+      {snap.events.length > 0 && (
+        <div>
+          <button
+            type="button"
+            className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+            onClick={() => setEventsOpen(v => !v)}
+          >
+            <span>{eventsOpen ? "▾" : "▸"}</span>
+            <span>{snap.events.length} eventos</span>
+          </button>
+          {eventsOpen && (
+            <div className="mt-1.5 max-h-40 overflow-y-auto space-y-px">
+              {snap.events.map((ev, i) => (
+                <div key={i} className="flex items-center gap-2 text-xs py-1 border-b border-border/20">
+                  <span className="text-muted-foreground shrink-0 font-mono w-16">
+                    {new Date(ev.date).toLocaleDateString("es-ES", { month: "short", year: "2-digit" })}
+                  </span>
+                  <Badge variant={EVENT_BADGE_VARIANT[ev.type] ?? "neutral"}>
+                    {EVENT_LABELS[ev.type] ?? ev.type}
+                  </Badge>
+                  <span className="text-foreground/75 truncate">{ev.description}</span>
+                  {ev.amountEur != null && (
+                    <span className="ml-auto shrink-0 font-medium">{fmt(ev.amountEur)}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
-// ─── GoalForm component ──────────────────────────────────────────────────────
+// ─── Scenario comparison table ────────────────────────────────────────────────
 
-interface GoalFormProps {
-  form: GoalFormState;
-  onChange: (f: GoalFormState) => void;
-  loading: boolean;
-  onSave: () => void;
-  onCancel: () => void;
+function ScenarioComparison({ simData }: { simData: PerspectivesSimulation }) {
+  return (
+    <div className="space-y-2">
+      <div className="responsive-table persp-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Escenario</th>
+              <th className="num">Patrimonio final</th>
+              <th className="num">Resultado mercado</th>
+              <th className="num">Capital aportado</th>
+              <th className="num">Ventas ⓘ</th>
+              <th className="num">Recompras ⓘ</th>
+              <th className="num">Impuesto</th>
+              <th className="num">XIRR</th>
+              <th className="num">Drawdown máx.</th>
+            </tr>
+          </thead>
+          <tbody>
+            {simData.scenarios.map(s => (
+              <tr key={s.scenario}>
+                <td>
+                  <Badge variant={
+                    s.scenario === "optimista" ? "success" :
+                    s.scenario === "favorable" ? "info" :
+                    s.scenario === "base" ? "neutral" :
+                    s.scenario === "moderado" ? "warning" : "danger"
+                  }>
+                    {s.label}
+                  </Badge>
+                </td>
+                <td className="num" style={{ fontWeight: 600 }}>{fmt(s.summary.finalNetWealthEur)}</td>
+                <td className={`num ${(s.summary.totalMarketGainEur ?? 0) >= 0 ? "text-gain" : "text-loss"}`}>
+                  {fmtSign(s.summary.totalMarketGainEur)}
+                </td>
+                <td className="num">{fmt(s.summary.totalContributionsEur)}</td>
+                <td className="num text-muted-foreground">{s.summary.totalSalesEur > 0 ? fmt(s.summary.totalSalesEur) : "—"}</td>
+                <td className="num text-muted-foreground">{s.summary.totalRebuysEur > 0 ? fmt(s.summary.totalRebuysEur) : "—"}</td>
+                <td className="num">{s.summary.totalTaxEur > 0 ? fmt(s.summary.totalTaxEur) : "—"}</td>
+                <td className={`num ${(s.summary.xirr ?? 0) >= 0 ? "text-gain" : "text-loss"}`}>
+                  {fmtPct(s.summary.xirr)}
+                </td>
+                <td className="num text-loss">
+                  {s.summary.maxDrawdownPct != null ? `${(s.summary.maxDrawdownPct * 100).toFixed(1)}%` : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-xs text-muted-foreground">ⓘ Ventas y Recompras son movimientos internos — no afectan el patrimonio neto de forma directa.</p>
+    </div>
+  );
 }
 
-function GoalForm({ form, onChange, loading, onSave, onCancel }: GoalFormProps) {
-  const set = (key: keyof GoalFormState) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
-    onChange({ ...form, [key]: e.target.value });
+// ─── Evolution chart (SVG) ────────────────────────────────────────────────────
+
+const SCENARIO_CSS_COLORS: Record<SimScenario, string> = {
+  conservador: "var(--color-danger)",
+  moderado:    "var(--color-warning)",
+  base:        "var(--color-primary)",
+  favorable:   "var(--color-success)",
+  optimista:   "var(--color-sage)",
+};
+
+function EvolutionChart({ simData }: { simData: PerspectivesSimulation }) {
+  const years = simData.scenarios[0]?.annualSnapshots.map(s => s.year) ?? [];
+  if (years.length === 0) return null;
+
+  const allValues = simData.scenarios.flatMap(sc => sc.annualSnapshots.map(s => s.closingWealthEur));
+  const maxVal = Math.max(...allValues, 1);
+
+  const W = 600; const H = 200;
+  const PAD = { top: 10, right: 10, bottom: 30, left: 65 };
+  const chartW = W - PAD.left - PAD.right;
+  const chartH = H - PAD.top - PAD.bottom;
+  const xStep = chartW / Math.max(years.length - 1, 1);
 
   return (
-    <div className="perspectives-goal-form">
-      <div className="form-row">
-        <label className="text-sm font-medium">Nombre del objetivo *</label>
-        <Input value={form.name} onChange={set("name")} placeholder="Ej: Fondo de vivienda" />
+    <div className="w-full overflow-x-auto">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ minWidth: 320, maxWidth: 700 }}>
+        {[0, 0.25, 0.5, 0.75, 1].map(t => {
+          const y = PAD.top + chartH * (1 - t);
+          const label = maxVal >= 1000 ? `${(maxVal * t / 1000).toFixed(0)}k` : (maxVal * t).toFixed(0);
+          return (
+            <g key={t}>
+              <line x1={PAD.left} x2={PAD.left + chartW} y1={y} y2={y} stroke="var(--border-color)" strokeWidth={0.5} />
+              <text x={PAD.left - 4} y={y + 4} textAnchor="end" fontSize={8} fill="var(--text-muted)">{label}</text>
+            </g>
+          );
+        })}
+        {years.map((yr, i) => (
+          <text key={yr} x={PAD.left + i * xStep} y={H - 6} textAnchor="middle" fontSize={8} fill="var(--text-muted)">{yr}</text>
+        ))}
+        {simData.scenarios.map(sc => {
+          const pts = sc.annualSnapshots.map((s, i) => [
+            PAD.left + i * xStep,
+            PAD.top + chartH * (1 - s.closingWealthEur / maxVal),
+          ]);
+          const d = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
+          return (
+            <path key={sc.scenario} d={d} fill="none" stroke={SCENARIO_CSS_COLORS[sc.scenario]} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+          );
+        })}
+        {SCENARIOS.map((sc, i) => (
+          <g key={sc}>
+            <rect x={PAD.left + i * 84} y={H - 14} width={6} height={6} fill={SCENARIO_CSS_COLORS[sc]} rx={1} />
+            <text x={PAD.left + i * 84 + 9} y={H - 8} fontSize={7} fill="var(--text-muted)">{SCENARIO_LABELS[sc]}</text>
+          </g>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+// ─── Validations ──────────────────────────────────────────────────────────────
+
+function Validations({ items }: { items: ValidationResult[] }) {
+  const failed = items.filter(v => !v.passed);
+  if (failed.length === 0) return null;
+  return (
+    <div className="fiscal-tax-note">
+      <p className="text-sm font-medium mb-2">Advertencias de validación</p>
+      <ul className="space-y-1">
+        {failed.map((v, i) => (
+          <li key={i} className="text-xs">{v.rule}: {v.detail}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
+
+const HORIZON_OPTS = HORIZON_OPTIONS.map(y => ({ value: String(y) as string, label: `${y}a` }));
+const SCENARIO_OPTS = SCENARIOS.map(s => ({ value: s as string, label: SCENARIO_LABELS[s] }));
+
+export function Perspectivas() {
+  const [horizonYears, setHorizonYears] = useState(10);
+  const [selectedScenario, setSelectedScenario] = useState<SimScenario>("base");
+  const [selectedYear, setSelectedYear] = useState<number | null>(null);
+  const [showComparison, setShowComparison] = useState(false);
+  const [showChart, setShowChart] = useState(true);
+
+  const { data: simData, isLoading, error, isFetching } = useQuery<PerspectivesSimulation>({
+    queryKey: ["persp2:getSimulation", horizonYears],
+    queryFn: async () => {
+      const result = await window.cryptoControl.persp2.getSimulation({ horizonYears }) as { ok: boolean; data?: unknown; error?: { message?: string } };
+      if (!result.ok) throw new Error(result.error?.message ?? "Error en la simulación");
+      return result.data as PerspectivesSimulation;
+    },
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+
+  const activeScenario = useMemo(
+    () => simData?.scenarios.find(s => s.scenario === selectedScenario),
+    [simData, selectedScenario],
+  );
+
+  const years = useMemo(
+    () => activeScenario?.annualSnapshots.map(s => s.year) ?? [],
+    [activeScenario],
+  );
+
+  const effectiveYear = useMemo(() => {
+    if (selectedYear != null && years.includes(selectedYear)) return selectedYear;
+    return years[years.length - 1] ?? null;
+  }, [selectedYear, years]);
+
+  const selectedSnap = useMemo(
+    () => activeScenario?.annualSnapshots.find(s => s.year === effectiveYear) ?? null,
+    [activeScenario, effectiveYear],
+  );
+
+  if (isLoading) {
+    return (
+      <div className="flex-1 overflow-y-auto">
+        <PageToolbar title="Perspectivas" icon={ChartNoAxesCombined} />
+        <div className="p-4"><LoadingState message="Calculando simulación de perspectivas..." /></div>
       </div>
-      <div className="form-row">
-        <label className="text-sm font-medium">Tipo</label>
-        <select className="ui-select" value={form.type} onChange={set("type")}>
-          {Object.entries(GOAL_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-        </select>
+    );
+  }
+
+  if (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    if (msg.includes("No hay un plan de inversión activo")) {
+      return (
+        <div className="flex-1 overflow-y-auto">
+          <PageToolbar title="Perspectivas" icon={ChartNoAxesCombined} />
+          <div className="p-4">
+            <EmptyState
+              icon={ChartNoAxesCombined}
+              title="Sin plan de inversión"
+              description="Crea un plan de inversión activo en la sección Plan para ver las perspectivas de evolución."
+            />
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="flex-1 overflow-y-auto">
+        <PageToolbar title="Perspectivas" icon={ChartNoAxesCombined} />
+        <div className="p-4"><ErrorState message={msg} /></div>
       </div>
-      <div className="form-row">
-        <label className="text-sm font-medium">Importe objetivo (€) *</label>
-        <Input type="number" min="0" step="1000" value={form.targetAmountEur} onChange={set("targetAmountEur")} placeholder="100000" />
+    );
+  }
+
+  if (!simData || !activeScenario) {
+    return (
+      <div className="flex-1 overflow-y-auto">
+        <PageToolbar title="Perspectivas" icon={ChartNoAxesCombined} />
+        <div className="p-4">
+          <EmptyState icon={ChartNoAxesCombined} title="Sin datos" description="No hay datos de simulación disponibles." />
+        </div>
       </div>
-      <div className="form-row">
-        <label className="text-sm font-medium">Fecha objetivo</label>
-        <Input type="date" value={form.targetDate} onChange={set("targetDate")} />
-      </div>
-      <div className="form-row">
-        <label className="text-sm font-medium">Notas</label>
-        <Input value={form.notes} onChange={set("notes")} placeholder="Descripción opcional" />
-      </div>
-      <div className="form-actions">
-        <Button size="sm" loading={loading} disabled={!form.name || !form.targetAmountEur} onClick={onSave}>
-          Guardar
-        </Button>
-        <Button size="sm" variant="ghost" onClick={onCancel}>
-          Cancelar
-        </Button>
+    );
+  }
+
+  const sum = activeScenario.summary;
+  const beneficioNetoEur = sum.finalNetWealthEur - sum.initialWealthEur - sum.totalContributionsEur;
+  const lastSnap = activeScenario.annualSnapshots.at(-1);
+
+  return (
+    <div className="flex-1 overflow-y-auto">
+      <PageToolbar
+        title="Perspectivas"
+        icon={ChartNoAxesCombined}
+        actions={
+          <div className="flex items-center gap-2">
+            {isFetching && <span className="text-xs text-muted-foreground">Calculando…</span>}
+            <span className="text-xs text-muted-foreground">
+              {new Date(simData.computedAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}
+            </span>
+          </div>
+        }
+      />
+
+      <div className="p-4 space-y-4 max-w-6xl mx-auto">
+
+        {/* Selectors */}
+        <Card>
+          <CardContent className="pt-4 space-y-3">
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground">Horizonte</span>
+              <SegmentedControl
+                value={String(horizonYears)}
+                options={HORIZON_OPTS}
+                onChange={v => { setHorizonYears(Number(v)); setSelectedYear(null); }}
+                label="Horizonte de simulación"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground">Escenario</span>
+              <SegmentedControl
+                value={selectedScenario}
+                options={SCENARIO_OPTS}
+                onChange={v => setSelectedScenario(v as SimScenario)}
+                label="Escenario de simulación"
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Validations */}
+        <Validations items={simData.validations} />
+
+        {/* KPI summary */}
+        <div className="persp-kpi-grid">
+          <div className="persp-kpi">
+            <span className="persp-kpi-label">Patrimonio inicial</span>
+            <span className="persp-kpi-value">{fmt(sum.initialWealthEur)}</span>
+          </div>
+          <div className={`persp-kpi ${sum.finalNetWealthEur >= sum.initialWealthEur ? "kpi-pos" : "kpi-neg"}`}>
+            <span className="persp-kpi-label">Patrimonio final neto</span>
+            <span className="persp-kpi-value">{fmt(sum.finalNetWealthEur)}</span>
+          </div>
+          <div className="persp-kpi">
+            <span className="persp-kpi-label">Capital aportado</span>
+            <span className="persp-kpi-value">{fmt(sum.totalContributionsEur)}</span>
+          </div>
+          <div className={`persp-kpi ${beneficioNetoEur >= 0 ? "kpi-pos" : "kpi-neg"}`}>
+            <span className="persp-kpi-label">Beneficio neto est.</span>
+            <span className="persp-kpi-value">{fmtSign(beneficioNetoEur)}</span>
+          </div>
+          <div className={`persp-kpi ${(sum.totalMarketGainEur ?? 0) >= 0 ? "kpi-pos" : "kpi-neg"}`}>
+            <span className="persp-kpi-label">Resultado mercado</span>
+            <span className="persp-kpi-value">{fmtSign(sum.totalMarketGainEur)}</span>
+          </div>
+          {sum.totalSalesEur > 0 && (
+            <div className="persp-kpi kpi-warn">
+              <span className="persp-kpi-label">Ventas parciales ⓘ</span>
+              <span className="persp-kpi-value">{fmt(sum.totalSalesEur)}</span>
+            </div>
+          )}
+          {sum.totalRebuysEur > 0 && (
+            <div className="persp-kpi kpi-pos">
+              <span className="persp-kpi-label">Recompras ⓘ</span>
+              <span className="persp-kpi-value">{fmt(sum.totalRebuysEur)}</span>
+            </div>
+          )}
+          {sum.totalTaxEur > 0 && (
+            <div className="persp-kpi kpi-warn">
+              <span className="persp-kpi-label">Impuesto estimado</span>
+              <span className="persp-kpi-value">{fmt(sum.totalTaxEur)}</span>
+            </div>
+          )}
+          {(lastSnap?.fiscalReserveEur ?? 0) > 0 && (
+            <div className="persp-kpi kpi-warn">
+              <span className="persp-kpi-label">Reserva fiscal</span>
+              <span className="persp-kpi-value">{fmt(lastSnap?.fiscalReserveEur)}</span>
+            </div>
+          )}
+          {(lastSnap?.eurcFreeEur ?? 0) > 1 && (
+            <div className="persp-kpi">
+              <span className="persp-kpi-label">EURC pendiente</span>
+              <span className="persp-kpi-value">{fmt(lastSnap?.eurcFreeEur)}</span>
+            </div>
+          )}
+          <div className={`persp-kpi ${(sum.xirr ?? 0) >= 0 ? "kpi-pos" : "kpi-neg"}`}>
+            <span className="persp-kpi-label">XIRR anual</span>
+            <span className="persp-kpi-value">{fmtPct(sum.xirr)}</span>
+          </div>
+          {sum.maxDrawdownPct != null && (
+            <div className="persp-kpi kpi-neg">
+              <span className="persp-kpi-label">Drawdown máx.</span>
+              <span className="persp-kpi-value">−{(sum.maxDrawdownPct * 100).toFixed(1)}%</span>
+            </div>
+          )}
+        </div>
+
+        {/* Year selector + detail */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Detalle por año</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <YearSelector
+              years={years}
+              selected={effectiveYear ?? years[0]}
+              onSelect={y => setSelectedYear(y)}
+            />
+            {selectedSnap && (
+              <div className="border-t border-border/50 pt-3">
+                <YearDetail snap={selectedSnap} />
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Annual table */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Tabla anual — {SCENARIO_LABELS[selectedScenario]}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <AnnualTable snapshots={activeScenario.annualSnapshots} />
+          </CardContent>
+        </Card>
+
+        {/* Evolution chart */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle>Evolución del patrimonio (5 escenarios)</CardTitle>
+              <Button variant="ghost" size="sm" onClick={() => setShowChart(!showChart)}>
+                {showChart ? "Ocultar" : "Mostrar"}
+              </Button>
+            </div>
+          </CardHeader>
+          {showChart && (
+            <CardContent>
+              <EvolutionChart simData={simData} />
+            </CardContent>
+          )}
+        </Card>
+
+        {/* Scenario comparison */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle>Comparación de escenarios</CardTitle>
+              <Button variant="ghost" size="sm" onClick={() => setShowComparison(!showComparison)}>
+                {showComparison ? "Ocultar" : "Mostrar"}
+              </Button>
+            </div>
+          </CardHeader>
+          {showComparison && (
+            <CardContent>
+              <ScenarioComparison simData={simData} />
+            </CardContent>
+          )}
+        </Card>
+
       </div>
     </div>
   );

@@ -379,7 +379,7 @@ export const CryptoControlIndexSchema = z.object({
 export const CreatePartialSaleSchema = z.object({
   cycleId: z.string().min(1),
   transactionId: z.string().min(1),
-  percentageOfHolding: z.number().positive().max(100),
+  percentageOfHolding: z.number().positive().max(99.99),
   proceedsEur: z.number().positive(),
   notes: OptionalTextSchema
 });
@@ -672,7 +672,7 @@ export const PartialSaleProposalTypeEnum = z.enum(["mantener", "vigilar", "venta
 export const PartialSaleProposalSchema = z.object({
   assetId: z.string(),
   type: PartialSaleProposalTypeEnum,
-  percentageSuggested: z.number().nullable(),
+  percentageSuggested: z.number().min(0.01).max(99.99).nullable(),
   reason: z.string(),
   riskLevel: z.enum(["bajo", "moderado", "alto", "muy_alto"]),
   estimatedProceedsEur: z.number().nullable(),
@@ -752,18 +752,46 @@ export type CreatePerspectivesGoalInput = z.infer<typeof CreatePerspectivesGoalS
 // --- PLAN — COMPRA INTELIGENTE Y REGLAS DE RECOMPRA ---
 
 export const SmartBuyAssetRecommendationSchema = z.object({
+  rank: z.number().optional(),
   assetId: z.string(),
+  action: z.enum(["comprar", "comprar_parcialmente", "mantener", "esperar", "no_evaluable", "candidato_plan", "objetivo_alcanzado", "pausado", "no_elegible"]).optional(),
   recommendedAmountEur: z.number(),
+  recommendedPercentage: z.number().optional(),
   baseAmountEur: z.number(),
   deviationFromBaseEur: z.number(),
   targetAllocationPct: z.number().nullable(),
   currentValueEur: z.number().nullable(),
+  currentWeightPct: z.number().nullable().optional(),
   targetValueEur: z.number().nullable(),
+  estimatedValueAfterBuyEur: z.number().nullable().optional(),
+  estimatedWeightAfterBuyPct: z.number().nullable().optional(),
+  targetGapPct: z.number().nullable().optional(),
   isUnderweight: z.boolean(),
   isOpportunity: z.boolean(),
   opportunityReason: z.string().nullable(),
-  confidenceLevel: z.enum(["alta", "media", "baja"]),
+  potentialReason: z.string().nullable().optional(),
+  currentPriceEur: z.number().nullable().optional(),
+  estimatedQuantity: z.number().nullable().optional(),
+  averagePriceEur: z.number().nullable().optional(),
+  estimatedAverageCostAfterBuyEur: z.number().nullable().optional(),
+  riskLevel: z.enum(["bajo", "medio", "alto", "no_evaluable"]).optional(),
+  horizon: z.enum(["1-3y", "3-5y", "5y+"]).nullable().optional(),
+  confidenceLevel: z.enum(["alta", "media", "baja", "no_evaluable"]),
+  dataQuality: z.enum(["completo", "parcial", "sin_datos"]).optional(),
+  sources: z.array(z.string()).optional(),
+  updatedAt: TimestampSchema.optional(),
+  scoreBreakdown: z.object({
+    planAlignment: z.number(),
+    priceOpportunity: z.number(),
+    longTermPotential: z.number(),
+    risk: z.number(),
+    liquidity: z.number(),
+    dataQuality: z.number(),
+    final: z.number(),
+  }).optional(),
   reason: z.string(),
+  explanation: z.string().optional(),
+  restrictionsApplied: z.array(z.string()).optional(),
 });
 export type SmartBuyAssetRecommendation = z.infer<typeof SmartBuyAssetRecommendationSchema>;
 
@@ -774,7 +802,10 @@ export const SmartBuyRecommendationSchema = z.object({
   recommendations: z.array(SmartBuyAssetRecommendationSchema),
   hasOpportunities: z.boolean(),
   restrictionsApplied: z.array(z.string()),
+  pendingAmountEur: z.number().optional(),
   dataQuality: z.enum(["completo", "parcial", "sin_datos"]),
+  mode: z.enum(["plan", "equilibrar", "oportunidad", "mixto", "potencial"]).optional(),
+  originType: z.enum(["cash", "eurc"]).optional(),
   generatedAt: TimestampSchema,
 });
 export type SmartBuyRecommendation = z.infer<typeof SmartBuyRecommendationSchema>;
@@ -785,7 +816,7 @@ export const CycleRebuyTierSchema = z.object({
   assetId: z.string().nullable(),
   name: z.string().nullable(),
   drawdownPercentage: z.number(),
-  usagePercentage: z.number(),
+  usagePercentage: z.number().min(0.01).max(99.99),
   priority: z.number().int().nullable(),
   status: z.string().nullable(),
   effectiveDate: TimestampSchema.nullable(),
@@ -826,7 +857,7 @@ export const PartialSaleRuleSchema = z.object({
   conditionType: PartialSaleConditionTypeEnum,
   conditionValue: z.number().nullable(),
   conditionValue2: z.number().nullable(),
-  sellPercentage: z.number().min(0.01).max(100),
+  sellPercentage: z.number().min(0.01).max(99.99),
   priority: z.number().int(),
   status: PartialSaleRuleStatusEnum,
   effectiveDate: TimestampSchema.nullable(),
@@ -846,7 +877,7 @@ export const CreatePartialSaleRuleSchema = z.object({
   conditionType: PartialSaleConditionTypeEnum,
   conditionValue: z.number().nullable().optional(),
   conditionValue2: z.number().nullable().optional(),
-  sellPercentage: z.number().min(0.01).max(100),
+  sellPercentage: z.number().min(0.01).max(99.99),
   priority: z.number().int().min(0).optional(),
   status: PartialSaleRuleStatusEnum.optional(),
   effectiveDate: TimestampSchema.nullable().optional(),
@@ -875,6 +906,7 @@ export const PartialSaleEvaluationSchema = z.object({
     fiscalReserveEur: z.number(),
     netEurcEur: z.number(),
     remainingBalance: z.number(),
+    remainingPercentage: z.number(),
     remainingValueEur: z.number(),
   }).nullable(),
 });
@@ -961,5 +993,5 @@ export type PlanMonitoringSummary = z.infer<typeof PlanMonitoringSummarySchema>;
 
 // G-B2 — MODO COMPRA INTELIGENTE
 
-export const SmartBuyModeEnum = z.enum(["plan", "equilibrar", "oportunidad", "mixto"]);
+export const SmartBuyModeEnum = z.enum(["plan", "equilibrar", "oportunidad", "mixto", "potencial"]);
 export type SmartBuyMode = z.infer<typeof SmartBuyModeEnum>;

@@ -16,7 +16,8 @@
     "dev": "tsc && electron .",
     "rebuild-electron": "npx @electron/rebuild -f -w better-sqlite3",
     "typecheck": "tsc --noEmit",
-    "build": "tsc"
+    "build": "tsc",
+    "dist:mac": "npm run build -w web && npm run build -w @crypto-control/desktop && npx @electron/rebuild -f -w better-sqlite3 --version 30.5.1 && electron-builder --mac --config.directories.output=dist-packaged"
   },
   "build": {
     "appId": "com.cryptocontrol.app",
@@ -24,8 +25,14 @@
     "directories": {
       "output": "dist-packaged"
     },
+    "npmRebuild": true,
+    "asarUnpack": [
+      "**/*.node",
+      "node_modules/better-sqlite3/**/*"
+    ],
     "mac": {
-      "icon": "../../assets/brand/logo-1024.png",
+      "icon": "../../assets/brand/logo.icns",
+
       "target": [
         "dmg"
       ],
@@ -54,6 +61,7 @@
     }
   },
   "devDependencies": {
+    "@electron/rebuild": "4.0.4",
     "electron": "30.5.1",
     "electron-builder": "^24.13.3",
     "typescript": "^5.4.5"

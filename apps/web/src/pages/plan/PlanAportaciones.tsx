@@ -1,11 +1,8 @@
-import { useState, type FormEvent } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { PlusCircle, CheckCircle2, Clock, AlertCircle, TrendingUp, TrendingDown, Minus } from "lucide-react";
-import { Button } from "../../components/Button";
-import { Card, CardContent, CardHeader, CardTitle } from "../../components/Card";
-import { Input } from "../../components/Input";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { CheckCircle2, Clock, AlertCircle, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { Card, CardContent } from "../../components/Card";
 import type {
-  ContributionSchedule,
   ContributionMonthlySummary,
   CycleContributionAggregates,
   InvestmentCycle,
@@ -18,17 +15,6 @@ async function unwrap<T>(p: Promise<Result<T>>): Promise<T> {
   const r = await p;
   if (!r.ok) throw new Error(r.error.message);
   return r.data;
-}
-
-function toDateInput(ts: number | null | undefined): string {
-  if (!ts) return "";
-  const d = new Date(ts);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function fromDateInput(s: string): number | null {
-  if (!s) return null;
-  return new Date(`${s}T00:00:00`).getTime();
 }
 
 function formatMonthLabel(yearMonth: string): string {
@@ -57,6 +43,14 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+function pickUsableCycle(current: InvestmentCycle | null | undefined, cycles: InvestmentCycle[] | undefined) {
+  return current
+    ?? cycles?.find((item) => item.status === "active")
+    ?? cycles?.find((item) => item.status === "planned")
+    ?? cycles?.[0]
+    ?? null;
+}
+
 // ── Metric card ───────────────────────────────────────────────────────────────
 
 function MetricCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
@@ -66,139 +60,6 @@ function MetricCard({ label, value, sub }: { label: string; value: string; sub?:
       <span className="plan-metric-value">{value}</span>
       {sub ? <span className="plan-metric-sub">{sub}</span> : null}
     </div>
-  );
-}
-
-// ── New contribution form ─────────────────────────────────────────────────────
-
-function NuevaAportacionForm({
-  cycleId,
-  onSuccess,
-}: {
-  cycleId: string;
-  onSuccess: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [type, setType] = useState<"periodica" | "extraordinaria">("periodica");
-  const [date, setDate] = useState(() => toDateInput(Date.now()));
-  const [amount, setAmount] = useState("");
-  const [notes, setNotes] = useState("");
-  const [error, setError] = useState<string | null>(null);
-
-  const create = useMutation({
-    mutationFn: async (data: Parameters<typeof window.cryptoControl.contributionSchedule.create>[0]) =>
-      unwrap(window.cryptoControl.contributionSchedule.create(data)),
-    onSuccess: () => {
-      onSuccess();
-      setOpen(false);
-      setAmount("");
-      setNotes("");
-      setError(null);
-    },
-  });
-
-  const execute = useMutation({
-    mutationFn: (id: string) => unwrap(window.cryptoControl.contributionSchedule.execute(id)),
-    onSuccess,
-  });
-
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    const plannedDate = fromDateInput(date);
-    if (!plannedDate) { setError("Fecha obligatoria."); return; }
-    const amountNum = parseFloat(amount.replace(",", "."));
-    if (isNaN(amountNum) || amountNum <= 0) { setError("El importe debe ser positivo."); return; }
-
-    // Simplified duplicate check message
-    const id = await create.mutateAsync({
-      cycleId,
-      type,
-      plannedDate,
-      amountEur: amountNum,
-      notes: notes || null,
-    });
-    // Auto-execute (mark as capital nuevo immediately)
-    await execute.mutateAsync(id.id);
-  }
-
-  if (!open) {
-    return (
-      <button
-        type="button"
-        className="btn btn-ghost btn-sm"
-        style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
-        onClick={() => setOpen(true)}
-      >
-        <PlusCircle size={14} />
-        Registrar ajuste manual
-      </button>
-    );
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Registrar ajuste manual de capital</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form className="investment-form-grid compact" onSubmit={(e) => void handleSubmit(e)}>
-          {error ? <p className="error-msg" style={{ gridColumn: "1 / -1" }}>{error}</p> : null}
-
-          <label className="form-group">
-            <span>Tipo</span>
-            <select
-              className="ui-select"
-              value={type}
-              onChange={e => setType(e.target.value as typeof type)}
-            >
-              <option value="periodica">Aportación programada</option>
-              <option value="extraordinaria">Aportación extraordinaria</option>
-            </select>
-          </label>
-
-          <label className="form-group">
-            <span>Fecha efectiva *</span>
-            <Input type="date" value={date} onChange={e => setDate(e.target.value)} required />
-          </label>
-
-          <label className="form-group">
-            <span>Importe (€) *</span>
-            <Input
-              type="number"
-              min="0.01"
-              step="0.01"
-              placeholder="100"
-              value={amount}
-              onChange={e => setAmount(e.target.value)}
-              required
-            />
-          </label>
-
-          <label className="form-group" style={{ gridColumn: "1 / -1" }}>
-            <span>Notas (opcional)</span>
-            <Input
-              placeholder="Origen del capital, referencia, etc."
-              value={notes}
-              onChange={e => setNotes(e.target.value)}
-            />
-          </label>
-
-          <p className="plan-note" style={{ gridColumn: "1 / -1", fontSize: "0.8rem", color: "var(--color-text-muted)" }}>
-            Las aportaciones reales se sincronizan desde Operaciones/Coinbase. Usa este ajuste solo si falta un movimiento externo.
-          </p>
-
-          <div style={{ display: "flex", gap: 8, gridColumn: "1 / -1" }}>
-            <Button type="submit" loading={create.isPending || execute.isPending}>
-              Confirmar aportación
-            </Button>
-            <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
-              Cancelar
-            </Button>
-          </div>
-        </form>
-      </CardContent>
-    </Card>
   );
 }
 
@@ -236,8 +97,6 @@ function MonthRow({ summary }: { summary: ContributionMonthlySummary }) {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function PlanAportaciones() {
-  const qc = useQueryClient();
-
   const activePlanQ = useQuery<InvestmentPlan | null>({
     queryKey: ["investment-plan", "active"],
     queryFn: () => unwrap(window.cryptoControl.investmentPlan.getActive()),
@@ -249,7 +108,12 @@ export function PlanAportaciones() {
     enabled: Boolean(activePlan?.id),
     queryFn: () => unwrap(window.cryptoControl.investmentCycles.getCurrent({ planId: activePlan!.id })),
   });
-  const currentCycle = currentCycleQ.data ?? null;
+  const cyclesQ = useQuery<InvestmentCycle[]>({
+    queryKey: ["investment-cycles", activePlan?.id],
+    enabled: Boolean(activePlan?.id),
+    queryFn: () => unwrap(window.cryptoControl.investmentCycles.list({ planId: activePlan!.id })),
+  });
+  const currentCycle = pickUsableCycle(currentCycleQ.data, cyclesQ.data);
 
   const monthlySummaryQ = useQuery<{ summaries: ContributionMonthlySummary[]; aggregates: CycleContributionAggregates } | null>({
     queryKey: ["contribution-monthly-summary", currentCycle?.id],
@@ -260,12 +124,7 @@ export function PlanAportaciones() {
 
   const [filter, setFilter] = useState<string>("all");
 
-  function invalidate() {
-    void qc.invalidateQueries({ queryKey: ["contribution-monthly-summary"] });
-    void qc.invalidateQueries({ queryKey: ["investment-cycles", "metrics"] });
-  }
-
-  if (activePlanQ.isLoading || currentCycleQ.isLoading) {
+  if (activePlanQ.isLoading || currentCycleQ.isLoading || cyclesQ.isLoading) {
     return <div className="plan-section-loading">Cargando aportaciones…</div>;
   }
 
@@ -307,7 +166,7 @@ export function PlanAportaciones() {
       {/* ── Resumen del mes actual ── */}
       <section className="plan-section">
         <h2 className="plan-section-title">Mes actual</h2>
-        <p className="panel-caption">Aportaciones reales sincronizadas desde Operaciones/Coinbase.</p>
+        <p className="panel-caption">Aportaciones reales sincronizadas desde Operaciones/Coinbase. No hay registro manual en esta pantalla.</p>
         {currentSummary ? (
           <div className="plan-metrics-grid">
             <MetricCard
@@ -344,11 +203,6 @@ export function PlanAportaciones() {
           <p className="empty-inline">Sin datos para el mes actual.</p>
         )}
 
-        {currentCycle ? (
-          <div style={{ marginTop: 12 }}>
-            <NuevaAportacionForm cycleId={currentCycle.id} onSuccess={invalidate} />
-          </div>
-        ) : null}
       </section>
 
       {/* ── Acumulados del ciclo ── */}
@@ -415,77 +269,6 @@ export function PlanAportaciones() {
           </div>
         )}
       </section>
-
-      {/* ── Pending entries ── */}
-      <PendingEntriesSection cycleId={currentCycle.id} onRefresh={invalidate} />
     </div>
-  );
-}
-
-// ── Pending entries (contribution schedule rows) ───────────────────────────────
-
-function PendingEntriesSection({ cycleId, onRefresh }: { cycleId: string; onRefresh: () => void }) {
-  const qc = useQueryClient();
-
-  const pendingQ = useQuery<ContributionSchedule[]>({
-    queryKey: ["contribution-schedule", cycleId, "pendiente"],
-    queryFn: () => unwrap(window.cryptoControl.contributionSchedule.list({ cycleId, status: "pendiente" })),
-    staleTime: 30_000,
-  });
-
-  const execute = useMutation({
-    mutationFn: (id: string) => unwrap(window.cryptoControl.contributionSchedule.execute(id)),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["contribution-schedule"] });
-      onRefresh();
-    },
-  });
-
-  const del = useMutation({
-    mutationFn: (id: string) => unwrap(window.cryptoControl.contributionSchedule.delete(id)),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["contribution-schedule"] });
-      onRefresh();
-    },
-  });
-
-  const pending = pendingQ.data ?? [];
-  if (pending.length === 0) return null;
-
-  return (
-    <section className="plan-section">
-      <h2 className="plan-section-title">Aportaciones pendientes de confirmar</h2>
-      <div className="investment-contribution-list">
-        {pending.map(cs => (
-          <article key={cs.id} className="investment-contribution">
-            <div className="investment-contribution-header">
-              <span>{cs.type === "periodica" ? "Aportación programada" : "Aportación extraordinaria"}</span>
-              <span>{formatMoney(cs.amountEur)}</span>
-            </div>
-            <p className="investment-contribution-meta">
-              {new Date(cs.plannedDate).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "numeric" })}
-              {cs.notes ? ` · ${cs.notes}` : ""}
-            </p>
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <Button
-                size="sm"
-                loading={execute.isPending}
-                onClick={() => execute.mutate(cs.id)}
-              >
-                Confirmar (capital nuevo)
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                loading={del.isPending}
-                onClick={() => del.mutate(cs.id)}
-              >
-                Eliminar
-              </Button>
-            </div>
-          </article>
-        ))}
-      </div>
-    </section>
   );
 }

@@ -1,6 +1,6 @@
 // ── Escenarios ────────────────────────────────────────────────────────────────
 
-export type ProjectionScenario = "conservador" | "base" | "optimista" | "dinamico";
+export type ProjectionScenario = "conservador" | "moderado" | "base" | "favorable" | "muy_favorable" | "optimista" | "dinamico" | "cero";
 
 // ── Configuración fiscal (versionada, sin hardcodear) ─────────────────────────
 
@@ -34,9 +34,17 @@ export const SPANISH_FISCAL_CONFIG_2024: FiscalConfig = {
 
 export interface AssetScenarioRates {
   assetId: string;
-  annualGrowthRate: number; // ej. 0.10 = 10%
-  volatility: number;       // 0..1 (informativo, no aleatorio)
-  correctionDepth: number;  // fracción máx de corrección esperada
+  annualGrowthRate: number;   // tasa inicial (fase 1, primeros cycleLengthYears)
+  decayFactor: number;        // multiplicador de tasa por ciclo (0..1); la tasa decrece cada ciclo
+  terminalAnnualRate: number; // suelo de tasa en etapa madura
+  cycleLengthYears: number;   // duración de cada fase/ciclo (ej. 4)
+  maxPriceMultiplier: number; // límite de capitalización: precio máximo = base × este valor
+  volatility: number;         // 0..1 (informativo)
+  correctionDepth: number;    // fracción máx de corrección esperada
+  source?: string;
+  hypothesis?: string;
+  dataQuality?: "alta" | "media" | "baja";
+  confidence?: number;
 }
 
 export interface ScenarioHypotheses {
@@ -61,7 +69,53 @@ export interface DynamicMarketFactors {
   confidence: number; // 0..1
 }
 
+// ── Libro mayor de aportaciones ───────────────────────────────────────────────
+
+export interface ContributionLedgerCycle {
+  cycleId: string;
+  cycleName: string;
+  planName: string;
+  startDate: number;
+  endDate: number | null;
+  monthlyAmountEur: number;
+  firstMonthIncluded: number | null;
+  lastMonthIncluded: number | null;
+  monthsIncluded: number;
+  totalFutureEur: number;
+}
+
+export interface ContributionLedger {
+  generatedAt: number;
+  projectionStartDate: number;
+  horizonDate: number;
+  cycles: ContributionLedgerCycle[];
+  cyclesTotal: number;
+  cyclesIncluded: number;
+  plansTotal: number;
+  plansIncluded: number;
+  totalFutureEur: number;
+  coverageNote: string | null;
+}
+
+// ── Validación de suelo de patrimonio ─────────────────────────────────────────
+
+export interface WealthFloorViolation {
+  scenario: string;
+  label: string;
+  floorEur: number;
+  actualEur: number;
+  deficitEur: number;
+  explanation: string;
+}
+
 // ── Snapshot consolidado (fuente única de verdad) ─────────────────────────────
+
+export interface SnapshotPlan {
+  id: string;
+  name: string;
+  status: string;
+  baseCurrency: string;
+}
 
 export interface SnapshotPosition {
   assetId: string;
@@ -105,7 +159,8 @@ export interface SnapshotContribution {
   type: "periodica" | "extraordinaria";
   plannedDate: number;
   amountEur: number;
-  status: "pendiente" | "ejecutada" | "saltada";
+  destinationAssetId?: string | null;
+  status: "pendiente" | "ejecutada" | "saltada" | "cancelada";
   executedAt: number | null;
 }
 
@@ -145,6 +200,15 @@ export interface SnapshotSubstitution {
   transferMode: string;
 }
 
+export interface SnapshotStrategyRevision {
+  id: string;
+  cycleId: string;
+  effectiveDate: number;
+  title: string;
+  notes: string | null;
+  changesJson: string; // JSON: { assets?: Record<string, number>, monthlyAmount?: number }
+}
+
 export interface SnapshotTreasury {
   cashEur: number;
   eurcEur: number;
@@ -168,6 +232,7 @@ export interface PlanConsolidatedSnapshot {
 
   planId: string;
   planName: string;
+  plans?: SnapshotPlan[];
 
   cycles: SnapshotCycle[];         // ordenados por startDate
   positions: Record<string, SnapshotPosition>;
@@ -179,6 +244,7 @@ export interface PlanConsolidatedSnapshot {
   saleRules: SnapshotSaleRule[];
   rebuyTiers: SnapshotRebuyTier[];
   substitutions: SnapshotSubstitution[];        // status=programada, fecha > projectionStartDate
+  strategyRevisions: SnapshotStrategyRevision[]; // future revisions ordered by effectiveDate
 
   treasury: SnapshotTreasury;
   prices: Record<string, number | null>;        // precios en EUR en projectionStartDate
@@ -192,12 +258,145 @@ export interface PlanConsolidatedSnapshot {
 
 export type ProjectionResolution = "monthly";
 
+// Simulation policy controls which sale/rebuy proposals are considered:
+//   plan_base             — contributions only, no sales, no rebuys
+//   confirmed_only        — only user-configured rules/tiers
+//   confirmed_plus_proposals — (default) rules + auto-generated prudent proposals
+//   full_strategy         — rules + proposals + external consensus signals
+export type SimulationPolicy =
+  | "plan_base"
+  | "confirmed_only"
+  | "confirmed_plus_proposals"
+  | "full_strategy";
+
 export interface ProjectionOptions {
-  openCycleHorizonYears?: number;  // años extra para etapas sin fin (default 10)
-  maxDeviationPct?: number;        // límite de desviación en equilibrado
-  projectExtraordinaryContributions?: boolean;  // default false
+  openCycleHorizonYears?: number;
+  maxDeviationPct?: number;
+  projectExtraordinaryContributions?: boolean;
   extraordinaryAmountEurPerYear?: number | null;
-  complianceRate?: number;         // 0..1, default 1.0 (cumplimiento 100%)
+  complianceRate?: number;
+  simulationPolicy?: SimulationPolicy;
+}
+
+// ── Analyst forecasts and consensus ─────────────────────────────────────────
+
+export type AnalystForecastDirection =
+  | "strong_bearish" | "bearish" | "neutral" | "bullish" | "strong_bullish";
+
+export type AnalystSourceType =
+  | "analyst" | "institution" | "fund_manager"
+  | "specialized_media" | "sector_report" | "technical_model";
+
+export interface AnalystForecast {
+  id: string;
+  assetId: string;
+  sourceName: string;
+  sourceType: AnalystSourceType;
+  publishedAt: number;
+  horizonDate: number | null;
+  targetMinEur: number | null;
+  targetBaseEur: number | null;
+  targetMaxEur: number | null;
+  direction: AnalystForecastDirection;
+  confidence: number | null;
+  methodology: string | null;
+  referenceUrl: string | null;
+  verifiedAt: number | null;
+  expiresAt: number | null;
+}
+
+export interface AssetConsensus {
+  assetId: string;
+  calculatedAt: number;
+  horizonDate: number | null;
+  sourceCount: number;
+  independentSourceCount: number;
+  targetMinEur: number | null;
+  targetMedianEur: number | null;
+  targetWeightedEur: number | null;
+  targetMaxEur: number | null;
+  bullishWeight: number;
+  neutralWeight: number;
+  bearishWeight: number;
+  confidence: number;
+  dataQuality: "alta" | "media" | "baja" | "insuficiente";
+  sources: AnalystForecast[];
+}
+
+// ── Hypothetical proposals ───────────────────────────────────────────────────
+
+export interface HypotheticalSaleProposal {
+  id: string;
+  date: number;
+  scenario: string;
+  planId: string;
+  cycleId: string;
+  assetId: string;
+  proposalType: "hypothetical_sale";
+  sourceType: "real_consensus" | "simulated_consensus";
+  triggerFactors: string[];
+  priceEur: number;
+  avgCostEur: number | null;
+  unrealizedGainPercentage: number | null;
+  consensusTargetEur: number | null;
+  consensusSourceCount: number;
+  consensusConfidence: number;
+  marketPhase: string;
+  riskLevel: string;
+  sellPercentage: number;
+  quantityBefore: number;
+  quantitySold: number;
+  quantityRemaining: number;
+  grossEur: number;
+  feeEur: number;
+  costBasisEur: number;
+  realizedGainEur: number;
+  taxEur: number;
+  fiscalReserveEur: number;
+  freeEurcEur: number;
+  explanation: string;
+  sources: string[];
+}
+
+export interface HypotheticalRebuyProposal {
+  id: string;
+  date: number;
+  scenario: string;
+  planId: string;
+  cycleId: string;
+  assetId: string;
+  proposalType: "hypothetical_rebuy";
+  sourceType: "real_consensus" | "simulated_consensus";
+  relatedSaleId: string | null;
+  triggerFactors: string[];
+  referenceType: "sale_price" | "post_sale_high" | "cycle_high" | "consensus_range" | "manual";
+  referencePriceEur: number;
+  currentPriceEur: number;
+  drawdownPercentage: number;
+  consensusTargetEur: number | null;
+  consensusSourceCount: number;
+  consensusConfidence: number;
+  eurcBeforeEur: number;
+  usagePercentage: number;
+  eurcUsedEur: number;
+  eurcRemainingEur: number;
+  quantityBought: number;
+  feeEur: number;
+  averageCostBeforeEur: number | null;
+  averageCostAfterEur: number | null;
+  explanation: string;
+  sources: string[];
+}
+
+// ── Scenario ordering violation ──────────────────────────────────────────────
+
+export interface ScenarioOrderingViolation {
+  date: number;
+  lowerScenario: string;
+  lowerValue: number;
+  higherScenario: string;
+  higherValue: number;
+  explanation: string;
 }
 
 export interface ProjectionInput {
@@ -221,7 +420,7 @@ export interface ProjectionLot {
   quantity: number;
   costPerUnitEur: number;
   remaining: number;
-  source: "historical" | "projection_contribution" | "projection_rebuy";
+  source: "historical" | "projection_contribution" | "projection_rebuy" | "projection_residual_reinvestment";
 }
 
 // ── Eventos proyectados ───────────────────────────────────────────────────────
@@ -232,6 +431,8 @@ export type ProjectionEventType =
   | "buy"
   | "partial_sale"
   | "rebuy"
+  | "sale"
+  | "asset_failure"
   | "goal_reached"
   | "redistribution"
   | "substitution"
@@ -356,6 +557,9 @@ export interface AssetProjectionResult {
 
   rulesTriggered: string[];
   events: ProjectionEvent[];
+
+  hypothesis: AssetScenarioRates | null;
+  annualPriceTrajectory: Array<{ year: number; priceEur: number }> | null;
 }
 
 // ── Reconciliación ────────────────────────────────────────────────────────────
@@ -402,6 +606,20 @@ export interface ProjectionSummary {
   historicalCapitalEur: number;
   totalFutureCapitalEur: number;
   totalCapitalEur: number;
+  estimatedMarketGainEur: number;
+  treasuryInterestEur: number;
+  estimatedFeesEur: number;
+  weightedAnnualReturn: number | null;
+
+  // Métricas de rentabilidad correctamente diferenciadas
+  xirrAnnual: number | null;      // XIRR: rentabilidad personal con flujos reales fechados
+  twrAnnual: number | null;       // TWR anualizada: rentabilidad de estrategia sin efecto flujos
+  roiAccumulated: number | null;  // ROI acumulado = (finalWealth / totalCapital) − 1
+
+  // Controles independientes (fórmula analítica de anualidad, no llama al motor)
+  controlCeroWealth: number | null;  // FV a 0% de crecimiento
+  control5pctWealth: number | null;  // FV a 5% anual constante
+  control7pctWealth: number | null;  // FV a 7% anual constante
 
   totalRealizedGainEur: number;
   totalUnrealizedGainEur: number;
@@ -412,11 +630,24 @@ export interface ProjectionSummary {
   finalFiscalReserveEur: number;
   finalCashEur: number;
 
+  // EURC flow tracking (reinversión total)
+  totalEurcGeneratedEur: number;
+  totalEurcReinvestedEur: number;
+  reinvestmentRate: number | null;  // % of EURC reinvested (should be ~100%)
+  totalLossesEur: number;           // losses from failed/written-off assets
+  failedAssets: string[];           // assets that reached 0 value
+
   probability: number | null;
   confidence: number | null;
   confidenceFactors: string[];
 
   nextProjectedEvent: ProjectionEvent | null;
+
+  simulationPolicy: SimulationPolicy;
+  salesZeroExplanation?: string;
+  rebuysZeroExplanation?: string;
+  hypotheticalSales: HypotheticalSaleProposal[];
+  hypotheticalRebuys: HypotheticalRebuyProposal[];
 }
 
 // ── Salida del motor ──────────────────────────────────────────────────────────
@@ -427,6 +658,7 @@ export interface ProjectionOutput {
   generatedAt: number;
   horizonDate: number;
   scenario: ProjectionScenario;
+  scenarioHypotheses: ScenarioHypotheses;
 
   summary: ProjectionSummary;
   periods: ProjectionPeriod[];
@@ -440,6 +672,7 @@ export interface ProjectionOutput {
   priceSource: string;
   fiscalVersion: string;
   strategyVersion: string;
+  simulationPolicy: SimulationPolicy;
 
   cacheKey: string;
 }

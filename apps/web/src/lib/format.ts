@@ -4,6 +4,13 @@ export const eurFormatter = new Intl.NumberFormat("es-ES", {
   maximumFractionDigits: 2,
 });
 
+const eurFormatter4 = new Intl.NumberFormat("es-ES", {
+  style: "currency",
+  currency: "EUR",
+  minimumFractionDigits: 4,
+  maximumFractionDigits: 4,
+});
+
 export const compactEurFormatter = new Intl.NumberFormat("es-ES", {
   style: "currency",
   currency: "EUR",
@@ -12,7 +19,8 @@ export const compactEurFormatter = new Intl.NumberFormat("es-ES", {
 });
 
 export function formatMoney(value: number | null | undefined, fallback = "No disponible en Coinbase") {
-  return typeof value === "number" && Number.isFinite(value) ? eurFormatter.format(value) : fallback;
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.abs(value) < 100 ? eurFormatter4.format(value) : eurFormatter.format(value);
 }
 
 export function formatCrypto(value: number | null | undefined, fallback = "No disponible en Coinbase") {
@@ -23,8 +31,10 @@ export function formatCrypto(value: number | null | undefined, fallback = "No di
 
 export function formatPercent(value: number | null | undefined, fallback = "No disponible en Coinbase") {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
-  const normalized = Math.abs(value) <= 1 ? value * 100 : value;
-  return `${normalized >= 0 ? "+" : ""}${normalized.toLocaleString("es-ES", { maximumFractionDigits: 2 })}%`;
+  // Value is always in percentage points (e.g. 3.49 = +3.49%) as supplied
+  // by Coinbase's price_percentage_change_24h or by pointChange().
+  // No ×100 normalization: that would corrupt values between -1 % and +1 %.
+  return `${value >= 0 ? "+" : ""}${value.toLocaleString("es-ES", { maximumFractionDigits: 2 })}%`;
 }
 
 export function formatAllocation(value: number | null | undefined) {

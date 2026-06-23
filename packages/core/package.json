@@ -13,6 +13,7 @@
   },
   "devDependencies": {
     "@crypto-control/portfolio": "^0.1.0",
+    "electron-builder": "^24.13.3",
     "typescript": "^5.5.0"
   }
 }

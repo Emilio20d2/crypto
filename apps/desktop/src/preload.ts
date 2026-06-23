@@ -12,7 +12,6 @@ import type {
   UpdateContributionScheduleInput,
   CreateAssetSubstitutionInput,
   UpdateAssetSubstitutionInput,
-  FullCryptoControlAPI,
   InvestmentAssetStateChangeInput,
   MarkGoalReachedInput,
   SetFiscalReserveInput,
@@ -26,7 +25,7 @@ import type {
   UpdatePartialSaleRuleInput,
 } from "@crypto-control/core";
 
-const cryptoControl: FullCryptoControlAPI = {
+const cryptoControl = {
   assets: {
     list: () => ipcRenderer.invoke("assets:list")
   },
@@ -71,12 +70,18 @@ const cryptoControl: FullCryptoControlAPI = {
     listPortfolios:        ()                           => ipcRenderer.invoke("coinbase:list-portfolios"),
     getPortfolioBreakdown: (portfolioUuid: string, currency: string) => ipcRenderer.invoke("coinbase:get-portfolio-breakdown", portfolioUuid, currency),
     getPortfolioSnapshots: (portfolioUuid: string)      => ipcRenderer.invoke("coinbase:get-portfolio-snapshots", portfolioUuid),
+    previewOrder:          (input: unknown)             => ipcRenderer.invoke("coinbase:preview-order", input),
+    submitOrder:           (input: unknown)             => ipcRenderer.invoke("coinbase:submit-order", input),
+    listPendingOrders:     ()                           => ipcRenderer.invoke("coinbase:list-pending-orders"),
+    listScheduledOperations: ()                         => ipcRenderer.invoke("coinbase:list-scheduled-operations"),
+    createScheduledOperation: (input: unknown)          => ipcRenderer.invoke("coinbase:create-scheduled-operation", input),
+    deleteScheduledOperation: (id: string)              => ipcRenderer.invoke("coinbase:delete-scheduled-operation", id),
   },
   sentiment: {
-    getGlobal: (input) => ipcRenderer.invoke("sentiment:get-global", input),
-    getAsset:  (input) => ipcRenderer.invoke("sentiment:get-asset", input),
-    getHistory:(input) => ipcRenderer.invoke("sentiment:get-history", input),
-    refresh:   (input) => ipcRenderer.invoke("sentiment:refresh", input),
+    getGlobal: (input: unknown) => ipcRenderer.invoke("sentiment:get-global", input),
+    getAsset:  (input: unknown) => ipcRenderer.invoke("sentiment:get-asset", input),
+    getHistory:(input: unknown) => ipcRenderer.invoke("sentiment:get-history", input),
+    refresh:   (input: unknown) => ipcRenderer.invoke("sentiment:refresh", input),
   },
   targets: {
     list:   ()                                                                    => ipcRenderer.invoke("targets:list"),
@@ -153,6 +158,10 @@ const cryptoControl: FullCryptoControlAPI = {
     getConsolidatedSnapshot: ()                                    => ipcRenderer.invoke("perspectives:getConsolidatedSnapshot"),
     getProjection:           (input?: unknown)                     => ipcRenderer.invoke("perspectives:getProjection", input),
   },
+  persp2: {
+    getSimulation: (input?: { horizonYears?: number; policy?: "plan_base" | "full_strategy" }) =>
+      ipcRenderer.invoke("persp2:getSimulation", input),
+  },
   smartBuy: {
     getRecommendation: (input: unknown) => ipcRenderer.invoke("smartBuy:getRecommendation", input),
   },
@@ -171,6 +180,14 @@ const cryptoControl: FullCryptoControlAPI = {
   },
   planMonitoring: {
     getSummary: (input: unknown) => ipcRenderer.invoke("planMonitoring:getSummary", input),
+  },
+  trade: {
+    getAlerts: () => ipcRenderer.invoke("trade:get-alerts"),
+    onNewAlerts: (cb: (alerts: unknown) => void) => {
+      const handler = (_: unknown, alerts: unknown) => cb(alerts);
+      ipcRenderer.on("trade:new-alerts", handler);
+      return () => ipcRenderer.removeListener("trade:new-alerts", handler);
+    },
   },
   treasury: {
     getSummary:           ()                                      => ipcRenderer.invoke("treasury:getSummary"),

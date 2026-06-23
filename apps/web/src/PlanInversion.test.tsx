@@ -768,3 +768,37 @@ describe("PlanEtapaActivos — progreso de objetivos (G-A3)", () => {
     expect(screen.queryByRole("button", { name: /^Editar$/i })).not.toBeInTheDocument();
   });
 });
+
+describe("Plan — secciones internas visibles", () => {
+  test("muestra Compra Inteligente como página interna real del Plan", async () => {
+    renderWithQuery("/plan-inversion/compra-inteligente");
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /compra inteligente/i })).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/aportaciones eur/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /analizar compra/i })).toBeInTheDocument();
+  });
+
+  test("muestra Ventas/Recompras como página interna real del Plan", async () => {
+    renderWithQuery("/plan-inversion/ventas-recompras");
+
+    await waitFor(() => {
+      expect(screen.getByText(/reglas de recogida de beneficios/i)).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/compras en caídas/i)).toBeInTheDocument();
+  });
+
+  test("Aportaciones queda solo sincronizada con Coinbase y sin registro manual", async () => {
+    renderWithQuery("/plan-inversion/aportaciones");
+
+    await waitFor(() => {
+      expect(screen.getByText(/aportaciones reales sincronizadas desde operaciones\/coinbase/i)).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/registrar ajuste manual/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/confirmar aportación/i)).not.toBeInTheDocument();
+  });
+});

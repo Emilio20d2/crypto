@@ -2,15 +2,29 @@
 // Calculates how to allocate a given amount across active plan assets.
 // NEVER executes purchases automatically.
 
-export type SmartBuyMode = "plan" | "equilibrar" | "oportunidad" | "mixto";
+export type SmartBuyMode = "plan" | "equilibrar" | "oportunidad" | "mixto" | "potencial";
 export type SmartBuyConfidence = "alta" | "media" | "baja" | "no_evaluable";
 export type DataQuality = "completo" | "parcial" | "sin_datos";
+export type SmartBuyAction =
+  | "comprar"
+  | "comprar_parcialmente"
+  | "mantener"
+  | "esperar"
+  | "no_evaluable"
+  | "candidato_plan"
+  | "objetivo_alcanzado"
+  | "pausado"
+  | "no_elegible";
+export type RiskLevel = "bajo" | "medio" | "alto" | "no_evaluable";
+export type SmartBuyHorizon = "1-3y" | "3-5y" | "5y+";
 
 export interface SmartBuyAsset {
   assetId: string;
   status: string;
   targetAllocationPct: number | null;
   goalReachedAt: number | null;
+  isInPlan?: boolean;
+  priority?: number | null;
 }
 
 export interface SmartBuyPosition {
@@ -19,6 +33,11 @@ export interface SmartBuyPosition {
   currentValueEur: number | null;
   averagePriceEur: number | null;
   currentPriceEur: number | null;
+  priceChange24hPct?: number | null;
+  priceChange7dPct?: number | null;
+  drawdownFromRecentHighPct?: number | null;
+  marketCapEur?: number | null;
+  volume24hEur?: number | null;
 }
 
 export interface TreasurySnapshot {
@@ -28,18 +47,45 @@ export interface TreasurySnapshot {
 }
 
 export interface SmartBuyAssetRecommendation {
+  rank: number;
   assetId: string;
+  action: SmartBuyAction;
   recommendedAmountEur: number;
+  recommendedPercentage: number;
   baseAmountEur: number;
   deviationFromBaseEur: number;
   targetAllocationPct: number | null;
   currentValueEur: number | null;
+  currentWeightPct: number | null;
   targetValueEur: number | null;
+  estimatedValueAfterBuyEur: number | null;
+  estimatedWeightAfterBuyPct: number | null;
+  targetGapPct: number | null;
   isUnderweight: boolean;
   isOpportunity: boolean;
   opportunityReason: string | null;
+  potentialReason: string | null;
+  currentPriceEur: number | null;
+  estimatedQuantity: number | null;
+  averagePriceEur: number | null;
+  estimatedAverageCostAfterBuyEur: number | null;
+  riskLevel: RiskLevel;
+  horizon: SmartBuyHorizon | null;
   confidenceLevel: SmartBuyConfidence;
+  dataQuality: DataQuality;
+  sources: string[];
+  updatedAt: number;
+  scoreBreakdown: {
+    planAlignment: number;
+    priceOpportunity: number;
+    longTermPotential: number;
+    risk: number;
+    liquidity: number;
+    dataQuality: number;
+    final: number;
+  };
   reason: string;
+  explanation: string;
   restrictionsApplied: string[];
 }
 
@@ -58,6 +104,14 @@ export interface SmartBuyResult {
 }
 
 const ELIGIBLE_STATUSES = new Set(["active"]);
+const MIN_PROGRESSIVE_REMAINDER_EUR = 0.01;
+const MODE_LABELS: Record<SmartBuyMode, string> = {
+  plan: "Cumplir el Plan",
+  equilibrar: "Equilibrar cartera",
+  oportunidad: "Aprovechar oportunidades",
+  mixto: "Modo mixto",
+  potencial: "Potencial medio/largo plazo",
+};
 
 function isEligible(asset: SmartBuyAsset, originType: "cash" | "eurc"): { eligible: boolean; reason?: string } {
   if (!ELIGIBLE_STATUSES.has(asset.status)) {
@@ -69,11 +123,90 @@ function isEligible(asset: SmartBuyAsset, originType: "cash" | "eurc"): { eligib
   return { eligible: true };
 }
 
+function clampScore(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
 function calcConfidence(position: SmartBuyPosition | null): SmartBuyConfidence {
   if (!position) return "baja";
   if (position.currentValueEur !== null && position.currentPriceEur !== null) return "alta";
   if (position.balance > 0) return "media";
   return "baja";
+}
+
+function calcDataQuality(position: SmartBuyPosition | null): DataQuality {
+  if (!position) return "sin_datos";
+  if (position.currentValueEur !== null && position.currentPriceEur !== null) return "completo";
+  if (position.balance > 0 || position.currentValueEur !== null || position.currentPriceEur !== null) return "parcial";
+  return "sin_datos";
+}
+
+function calcPriceOpportunityScore(position: SmartBuyPosition | null): { score: number; reason: string | null } {
+  if (!position?.currentPriceEur) return { score: 0, reason: null };
+
+  const drawdown = position.drawdownFromRecentHighPct;
+  if (typeof drawdown === "number" && Number.isFinite(drawdown) && drawdown < 0) {
+    const absDrawdown = Math.abs(drawdown);
+    const score = clampScore(absDrawdown * 2.4);
+    if (score >= 50) {
+      return { score, reason: `Corrección trazable de ${absDrawdown.toFixed(1)}% desde máximos recientes` };
+    }
+    return { score, reason: null };
+  }
+
+  const change24h = position.priceChange24hPct;
+  const change7d = position.priceChange7dPct;
+  if (typeof change7d === "number" && change7d < -12) {
+    return { score: clampScore(Math.abs(change7d) * 3), reason: `Caída 7d de ${Math.abs(change7d).toFixed(1)}% con precio disponible` };
+  }
+  if (typeof change24h === "number" && change24h < -6) {
+    return { score: clampScore(Math.abs(change24h) * 5), reason: `Caída 24h de ${Math.abs(change24h).toFixed(1)}% con precio disponible` };
+  }
+
+  return { score: 0, reason: null };
+}
+
+function calcLiquidityScore(position: SmartBuyPosition | null): number {
+  const volume = position?.volume24hEur;
+  if (typeof volume !== "number" || !Number.isFinite(volume) || volume <= 0) {
+    return position?.currentPriceEur ? 45 : 10;
+  }
+  if (volume >= 1_000_000_000) return 95;
+  if (volume >= 100_000_000) return 80;
+  if (volume >= 10_000_000) return 65;
+  if (volume >= 1_000_000) return 45;
+  return 25;
+}
+
+function calcPotentialScore(asset: SmartBuyAsset, position: SmartBuyPosition | null): { score: number; reason: string | null } {
+  const liquidity = calcLiquidityScore(position);
+  const data = calcDataQuality(position);
+  const priorityBoost = typeof asset.priority === "number" ? Math.max(0, 20 - asset.priority * 2) : 8;
+  const inPlanBoost = asset.isInPlan === false ? 0 : 12;
+  const score = clampScore(liquidity * 0.35 + (data === "completo" ? 25 : data === "parcial" ? 12 : 0) + priorityBoost + inPlanBoost);
+  const reason = score >= 60
+    ? "Potencial evaluable por liquidez, datos de precio y alineación estratégica disponibles"
+    : data === "sin_datos"
+      ? "Potencial no evaluable: faltan datos trazables"
+      : "Potencial prudente: datos limitados o liquidez moderada";
+  return { score, reason };
+}
+
+function classifyAction(
+  asset: SmartBuyAsset,
+  recommendedAmountEur: number,
+  isOpportunity: boolean,
+  dataQuality: DataQuality,
+  originType: "cash" | "eurc"
+): SmartBuyAction {
+  if (asset.status === "paused") return "pausado";
+  if (asset.goalReachedAt !== null && originType === "cash") return "objetivo_alcanzado";
+  if (!ELIGIBLE_STATUSES.has(asset.status)) return "no_elegible";
+  if (asset.isInPlan === false) return "candidato_plan";
+  if (dataQuality === "sin_datos") return "no_evaluable";
+  if (recommendedAmountEur <= 0) return isOpportunity ? "esperar" : "mantener";
+  return recommendedAmountEur >= 5 ? "comprar" : "comprar_parcialmente";
 }
 
 export function rankSmartBuyCandidates(
@@ -82,31 +215,90 @@ export function rankSmartBuyCandidates(
   totalPortfolioValueEur: number | null,
   mode: SmartBuyMode,
   originType: "cash" | "eurc"
-): { asset: SmartBuyAsset; position: SmartBuyPosition | null; underweightEur: number; isOpportunity: boolean; opportunityReason: string | null; score: number }[] {
+): { asset: SmartBuyAsset; position: SmartBuyPosition | null; underweightEur: number; isOpportunity: boolean; opportunityReason: string | null; potentialReason: string | null; scores: SmartBuyAssetRecommendation["scoreBreakdown"]; score: number }[] {
   return assets
-    .filter(a => isEligible(a, originType).eligible)
     .map(asset => {
       const position = positions[asset.assetId] ?? null;
       const currentValueEur = position?.currentValueEur ?? 0;
       const targetPct = (asset.targetAllocationPct ?? 0) / 100;
       const targetValueEur = totalPortfolioValueEur !== null ? totalPortfolioValueEur * targetPct : null;
       const underweightEur = targetValueEur !== null ? Math.max(0, targetValueEur - currentValueEur) : 0;
-
-      const avgCost = position?.averagePriceEur ?? null;
-      const currentPrice = position?.currentPriceEur ?? null;
-      const isOpportunity = avgCost !== null && currentPrice !== null && currentPrice < avgCost * 0.95;
-      const opportunityReason = isOpportunity && currentPrice !== null && avgCost !== null
-        ? `Precio ${((1 - currentPrice / avgCost) * 100).toFixed(1)}% por debajo del coste medio`
-        : null;
+      const dataQuality = calcDataQuality(position);
+      const planAlignment = targetPct > 0 && totalPortfolioValueEur !== null
+        ? clampScore(100 - Math.min(100, Math.abs(((currentValueEur / Math.max(totalPortfolioValueEur, 1)) * 100) - (asset.targetAllocationPct ?? 0)) * 4))
+        : asset.isInPlan === false ? 0 : 50;
+      const priceOpportunity = calcPriceOpportunityScore(position);
+      const potential = calcPotentialScore(asset, position);
+      const liquidity = calcLiquidityScore(position);
+      const risk = dataQuality === "completo" ? (liquidity >= 65 ? 78 : 55) : dataQuality === "parcial" ? 40 : 15;
+      const dataQualityScore = dataQuality === "completo" ? 90 : dataQuality === "parcial" ? 55 : 10;
 
       let score = 0;
-      if (mode === "plan" || mode === "mixto") score += targetPct * 100;
+      if (mode === "plan" || mode === "mixto") score += planAlignment;
       if (mode === "equilibrar" || mode === "mixto") score += underweightEur;
-      if ((mode === "oportunidad" || mode === "mixto") && isOpportunity) score += 50;
+      if (mode === "oportunidad" || mode === "mixto") score += priceOpportunity.score;
+      if (mode === "potencial" || mode === "mixto") score += potential.score;
 
-      return { asset, position, underweightEur, isOpportunity, opportunityReason, score };
+      const final = clampScore(
+        mode === "oportunidad"
+          ? priceOpportunity.score * 0.55 + liquidity * 0.2 + dataQualityScore * 0.25
+          : mode === "potencial"
+            ? potential.score * 0.55 + liquidity * 0.2 + risk * 0.15 + dataQualityScore * 0.1
+            : mode === "mixto"
+              ? planAlignment * 0.45 + priceOpportunity.score * 0.2 + potential.score * 0.2 + dataQualityScore * 0.15
+              : planAlignment * 0.7 + dataQualityScore * 0.3
+      );
+
+      return {
+        asset,
+        position,
+        underweightEur,
+        isOpportunity: priceOpportunity.score >= 50,
+        opportunityReason: priceOpportunity.reason,
+        potentialReason: potential.reason,
+        scores: {
+          planAlignment,
+          priceOpportunity: priceOpportunity.score,
+          longTermPotential: potential.score,
+          risk,
+          liquidity,
+          dataQuality: dataQualityScore,
+          final,
+        },
+        score: final + score
+      };
     })
     .sort((a, b) => b.score - a.score);
+}
+
+export interface SmartBuyWeights {
+  planPct?: number;
+  balancePct?: number;
+  opportunityPct?: number;
+  potentialPct?: number;
+}
+
+export interface SmartBuyOptions {
+  weights?: SmartBuyWeights;
+  horizon?: SmartBuyHorizon;
+}
+
+function normalizedWeights(mode: SmartBuyMode, weights?: SmartBuyWeights): Required<SmartBuyWeights> {
+  const defaults: Record<SmartBuyMode, Required<SmartBuyWeights>> = {
+    plan: { planPct: 70, balancePct: 30, opportunityPct: 0, potentialPct: 0 },
+    equilibrar: { planPct: 0, balancePct: 100, opportunityPct: 0, potentialPct: 0 },
+    oportunidad: { planPct: 0, balancePct: 0, opportunityPct: 100, potentialPct: 0 },
+    mixto: { planPct: 60, balancePct: 15, opportunityPct: 20, potentialPct: 5 },
+    potencial: { planPct: 0, balancePct: 0, opportunityPct: 0, potentialPct: 100 },
+  };
+  const merged = { ...defaults[mode], ...(weights ?? {}) };
+  const total = Math.max(1, merged.planPct + merged.balancePct + merged.opportunityPct + merged.potentialPct);
+  return {
+    planPct: merged.planPct / total,
+    balancePct: merged.balancePct / total,
+    opportunityPct: merged.opportunityPct / total,
+    potentialPct: merged.potentialPct / total,
+  };
 }
 
 export function calculateSmartBuyAllocation(
@@ -118,9 +310,11 @@ export function calculateSmartBuyAllocation(
   originType: "cash" | "eurc",
   treasury: TreasurySnapshot | null,
   maxDeviationPct = 30,
-  now = Date.now()
+  now = Date.now(),
+  options: SmartBuyOptions = {}
 ): SmartBuyResult {
   const restrictions: string[] = [];
+  let spendableAmount = amount;
 
   if (amount <= 0) {
     return {
@@ -154,7 +348,7 @@ export function calculateSmartBuyAllocation(
         generatedAt: now,
       };
     }
-    const available = treasury.eurcBalance - treasury.fiscalReserveBalance;
+    const available = Math.max(0, treasury.freeRebuyLiquidity || (treasury.eurcBalance - treasury.fiscalReserveBalance));
     if (available <= 0) {
       restrictions.push("Sin EURC disponible (excluida reserva fiscal)");
       return {
@@ -173,18 +367,18 @@ export function calculateSmartBuyAllocation(
     }
     if (amount > available) {
       restrictions.push(`Importe limitado a EURC disponible: ${available.toFixed(2)} €`);
+      spendableAmount = available;
     }
   }
 
-  const activeAssets = assets.filter(a => ELIGIBLE_STATUSES.has(a.status));
-  if (activeAssets.length === 0) {
+  if (assets.length === 0) {
     return {
       cycleId: "",
       analyzedAmountEur: amount,
       totalPortfolioValueEur,
       recommendations: [],
       hasOpportunities: false,
-      restrictionsApplied: ["Sin activos activos en el plan"],
+      restrictionsApplied: ["Sin activos en el plan para analizar"],
       pendingAmountEur: amount,
       dataQuality: "sin_datos",
       mode,
@@ -193,44 +387,62 @@ export function calculateSmartBuyAllocation(
     };
   }
 
-  const projectedTotal = (totalPortfolioValueEur ?? 0) + amount;
+  const projectedTotal = (totalPortfolioValueEur ?? 0) + spendableAmount;
   const candidates = rankSmartBuyCandidates(assets, positions, projectedTotal, mode, originType);
+  const eligibleCandidates = candidates.filter(({ asset }) => isEligible(asset, originType).eligible && asset.isInPlan !== false);
+  if (eligibleCandidates.length === 0 && candidates.every(({ asset }) => asset.isInPlan !== false)) {
+    restrictions.push("Sin activos elegibles para compra en este modo");
+  }
 
   let hasPositionData = false;
   let hasPriceData = false;
 
-  const totalUnderweight = candidates.reduce((s, c) => s + c.underweightEur, 0);
-  const totalTargetPct = candidates.reduce((s, c) => s + ((c.asset.targetAllocationPct ?? 0) / 100), 0);
+  const totalUnderweight = eligibleCandidates.reduce((s, c) => s + c.underweightEur, 0);
+  const totalTargetPct = eligibleCandidates.reduce((s, c) => s + ((c.asset.targetAllocationPct ?? 0) / 100), 0);
+  const totalOpportunityScore = eligibleCandidates.reduce((s, c) => s + (c.isOpportunity ? c.scores.priceOpportunity : 0), 0);
+  const totalPotentialScore = eligibleCandidates.reduce((s, c) => s + c.scores.longTermPotential, 0);
+  const weights = normalizedWeights(mode, options.weights);
   let hasOpportunities = false;
-  let remaining = amount;
+  let remaining = spendableAmount;
 
-  const recommendations: SmartBuyAssetRecommendation[] = candidates.map(({ asset, position, underweightEur, isOpportunity, opportunityReason }) => {
+  const recommendations: SmartBuyAssetRecommendation[] = candidates.map(({ asset, position, underweightEur, isOpportunity, opportunityReason, potentialReason, scores }, index) => {
     if (position) hasPositionData = true;
     if (position?.currentPriceEur) hasPriceData = true;
     if (isOpportunity) hasOpportunities = true;
+    const eligibility = isEligible(asset, originType);
+    const dataQualityForAsset = calcDataQuality(position);
 
     const targetPct = (asset.targetAllocationPct ?? 0) / 100;
     const baseAmount = totalTargetPct > 0
-      ? Math.round((targetPct / totalTargetPct) * amount * 100) / 100
-      : Math.round((amount / candidates.length) * 100) / 100;
+      ? Math.round((targetPct / totalTargetPct) * spendableAmount * 100) / 100
+      : Math.round((spendableAmount / candidates.length) * 100) / 100;
 
     let recommendedAmountEur: number;
+    const balanceAmount = totalUnderweight > 0
+      ? Math.round((underweightEur / totalUnderweight) * spendableAmount * 100) / 100
+      : baseAmount;
+    const opportunityAmount = totalOpportunityScore > 0 && isOpportunity
+      ? Math.round((scores.priceOpportunity / totalOpportunityScore) * spendableAmount * 100) / 100
+      : 0;
+    const potentialAmount = totalPotentialScore > 0
+      ? Math.round((scores.longTermPotential / totalPotentialScore) * spendableAmount * 100) / 100
+      : 0;
+
     if (mode === "plan") {
-      recommendedAmountEur = baseAmount;
+      recommendedAmountEur = Math.round((baseAmount * weights.planPct + balanceAmount * weights.balancePct) * 100) / 100;
     } else if (mode === "equilibrar") {
-      recommendedAmountEur = totalUnderweight > 0
-        ? Math.round((underweightEur / totalUnderweight) * amount * 100) / 100
-        : baseAmount;
+      recommendedAmountEur = balanceAmount;
     } else if (mode === "oportunidad") {
-      recommendedAmountEur = isOpportunity
-        ? Math.round((underweightEur > 0 ? (underweightEur / Math.max(totalUnderweight, 1)) : (1 / candidates.length)) * amount * 100) / 100
-        : 0;
+      recommendedAmountEur = opportunityAmount;
+    } else if (mode === "potencial") {
+      recommendedAmountEur = asset.isInPlan === false ? 0 : potentialAmount;
     } else {
-      // mixto: blend plan + opportunity
-      const planWeight = baseAmount * 0.5;
-      const oppWeight = isOpportunity ? baseAmount * 0.5 : 0;
-      const equilWeight = totalUnderweight > 0 ? (underweightEur / totalUnderweight) * amount * 0.3 : 0;
-      recommendedAmountEur = Math.round((planWeight + oppWeight + equilWeight) * 100) / 100;
+      recommendedAmountEur = Math.round((
+        baseAmount * weights.planPct +
+        balanceAmount * weights.balancePct +
+        opportunityAmount * weights.opportunityPct +
+        potentialAmount * weights.potentialPct
+      ) * 100) / 100;
     }
 
     // Enforce max deviation from base
@@ -242,10 +454,28 @@ export function calculateSmartBuyAllocation(
     }
     recommendedAmountEur = Math.min(recommendedAmountEur, remaining);
 
-    const ineligible = isEligible(asset, originType);
-    if (!ineligible.eligible) {
+    if (
+      eligibleCandidates.length === 1 &&
+      eligibility.eligible &&
+      asset.isInPlan !== false &&
+      recommendedAmountEur >= spendableAmount &&
+      spendableAmount > MIN_PROGRESSIVE_REMAINDER_EUR
+    ) {
+      recommendedAmountEur = Math.max(0, Math.round((spendableAmount - MIN_PROGRESSIVE_REMAINDER_EUR) * 100) / 100);
+      assetRestrictions.push("Compra única limitada para mantener capital sin utilizar");
+    }
+
+    if (!eligibility.eligible) {
       recommendedAmountEur = 0;
-      assetRestrictions.push(ineligible.reason ?? "No elegible");
+      assetRestrictions.push(eligibility.reason ?? "No elegible");
+    }
+    if (asset.isInPlan === false) {
+      recommendedAmountEur = 0;
+      assetRestrictions.push("Activo fuera del Plan: candidato para estudiar antes de comprar");
+    }
+    if (mode === "oportunidad" && !isOpportunity) {
+      recommendedAmountEur = 0;
+      assetRestrictions.push("Sin oportunidad trazable suficiente actualmente");
     }
 
     remaining -= recommendedAmountEur;
@@ -254,30 +484,81 @@ export function calculateSmartBuyAllocation(
     const currentValueEur = position?.currentValueEur ?? null;
     const targetValueEur = projectedTotal * ((asset.targetAllocationPct ?? 0) / 100);
     const isUnderweight = currentValueEur !== null ? currentValueEur < targetValueEur : false;
+    const currentWeightPct = totalPortfolioValueEur !== null && totalPortfolioValueEur > 0 && currentValueEur !== null
+      ? (currentValueEur / totalPortfolioValueEur) * 100
+      : null;
+    const estimatedValueAfterBuyEur = currentValueEur !== null ? currentValueEur + recommendedAmountEur : null;
+    const estimatedWeightAfterBuyPct = estimatedValueAfterBuyEur !== null && projectedTotal > 0
+      ? (estimatedValueAfterBuyEur / projectedTotal) * 100
+      : null;
+    const targetGapPct = currentWeightPct !== null && asset.targetAllocationPct !== null
+      ? currentWeightPct - asset.targetAllocationPct
+      : null;
+    const currentPriceEur = position?.currentPriceEur ?? null;
+    const estimatedQuantity = currentPriceEur !== null && currentPriceEur > 0 && recommendedAmountEur > 0
+      ? recommendedAmountEur / currentPriceEur
+      : null;
+    const averagePriceEur = position?.averagePriceEur ?? null;
+    const currentCost = averagePriceEur !== null && position ? averagePriceEur * position.balance : null;
+    const estimatedAverageCostAfterBuyEur = currentCost !== null && estimatedQuantity !== null && position
+      ? (currentCost + recommendedAmountEur) / (position.balance + estimatedQuantity)
+      : averagePriceEur;
+    const riskLevel: RiskLevel = dataQualityForAsset === "sin_datos"
+      ? "no_evaluable"
+      : scores.risk >= 70
+        ? "bajo"
+        : scores.risk >= 45
+          ? "medio"
+          : "alto";
+    const action = classifyAction(asset, recommendedAmountEur, isOpportunity, dataQualityForAsset, originType);
 
     const reasonParts: string[] = [];
     if (isUnderweight) reasonParts.push(`Infraponderado: ${currentValueEur?.toFixed(0) ?? "?"} € vs ${targetValueEur.toFixed(0)} € objetivo`);
     else if (currentValueEur !== null) reasonParts.push(`Objetivo cubierto: ${currentValueEur.toFixed(0)} € vs ${targetValueEur.toFixed(0)} €`);
     if (opportunityReason) reasonParts.push(opportunityReason);
+    if (mode === "potencial" || mode === "mixto") reasonParts.push(potentialReason ?? "Potencial no evaluable con los datos actuales");
+    if (originType === "eurc") reasonParts.push("Origen EURC libre: compra táctica, no aportación mensual ni Propuesta de Recompra");
 
     return {
+      rank: index + 1,
       assetId: asset.assetId,
+      action,
       recommendedAmountEur,
+      recommendedPercentage: amount > 0 ? Math.round((recommendedAmountEur / amount) * 10_000) / 100 : 0,
       baseAmountEur: baseAmount,
       deviationFromBaseEur: Math.round((recommendedAmountEur - baseAmount) * 100) / 100,
       targetAllocationPct: asset.targetAllocationPct,
       currentValueEur: currentValueEur !== null ? Math.round(currentValueEur * 100) / 100 : null,
+      currentWeightPct: currentWeightPct !== null ? Math.round(currentWeightPct * 100) / 100 : null,
       targetValueEur: Math.round(targetValueEur * 100) / 100,
+      estimatedValueAfterBuyEur: estimatedValueAfterBuyEur !== null ? Math.round(estimatedValueAfterBuyEur * 100) / 100 : null,
+      estimatedWeightAfterBuyPct: estimatedWeightAfterBuyPct !== null ? Math.round(estimatedWeightAfterBuyPct * 100) / 100 : null,
+      targetGapPct: targetGapPct !== null ? Math.round(targetGapPct * 100) / 100 : null,
       isUnderweight,
       isOpportunity,
       opportunityReason,
+      potentialReason,
+      currentPriceEur,
+      estimatedQuantity: estimatedQuantity !== null ? Math.round(estimatedQuantity * 1e8) / 1e8 : null,
+      averagePriceEur,
+      estimatedAverageCostAfterBuyEur: estimatedAverageCostAfterBuyEur !== null ? Math.round(estimatedAverageCostAfterBuyEur * 100) / 100 : null,
+      riskLevel,
+      horizon: mode === "potencial" ? options.horizon ?? "3-5y" : null,
       confidenceLevel: calcConfidence(position),
-      reason: reasonParts.join(" · ") || `Asignación según Plan (${asset.targetAllocationPct ?? 0}%)`,
+      dataQuality: dataQualityForAsset,
+      sources: ["Plan de Inversión", "Cartera", "Mercado"],
+      updatedAt: now,
+      scoreBreakdown: scores,
+      reason: reasonParts.join(" · ") || `Asignación según ${MODE_LABELS[mode]} (${asset.targetAllocationPct ?? 0}%)`,
+      explanation: reasonParts.join(" · ") || "No hay señales adicionales trazables; se mantiene la asignación base del Plan.",
       restrictionsApplied: assetRestrictions,
     };
   });
 
   const dataQuality: DataQuality = !hasPositionData ? "sin_datos" : !hasPriceData ? "parcial" : "completo";
+  if (mode === "oportunidad" && !hasOpportunities) {
+    restrictions.push("No se detectan oportunidades de compra suficientemente claras actualmente.");
+  }
 
   return {
     cycleId: "",
@@ -286,7 +567,7 @@ export function calculateSmartBuyAllocation(
     recommendations,
     hasOpportunities,
     restrictionsApplied: restrictions,
-    pendingAmountEur: Math.max(0, Math.round(remaining * 100) / 100),
+    pendingAmountEur: Math.max(0, Math.round((remaining + (amount - spendableAmount)) * 100) / 100),
     dataQuality,
     mode,
     originType,

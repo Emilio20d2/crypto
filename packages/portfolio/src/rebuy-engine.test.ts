@@ -87,12 +87,19 @@ describe("evaluateRebuyTierExtended — alcanzada", () => {
     expect(r.preview?.eurcRemainingAfterEur).toBeCloseTo(250);
   });
 
+  test("rechaza usar el 100% del EURC libre", () => {
+    const r = evaluateRebuyTierExtended(makeTier({ usagePercentage: 100 }), 70_000, 200);
+    expect(r.isTriggered).toBe(false);
+    expect(r.preview).toBeNull();
+    expect(r.notTriggeredReason).toMatch(/inválido/i);
+  });
+
   test("reserva fiscal excluida del EURC de entrada (no suma)", () => {
     // El motor de recompra recibe availableLiquidityEur ya libre de reserva fiscal
     // — la exclusión ocurre antes de llamar al motor. El motor solo opera sobre lo recibido.
-    const r = evaluateRebuyTierExtended(makeTier({ usagePercentage: 100 }), 70_000, 200);
-    expect(r.preview?.proposedAmountEur).toBeCloseTo(200);
-    expect(r.preview?.eurcRemainingAfterEur).toBeCloseTo(0);
+    const r = evaluateRebuyTierExtended(makeTier({ usagePercentage: 50 }), 70_000, 200);
+    expect(r.preview?.proposedAmountEur).toBeCloseTo(100);
+    expect(r.preview?.eurcRemainingAfterEur).toBeCloseTo(100);
   });
 
   test("nuevo coste medio estimado cuando hay posición previa", () => {
@@ -122,7 +129,7 @@ describe("evaluateRebuyTierExtended — alcanzada", () => {
 // ── escalones múltiples ───────────────────────────────────────────────────────
 
 describe("evaluateRebuyTiersExtended — múltiples escalones", () => {
-  test("se activa el escalón de mayor caída alcanzado", () => {
+  test("varios escalones se calculan sobre EURC restante", () => {
     const tiers = [
       makeTier({ id: "t1", drawdownPercentage: 15, usagePercentage: 30 }),
       makeTier({ id: "t2", drawdownPercentage: 25, usagePercentage: 50 }),
@@ -133,7 +140,12 @@ describe("evaluateRebuyTiersExtended — múltiples escalones", () => {
     const results = evaluateRebuyTiersExtended(tiers, prices, 1000);
     const triggered = results.filter(r => r.isTriggered);
     expect(triggered.length).toBe(2);
-    expect(triggered[0].tier.id).toBe("t2"); // mayor drawdown primero
+    expect(triggered[0].tier.id).toBe("t1");
+    expect(triggered[0].preview?.proposedAmountEur).toBeCloseTo(300);
+    expect(triggered[0].preview?.eurcRemainingAfterEur).toBeCloseTo(700);
+    expect(triggered[1].tier.id).toBe("t2");
+    expect(triggered[1].preview?.proposedAmountEur).toBeCloseTo(350);
+    expect(triggered[1].preview?.eurcRemainingAfterEur).toBeCloseTo(350);
   });
 
   test("nivel ya utilizado (lastTriggeredAt reciente) aparece como sin cambio", () => {

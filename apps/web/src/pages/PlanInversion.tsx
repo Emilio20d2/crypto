@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PlanLayout } from "./plan/PlanLayout";
 import { PlanConfigurar } from "./plan/PlanConfigurar";
@@ -351,8 +351,17 @@ const EMPTY_REVISIONS: StrategyRevision[] = [];
 
 // ── Compra Inteligente ────────────────────────────────────────────────────────
 
+type SmartBuyUiMode = "plan" | "oportunidad" | "mixto" | "potencial";
+
 function SmartBuyPanel({ cycleId, defaultAmount }: { cycleId: string; defaultAmount: number }) {
+  const navigate = useNavigate();
   const [amount, setAmount] = useState(String(defaultAmount));
+  const [mode, setMode] = useState<SmartBuyUiMode>("plan");
+  const [horizon, setHorizon] = useState<"1-3y" | "3-5y" | "5y+">("3-5y");
+  const [planWeight, setPlanWeight] = useState("60");
+  const [balanceWeight, setBalanceWeight] = useState("15");
+  const [opportunityWeight, setOpportunityWeight] = useState("20");
+  const [potentialWeight, setPotentialWeight] = useState("5");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<SmartBuyRecommendation | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -363,7 +372,21 @@ function SmartBuyPanel({ cycleId, defaultAmount }: { cycleId: string; defaultAmo
     setLoading(true);
     setError(null);
     try {
-      const res = await window.cryptoControl.smartBuy.getRecommendation({ cycleId, amount: amountNum });
+      const res = await window.cryptoControl.smartBuy.getRecommendation({
+        cycleId,
+        amount: amountNum,
+        mode,
+        originType: "cash",
+        horizon,
+        weights: mode === "mixto"
+          ? {
+              planPct: parseNumber(planWeight),
+              balancePct: parseNumber(balanceWeight),
+              opportunityPct: parseNumber(opportunityWeight),
+              potentialPct: parseNumber(potentialWeight),
+            }
+          : undefined,
+      });
       if (!res.ok) { setError(res.error.message); return; }
       setResult(res.data);
     } catch (e) {
@@ -373,6 +396,19 @@ function SmartBuyPanel({ cycleId, defaultAmount }: { cycleId: string; defaultAmo
     }
   };
 
+  const prepareBuy = (rec: SmartBuyRecommendation["recommendations"][number]) => {
+    if (rec.recommendedAmountEur <= 0 || rec.action === "candidato_plan") return;
+    const params = new URLSearchParams({
+      source: "smart-buy",
+      type: "buy",
+      asset: rec.assetId,
+      quoteAmount: String(rec.recommendedAmountEur),
+      origin: "cash",
+      cycleId,
+    });
+    navigate(`/operaciones?${params.toString()}`);
+  };
+
   return (
     <section className="investment-section" aria-label="Compra Inteligente">
       <div className="investment-section-heading">
@@ -380,7 +416,7 @@ function SmartBuyPanel({ cycleId, defaultAmount }: { cycleId: string; defaultAmo
         <span className="badge">Solo orientativo — no ejecuta compras automáticas</span>
       </div>
       <p className="panel-caption">
-        Distribuye el importe disponible entre los activos del ciclo para restaurar las ponderaciones objetivo. Detecta oportunidades cuando el precio está por debajo del coste medio.
+        Analiza las aportaciones disponibles según el Plan, el estado de cartera y señales de mercado trazables. Las recompras con EURC se gestionan aparte en Ventas/Recompras.
       </p>
       <div className="investment-form-grid" style={{ marginBottom: 12 }}>
         <label className="form-group">
@@ -392,9 +428,53 @@ function SmartBuyPanel({ cycleId, defaultAmount }: { cycleId: string; defaultAmo
             placeholder={String(defaultAmount)}
           />
         </label>
+        <label className="form-group">
+          <span>Modo</span>
+          <select className="ui-select" value={mode} onChange={(e) => setMode(e.target.value as SmartBuyUiMode)}>
+            <option value="plan">Cumplir el Plan</option>
+            <option value="oportunidad">Aprovechar oportunidades</option>
+            <option value="mixto">Modo mixto</option>
+            <option value="potencial">Potencial medio/largo plazo</option>
+          </select>
+        </label>
+        <div className="form-group">
+          <span>Origen de fondos</span>
+          <strong>Aportaciones EUR</strong>
+          <small>EURC queda reservado para recompras.</small>
+        </div>
+        {mode === "potencial" ? (
+          <label className="form-group">
+            <span>Horizonte</span>
+            <select className="ui-select" value={horizon} onChange={(e) => setHorizon(e.target.value as "1-3y" | "3-5y" | "5y+")}>
+              <option value="1-3y">1-3 años</option>
+              <option value="3-5y">3-5 años</option>
+              <option value="5y+">Más de 5 años</option>
+            </select>
+          </label>
+        ) : null}
+        {mode === "mixto" ? (
+          <>
+            <label className="form-group">
+              <span>Peso Plan</span>
+              <Input inputMode="numeric" value={planWeight} onChange={(e) => setPlanWeight(e.target.value)} />
+            </label>
+            <label className="form-group">
+              <span>Peso equilibrio</span>
+              <Input inputMode="numeric" value={balanceWeight} onChange={(e) => setBalanceWeight(e.target.value)} />
+            </label>
+            <label className="form-group">
+              <span>Peso oportunidad</span>
+              <Input inputMode="numeric" value={opportunityWeight} onChange={(e) => setOpportunityWeight(e.target.value)} />
+            </label>
+            <label className="form-group">
+              <span>Peso potencial</span>
+              <Input inputMode="numeric" value={potentialWeight} onChange={(e) => setPotentialWeight(e.target.value)} />
+            </label>
+          </>
+        ) : null}
         <div className="investment-form-actions" style={{ alignSelf: "flex-end" }}>
           <Button type="button" loading={loading} onClick={() => void analyze()}>
-            Calcular recomendación
+            Analizar compra
           </Button>
         </div>
       </div>
@@ -406,9 +486,14 @@ function SmartBuyPanel({ cycleId, defaultAmount }: { cycleId: string; defaultAmo
           <div className="investment-distribution" style={{ marginBottom: 8 }}>
             <span>Cartera actual: <strong>{result.totalPortfolioValueEur !== null ? `${formatMoney(result.totalPortfolioValueEur)}` : "Sin datos"}</strong></span>
             <span>Importe analizado: <strong>{formatMoney(result.analyzedAmountEur)}</strong></span>
+            <span>Origen: <strong>Aportaciones EUR</strong></span>
+            {typeof result.pendingAmountEur === "number" && result.pendingAmountEur > 0 ? <span>Pendiente: <strong>{formatMoney(result.pendingAmountEur)}</strong></span> : null}
             <span>Calidad de datos: <strong>{result.dataQuality === "completo" ? "Completa" : result.dataQuality === "parcial" ? "Parcial" : "Sin datos"}</strong></span>
             {result.hasOpportunities ? <span className="badge badge-success">Oportunidades detectadas</span> : null}
           </div>
+          <p className="investment-contribution-meta">
+            Compra Inteligente usa aportaciones. Las recompras usan la reserva/liquidez EURC en Ventas/Recompras, con sus propias reglas de activación.
+          </p>
 
           {result.restrictionsApplied.length > 0 ? (
             <div className="investment-warning" role="status">
@@ -427,31 +512,63 @@ function SmartBuyPanel({ cycleId, defaultAmount }: { cycleId: string; defaultAmo
                 >
                   <div className="investment-contribution-header">
                     <div>
-                      <strong>{rec.assetId}</strong>
-                      {rec.targetAllocationPct !== null ? <span>{rec.targetAllocationPct}% objetivo</span> : null}
+                      <strong>{rec.rank ? `${rec.rank}. ` : ""}{rec.assetId}</strong>
+                      {rec.targetAllocationPct !== null ? <span>{rec.targetAllocationPct}% objetivo · {rec.action?.replaceAll("_", " ") ?? "analizado"}</span> : <span>{rec.action?.replaceAll("_", " ") ?? "analizado"}</span>}
                     </div>
                     <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                       {rec.isOpportunity ? <span className="badge badge-success">Oportunidad</span> : null}
                       {rec.isUnderweight ? <span className="badge">Infraponderado</span> : null}
-                      <span className="badge">{rec.confidenceLevel === "alta" ? "Confianza alta" : rec.confidenceLevel === "media" ? "Confianza media" : "Sin datos"}</span>
+                      <span className="badge">{rec.confidenceLevel === "alta" ? "Confianza alta" : rec.confidenceLevel === "media" ? "Confianza media" : rec.confidenceLevel === "baja" ? "Confianza baja" : "No evaluable"}</span>
                     </div>
                   </div>
                   <p className="investment-contribution-meta">
                     Recomendado: <strong>{formatMoney(rec.recommendedAmountEur)}</strong>
+                    {typeof rec.recommendedPercentage === "number" ? ` · ${rec.recommendedPercentage.toLocaleString("es-ES", { maximumFractionDigits: 2 })}% del importe` : ""}
                     {" "} · Base por ponderación: {formatMoney(rec.baseAmountEur)}
                     {rec.deviationFromBaseEur !== 0 ? ` · Ajuste: ${rec.deviationFromBaseEur > 0 ? "+" : ""}${formatMoney(rec.deviationFromBaseEur)}` : ""}
+                  </p>
+                  <p className="investment-contribution-meta">
+                    Precio: {typeof rec.currentPriceEur === "number" ? formatMoney(rec.currentPriceEur) : "Pendiente"}
+                    {" "} · Cantidad aprox.: {typeof rec.estimatedQuantity === "number" ? `${rec.estimatedQuantity.toLocaleString("es-ES", { maximumFractionDigits: 8 })} ${rec.assetId}` : "—"}
+                    {" "} · Riesgo: {rec.riskLevel?.replace("no_evaluable", "no evaluable") ?? "—"}
                   </p>
                   {rec.currentValueEur !== null ? (
                     <p className="investment-contribution-meta">
                       Actual: {formatMoney(rec.currentValueEur)} · Objetivo: {rec.targetValueEur !== null ? formatMoney(rec.targetValueEur) : "—"}
+                      {typeof rec.currentWeightPct === "number" ? ` · Peso actual: ${rec.currentWeightPct.toLocaleString("es-ES", { maximumFractionDigits: 2 })}%` : ""}
+                      {typeof rec.estimatedWeightAfterBuyPct === "number" ? ` · Tras compra: ${rec.estimatedWeightAfterBuyPct.toLocaleString("es-ES", { maximumFractionDigits: 2 })}%` : ""}
                     </p>
                   ) : null}
+                  <p className="investment-contribution-meta">
+                    Coste medio: {typeof rec.averagePriceEur === "number" ? formatMoney(rec.averagePriceEur) : "Pendiente"}
+                    {" "} · Coste medio estimado: {typeof rec.estimatedAverageCostAfterBuyEur === "number" ? formatMoney(rec.estimatedAverageCostAfterBuyEur) : "—"}
+                  </p>
                   {rec.opportunityReason ? (
                     <p className="investment-contribution-meta" style={{ color: "var(--color-success, green)" }}>
                       {rec.opportunityReason}
                     </p>
                   ) : null}
-                  <p className="investment-contribution-meta">{rec.reason}</p>
+                  {rec.potentialReason ? <p className="investment-contribution-meta">{rec.potentialReason}</p> : null}
+                  {rec.scoreBreakdown ? (
+                    <p className="investment-contribution-meta">
+                      Puntuación: {rec.scoreBreakdown.final}/100 · Plan {rec.scoreBreakdown.planAlignment} · Oportunidad {rec.scoreBreakdown.priceOpportunity} · Potencial {rec.scoreBreakdown.longTermPotential} · Datos {rec.scoreBreakdown.dataQuality}
+                    </p>
+                  ) : null}
+                  <p className="investment-contribution-meta">{rec.explanation ?? rec.reason}</p>
+                  {rec.restrictionsApplied && rec.restrictionsApplied.length > 0 ? (
+                    <p className="investment-contribution-meta">{rec.restrictionsApplied.join(" · ")}</p>
+                  ) : null}
+                  <div className="investment-form-actions">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      disabled={rec.recommendedAmountEur <= 0 || rec.action === "candidato_plan"}
+                      onClick={() => prepareBuy(rec)}
+                    >
+                      Preparar compra
+                    </Button>
+                  </div>
                 </article>
               ))}
             </div>
@@ -496,7 +613,7 @@ function RebuyTiersConfig({ cycleId }: { cycleId: string }) {
     const u = parseFloat(usage.replace(",", "."));
     if (isNaN(d) || isNaN(u)) { setTierError("Introduce valores numéricos válidos."); return; }
     if (d >= 0) { setTierError("El drawdown debe ser negativo (ej: -15)."); return; }
-    if (u <= 0 || u > 100) { setTierError("El uso debe estar entre 1% y 100%."); return; }
+    if (u <= 0 || u >= 100) { setTierError("El uso debe ser mayor que 0% y menor que 100% para mantener liquidez residual."); return; }
     await upsert.mutateAsync({ cycleId, drawdownPercentage: d, usagePercentage: u });
     setDrawdown("-15");
     setUsage("30");
@@ -519,7 +636,7 @@ function RebuyTiersConfig({ cycleId }: { cycleId: string }) {
               <div className="investment-contribution-header">
                 <div>
                   <strong>Caída {tier.drawdownPercentage}%</strong>
-                  <span>Desplegar {tier.usagePercentage}% de liquidez libre</span>
+                  <span>Desplegar {tier.usagePercentage}% de liquidez libre y mantener {Math.max(0, 100 - tier.usagePercentage).toFixed(2)}%</span>
                 </div>
                 <Button
                   type="button"
@@ -832,7 +949,7 @@ function CycleEditor({
     if (!psTransactionId) return;
     const pct = parseNumber(psPercentage);
     const proceeds = parseNumber(psProceeds);
-    if (!pct || !proceeds) return;
+    if (!pct || pct >= 100 || !proceeds) return;
     await createPS.mutateAsync({
       cycleId: cycle.id,
       transactionId: psTransactionId,
@@ -1188,7 +1305,9 @@ function CycleEditor({
                       <div className="investment-contribution-header">
                         <div>
                           <strong>{p.assetId}</strong>
-                          {p.percentageSuggested !== null ? <span>{p.percentageSuggested}% sugerido</span> : null}
+                          {p.percentageSuggested !== null
+                            ? <span>{p.percentageSuggested}% sugerido · permanece {Math.max(0, 100 - p.percentageSuggested).toFixed(2)}%</span>
+                            : null}
                         </div>
                         <span className={`badge ${SALE_PROPOSAL_BADGE[p.type] ?? ""}`}>{SALE_PROPOSAL_LABEL[p.type] ?? p.type}</span>
                       </div>
@@ -1212,7 +1331,9 @@ function CycleEditor({
                       <div className="investment-contribution-header">
                         <div>
                           <strong>{r.assetId}</strong>
-                          <span>Corrección {r.triggerDropPercentage}%</span>
+                          <span>
+                            Corrección {r.triggerDropPercentage}% · quedará {Math.max(0, r.availableLiquidityEur - r.proposedAmountEur).toLocaleString("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 })}
+                          </span>
                         </div>
                         <span className="badge badge-success">{r.proposedAmountEur.toLocaleString("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 })}</span>
                       </div>
@@ -2551,20 +2672,108 @@ export function PlanInversionCiclos() {
 
 
 
+function pickUsableCycle(current: InvestmentCycle | null | undefined, cycles: InvestmentCycle[] | undefined) {
+  return current
+    ?? cycles?.find((item) => item.status === "active")
+    ?? cycles?.find((item) => item.status === "planned")
+    ?? cycles?.[0]
+    ?? null;
+}
+
 // Wrappers que obtienen la etapa activa y la pasan al componente hijo
 function PlanBeneficiosCaidasWrapper() {
   const activePlanQ = useQuery<InvestmentPlan | null>({
     queryKey: ["investment-plan", "active"],
     queryFn: () => unwrap(window.cryptoControl.investmentPlan.getActive()),
   });
+  const activePlan = activePlanQ.data ?? null;
+
   const currentCycleQ = useQuery<InvestmentCycle | null>({
-    queryKey: ["investment-cycles", "current", activePlanQ.data?.id],
-    enabled: Boolean(activePlanQ.data?.id),
-    queryFn: () => unwrap(window.cryptoControl.investmentCycles.getCurrent({ planId: activePlanQ.data!.id })),
+    queryKey: ["investment-cycles", "current", activePlan?.id],
+    enabled: Boolean(activePlan?.id),
+    queryFn: () => unwrap(window.cryptoControl.investmentCycles.getCurrent({ planId: activePlan!.id })),
   });
-  const cycle = currentCycleQ.data ?? null;
-  if (!cycle) return <p style={{ padding: 20, color: "var(--color-text-muted)" }}>Cargando etapa activa…</p>;
+  const cyclesQ = useQuery<InvestmentCycle[]>({
+    queryKey: ["investment-cycles", activePlan?.id],
+    enabled: Boolean(activePlan?.id),
+    queryFn: () => unwrap(window.cryptoControl.investmentCycles.list({ planId: activePlan!.id })),
+  });
+
+  const cycle = pickUsableCycle(currentCycleQ.data, cyclesQ.data);
+
+  if (activePlanQ.isLoading || currentCycleQ.isLoading || cyclesQ.isLoading) {
+    return <p style={{ padding: 20, color: "var(--color-text-muted)" }}>Cargando Ventas/Recompras…</p>;
+  }
+
+  if (!activePlan) {
+    return (
+      <Card>
+        <CardContent>
+          <p className="empty-inline">No hay un Plan activo. Crea un plan antes de configurar ventas y recompras.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (!cycle) {
+    return (
+      <Card>
+        <CardContent>
+          <p className="empty-inline">No hay etapas disponibles para configurar ventas y recompras.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return <PlanBeneficiosCaidas cycleId={cycle.id} />;
+}
+
+function PlanCompraInteligenteWrapper() {
+  const activePlanQ = useQuery<InvestmentPlan | null>({
+    queryKey: ["investment-plan", "active"],
+    queryFn: () => unwrap(window.cryptoControl.investmentPlan.getActive()),
+  });
+  const activePlan = activePlanQ.data ?? null;
+
+  const currentCycleQ = useQuery<InvestmentCycle | null>({
+    queryKey: ["investment-cycles", "current", activePlan?.id],
+    enabled: Boolean(activePlan?.id),
+    queryFn: () => unwrap(window.cryptoControl.investmentCycles.getCurrent({ planId: activePlan!.id })),
+  });
+
+  const cyclesQ = useQuery<InvestmentCycle[]>({
+    queryKey: ["investment-cycles", activePlan?.id],
+    enabled: Boolean(activePlan?.id),
+    queryFn: () => unwrap(window.cryptoControl.investmentCycles.list({ planId: activePlan!.id })),
+  });
+
+  const cycle = pickUsableCycle(currentCycleQ.data, cyclesQ.data);
+
+  if (activePlanQ.isLoading || currentCycleQ.isLoading || cyclesQ.isLoading) {
+    return <p style={{ padding: 20, color: "var(--color-text-muted)" }}>Cargando Compra Inteligente…</p>;
+  }
+
+  if (!activePlan) {
+    return (
+      <Card>
+        <CardContent>
+          <p className="empty-inline">No hay un Plan activo. Crea un plan antes de usar Compra Inteligente.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (!cycle) {
+    return (
+      <Card>
+        <CardContent>
+          <p className="empty-inline">No hay etapas disponibles para analizar compras.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return <SmartBuyPanel cycleId={cycle.id} defaultAmount={cycle.monthlyAmountEur} />;
 }
 
 function PlanSeguimientoWrapper() {
@@ -2572,13 +2781,45 @@ function PlanSeguimientoWrapper() {
     queryKey: ["investment-plan", "active"],
     queryFn: () => unwrap(window.cryptoControl.investmentPlan.getActive()),
   });
+  const activePlan = activePlanQ.data ?? null;
+
   const currentCycleQ = useQuery<InvestmentCycle | null>({
-    queryKey: ["investment-cycles", "current", activePlanQ.data?.id],
-    enabled: Boolean(activePlanQ.data?.id),
-    queryFn: () => unwrap(window.cryptoControl.investmentCycles.getCurrent({ planId: activePlanQ.data!.id })),
+    queryKey: ["investment-cycles", "current", activePlan?.id],
+    enabled: Boolean(activePlan?.id),
+    queryFn: () => unwrap(window.cryptoControl.investmentCycles.getCurrent({ planId: activePlan!.id })),
   });
-  const cycle = currentCycleQ.data ?? null;
-  if (!cycle) return <p style={{ padding: 20, color: "var(--color-text-muted)" }}>Cargando etapa activa…</p>;
+  const cyclesQ = useQuery<InvestmentCycle[]>({
+    queryKey: ["investment-cycles", activePlan?.id],
+    enabled: Boolean(activePlan?.id),
+    queryFn: () => unwrap(window.cryptoControl.investmentCycles.list({ planId: activePlan!.id })),
+  });
+
+  const cycle = pickUsableCycle(currentCycleQ.data, cyclesQ.data);
+
+  if (activePlanQ.isLoading || currentCycleQ.isLoading || cyclesQ.isLoading) {
+    return <p style={{ padding: 20, color: "var(--color-text-muted)" }}>Cargando seguimiento…</p>;
+  }
+
+  if (!activePlan) {
+    return (
+      <Card>
+        <CardContent>
+          <p className="empty-inline">No hay un Plan activo. Crea un plan antes de revisar el seguimiento.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (!cycle) {
+    return (
+      <Card>
+        <CardContent>
+          <p className="empty-inline">No hay etapas disponibles para el seguimiento.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return <PlanSeguimiento cycleId={cycle.id} />;
 }
 
@@ -2592,14 +2833,14 @@ export function PlanInversion() {
         <Route path="configurar/*" element={<PlanConfigurar />} />
         {/* Secciones en construcción — G-A4 y siguientes */}
         <Route path="aportaciones" element={<PlanAportaciones />} />
-        <Route path="beneficios-y-caidas" element={<PlanBeneficiosCaidasWrapper />} />
+        <Route path="compra-inteligente" element={<PlanCompraInteligenteWrapper />} />
+        <Route path="ventas-recompras" element={<PlanBeneficiosCaidasWrapper />} />
         <Route path="seguimiento" element={<PlanSeguimientoWrapper />} />
         {/* Redirects desde rutas antiguas de la arquitectura provisional */}
         <Route path="ciclos/*" element={<Navigate to="/plan-inversion/configurar" replace />} />
         <Route path="estrategia" element={<Navigate to="/plan-inversion/configurar" replace />} />
-        <Route path="compra-inteligente" element={<Navigate to="/plan-inversion/configurar" replace />} />
-        <Route path="ventas-recompras" element={<Navigate to="/plan-inversion/beneficios-y-caidas" replace />} />
-        <Route path="sustituciones" element={<Navigate to="/plan-inversion/beneficios-y-caidas" replace />} />
+        <Route path="beneficios-y-caidas" element={<Navigate to="/plan-inversion/ventas-recompras" replace />} />
+        <Route path="sustituciones" element={<Navigate to="/plan-inversion/ventas-recompras" replace />} />
         <Route path="historial" element={<Navigate to="/plan-inversion/seguimiento" replace />} />
         <Route path="*" element={<Navigate to="resumen" replace />} />
       </Route>

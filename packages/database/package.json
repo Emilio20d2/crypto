@@ -10,14 +10,15 @@
   },
   "private": true,
   "dependencies": {
-    "better-sqlite3": "^12.10.0",
-    "drizzle-orm": "^0.45.2",
+    "@crypto-control/market-data": "0.1.0",
     "@crypto-control/portfolio": "0.1.0",
-    "@crypto-control/market-data": "0.1.0"
+    "better-sqlite3": "^12.10.0",
+    "drizzle-orm": "^0.45.2"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "drizzle-kit": "^0.31.10",
+    "electron-builder": "^24.13.3",
     "vitest": "^4.1.8"
   }
 }

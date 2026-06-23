@@ -1,10 +1,14 @@
 import { describe, test, expect } from "vitest";
 import { runProjection } from "./projection-engine";
 import { SPANISH_FISCAL_CONFIG_2024, buildCacheKey } from "./types";
-import { buildDefaultHypotheses } from "./asset-simulator";
+import { buildDefaultHypotheses, buildZeroGrowthHypotheses } from "./asset-simulator";
+import { computeXIRR, computeControlScenario } from "./financial-math";
 import { computeEffectiveAllocation } from "./contribution-simulator";
 import { computeTaxOnGain } from "./tax-simulator";
 import { simulateSaleRules } from "./sale-simulator";
+import { simulateRebuyTiers } from "./rebuy-simulator";
+import { runAllScenarios, runControlCeroScenario, validateWealthFloor } from "./scenario-engine";
+import { buildContributionLedger } from "./contribution-ledger";
 import type { PlanConsolidatedSnapshot, ProjectionInput } from "./types";
 
 const DAY = 24 * 3600 * 1000;
@@ -72,6 +76,7 @@ function makeSnapshot(overrides: Partial<PlanConsolidatedSnapshot> = {}): PlanCo
     saleRules: [],
     rebuyTiers: [],
     substitutions: [],
+    strategyRevisions: [],
     treasury: {
       cashEur: 0,
       eurcEur: 0,
@@ -303,6 +308,27 @@ describe("runProjection — EURC y tesorería", () => {
     expect(last.eurcAvailableEur).toBe(0);
   });
 
+  test("dos recompras en el mismo periodo usan porcentajes sobre EURC restante", () => {
+    let lotId = 0;
+    const results = simulateRebuyTiers(
+      "cycle-1",
+      Date.now(),
+      [
+        { id: "tier-1", cycleId: "cycle-1", assetId: "BTC", drawdownPercentage: 15, usagePercentage: 20, priority: 1, status: "activa", referenceType: "manual", referenceValue: 100_000, lastTriggeredAt: null },
+        { id: "tier-2", cycleId: "cycle-1", assetId: "BTC", drawdownPercentage: 25, usagePercentage: 30, priority: 2, status: "activa", referenceType: "manual", referenceValue: 100_000, lastTriggeredAt: null },
+      ],
+      { BTC: 70_000 },
+      1_000,
+      new Set(),
+      { next: () => `lot-${++lotId}` },
+    );
+
+    const triggered = results.filter(result => result.triggered);
+    expect(triggered).toHaveLength(2);
+    expect(triggered[0].eurcConsumedEur).toBeCloseTo(200);
+    expect(triggered[1].eurcConsumedEur).toBeCloseTo(240);
+  });
+
   test("patrimonio bruto cuadra con suma de componentes", () => {
     const snap = makeSnapshot({
       treasury: { cashEur: 100, eurcEur: 200, eurcAvailableEur: 150, fiscalReserveEur: 50, totalLiquidityEur: 300 },
@@ -337,6 +363,146 @@ describe("runProjection — determinismo", () => {
   });
 });
 
+// ── Proyección multiactivo y estrategia completa ─────────────────────────────
+
+describe("runProjection — multiactivo sin proxy BTC", () => {
+  test("BTC puede caer mientras ETH sube con hipótesis independientes", () => {
+    const snap = makeSnapshot();
+    const input = makeInput(snap, 2);
+    const result = runProjection({
+      ...input,
+      scenarioHypotheses: {
+        ...input.scenarioHypotheses,
+        assetRates: [
+          { assetId: "BTC", annualGrowthRate: -0.25, volatility: 0.6, correctionDepth: 0.5 },
+          { assetId: "ETH", annualGrowthRate: 0.35, volatility: 0.6, correctionDepth: 0.4 },
+        ],
+        defaultAnnualGrowthRate: 0,
+      },
+    });
+
+    const first = result.periods[0].positions;
+    const last = result.periods[result.periods.length - 1].positions;
+    expect(last.BTC.priceEur!).toBeLessThan(first.BTC.priceEur!);
+    expect(last.ETH.priceEur!).toBeGreaterThan(first.ETH.priceEur!);
+  });
+
+  test("una cartera sin BTC se proyecta sin crear BTC ni usarlo como activo implícito", () => {
+    const now = makeSnapshot().projectionStartDate;
+    const snap = makeSnapshot({
+      cycles: [{
+        id: "cycle-eth-ada",
+        planId: "plan-1",
+        name: "Ciclo ETH/ADA",
+        startDate: now,
+        endDate: null,
+        monthlyAmountEur: 200,
+        status: "active",
+        assets: [
+          {
+            id: "ia-eth", assetId: "ETH", cycleId: "cycle-eth-ada", status: "active",
+            allocationPercentage: 50, allocationValue: null, allocationType: "percentage",
+            priority: 1, targetAmount: null, targetValueEur: null, targetPortfolioPercentage: null,
+            goalReachedAt: null, startDate: now, endDate: null,
+          },
+          {
+            id: "ia-ada", assetId: "ADA", cycleId: "cycle-eth-ada", status: "active",
+            allocationPercentage: 50, allocationValue: null, allocationType: "percentage",
+            priority: 2, targetAmount: null, targetValueEur: null, targetPortfolioPercentage: null,
+            goalReachedAt: null, startDate: now, endDate: null,
+          },
+        ],
+      }],
+      positions: {
+        ETH: { assetId: "ETH", balance: 0.5, avgCostEur: 2_000, currentValueEur: 1_000, currentPriceEur: 2_000 },
+      },
+      prices: { ETH: 2_000, ADA: 0.5 },
+      historicalCapitalEur: 1_000,
+    });
+
+    const result = runProjection(makeInput(snap, 2));
+    expect(result.assetResults.map(asset => asset.assetId)).not.toContain("BTC");
+    expect(result.scenarioHypotheses.assetRates.map(rate => rate.assetId)).not.toContain("BTC");
+    expect(result.assetResults.find(asset => asset.assetId === "ADA")?.finalBalance).toBeGreaterThan(0);
+  });
+
+  test("varios ciclos activos de planes distintos suman aportaciones sin pisarse", () => {
+    const now = makeSnapshot().projectionStartDate;
+    const baseCycle = makeSnapshot().cycles[0];
+    const snap = makeSnapshot({
+      plans: [
+        { id: "plan-1", name: "Plan A", status: "active", baseCurrency: "EUR" },
+        { id: "plan-2", name: "Plan B", status: "active", baseCurrency: "EUR" },
+      ],
+      cycles: [
+        { ...baseCycle, id: "cycle-a", planId: "plan-1", monthlyAmountEur: 100, assets: baseCycle.assets.map(a => ({ ...a, cycleId: "cycle-a" })) },
+        { ...baseCycle, id: "cycle-b", planId: "plan-2", monthlyAmountEur: 50, assets: baseCycle.assets.map(a => ({ ...a, id: `${a.id}-b`, cycleId: "cycle-b" })) },
+      ],
+    });
+
+    const result = runProjection(makeInput(snap, 1));
+    const a = result.cycleResults.find(cycle => cycle.cycleId === "cycle-a")!;
+    const b = result.cycleResults.find(cycle => cycle.cycleId === "cycle-b")!;
+
+    expect(a.simulatedContributionEur).toBeGreaterThan(0);
+    expect(b.simulatedContributionEur).toBeGreaterThan(0);
+    expect(result.periods[result.periods.length - 1].futureCapitalEur).toBeCloseTo(
+      a.simulatedContributionEur + b.simulatedContributionEur,
+      1,
+    );
+    expect(now).toBe(snap.projectionStartDate);
+  });
+
+  test("un ciclo pausado no genera compras futuras", () => {
+    const baseCycle = makeSnapshot().cycles[0];
+    const snap = makeSnapshot({
+      cycles: [
+        baseCycle,
+        {
+          ...baseCycle,
+          id: "cycle-paused",
+          name: "Ciclo pausado",
+          status: "paused",
+          monthlyAmountEur: 999,
+          assets: baseCycle.assets.map(a => ({ ...a, id: `${a.id}-paused`, cycleId: "cycle-paused" })),
+        },
+      ],
+    });
+
+    const result = runProjection(makeInput(snap, 1));
+    const paused = result.cycleResults.find(cycle => cycle.cycleId === "cycle-paused")!;
+    expect(paused.simulatedContributionEur).toBe(0);
+    expect(paused.plannedContributionEur).toBe(0);
+  });
+
+  test("una aportación extraordinaria pendiente se proyecta una sola vez al activo destino", () => {
+    const now = makeSnapshot().projectionStartDate;
+    const snap = makeSnapshot({
+      prices: { BTC: 80_000, ETH: 2_000, ADA: 0.5 },
+      futureContributions: [{
+        id: "extra-ada",
+        cycleId: "cycle-1",
+        type: "extraordinaria",
+        plannedDate: now + 3 * MONTH,
+        amountEur: 500,
+        destinationAssetId: "ADA",
+        status: "pendiente",
+        executedAt: null,
+      }],
+    });
+    const input = makeInput(snap, 1);
+    const result = runProjection({
+      ...input,
+      options: { ...input.options, projectExtraordinaryContributions: true },
+    });
+
+    const ada = result.assetResults.find(asset => asset.assetId === "ADA")!;
+    expect(ada.balanceBoughtExtraordinary).toBeGreaterThan(0);
+    expect(result.cycleResults[0].extraordinaryContributionEur).toBeCloseTo(500, 1);
+    expect(ada.events.some(event => event.type === "extraordinary_contribution")).toBe(true);
+  });
+});
+
 // ── Ventas y fiscalidad ───────────────────────────────────────────────────────
 
 describe("runProjection — ventas parciales", () => {
@@ -357,6 +523,34 @@ describe("runProjection — ventas parciales", () => {
     expect(triggered).toBeDefined();
     expect(triggered.quantitySold).toBeCloseTo(0.025); // 25% de 0.1
     expect(triggered.grossEur).toBeGreaterThan(0);
+  });
+
+  test("dos tramos de venta alcanzados en un mes se aplican sobre la posición restante", () => {
+    const rules = [
+      {
+        id: "rule-1", cycleId: "cycle-1", assetId: "BTC", name: "Beneficio 50%",
+        conditionType: "gain_percentage", conditionValue: 50, conditionValue2: null,
+        sellPercentage: 10, priority: 1, status: "activa",
+      },
+      {
+        id: "rule-2", cycleId: "cycle-1", assetId: "BTC", name: "Beneficio 100%",
+        conditionType: "gain_percentage", conditionValue: 100, conditionValue2: null,
+        sellPercentage: 15, priority: 2, status: "activa",
+      },
+    ];
+    const results = simulateSaleRules(
+      "cycle-1", Date.now(), rules,
+      { BTC: 1 }, { BTC: 50_000 }, { BTC: 110_000 },
+      [{ lotId: "lot-1", assetId: "BTC", acquiredAt: 0, quantity: 1, costPerUnitEur: 50_000, remaining: 1, source: "historical" }],
+      SPANISH_FISCAL_CONFIG_2024,
+      new Set(),
+    );
+    const triggered = results.filter((r: any) => r.triggered);
+    expect(triggered).toHaveLength(2);
+    expect(triggered[0].quantitySold).toBeCloseTo(0.1);
+    expect(triggered[1].quantitySold).toBeCloseTo(0.135);
+    expect(triggered[0].lotsConsumed[0].quantity).toBeCloseTo(0.1);
+    expect(triggered[1].lotsConsumed[0].quantity).toBeCloseTo(0.135);
   });
 
   test("beneficio no realizado no genera impuesto", () => {
@@ -440,5 +634,360 @@ describe("buildCacheKey", () => {
     const i1 = makeInput(snap, 3);
     const i2 = { ...i1, scenario: "optimista" as const };
     expect(buildCacheKey(i1)).not.toBe(buildCacheKey(i2));
+  });
+});
+
+// ── Bloque B1: validación de orden entre escenarios ───────────────────────────
+// (runAllScenarios already imported at top of file)
+
+describe("ordenación de escenarios — regresión inversión", () => {
+  const now = new Date("2026-01-01").getTime();
+  const YEAR = 365.25 * DAY;
+
+  function makeSnapshotWithBTC(btcBalance: number, monthlyEur: number): PlanConsolidatedSnapshot {
+    return makeSnapshot({
+      cycles: [{
+        id: "cycle-1",
+        planId: "plan-1",
+        name: "Ciclo largo",
+        startDate: now,
+        endDate: now + 30 * YEAR,
+        monthlyAmountEur: monthlyEur,
+        status: "active",
+        assets: [
+          {
+            id: "ia-btc",
+            assetId: "BTC",
+            cycleId: "cycle-1",
+            status: "active",
+            allocationPercentage: 100,
+            allocationValue: null,
+            allocationType: "percentage",
+            priority: 1,
+            targetAmount: null,
+            targetValueEur: null,
+            targetPortfolioPercentage: null,
+            goalReachedAt: null,
+            startDate: now,
+            endDate: null,
+          },
+        ],
+      }],
+      positions: {
+        BTC: { assetId: "BTC", balance: btcBalance, avgCostEur: 93_000, currentValueEur: btcBalance * 93_000, currentPriceEur: 93_000 },
+      },
+      prices: { BTC: 93_000 },
+    });
+  }
+
+  test("conservador ≤ moderado ≤ base ≤ favorable ≤ muy_favorable ≤ optimista a 18 años", () => {
+    const snap = makeSnapshotWithBTC(0.005, 200);
+    const horizon18y = now + 18 * YEAR;
+    const set = runAllScenarios(snap, horizon18y, {}, SPANISH_FISCAL_CONFIG_2024, now);
+
+    const c  = set.conservador.summary.finalGrossWealthEur;
+    const m  = set.moderado.summary.finalGrossWealthEur;
+    const b  = set.base.summary.finalGrossWealthEur;
+    const f  = set.favorable.summary.finalGrossWealthEur;
+    const mf = set.muy_favorable.summary.finalGrossWealthEur;
+    const o  = set.optimista.summary.finalGrossWealthEur;
+
+    expect(m).toBeGreaterThanOrEqual(c - 1);
+    expect(b).toBeGreaterThanOrEqual(m - 1);
+    expect(f).toBeGreaterThanOrEqual(b - 1);
+    expect(mf).toBeGreaterThanOrEqual(f - 1);
+    expect(o).toBeGreaterThanOrEqual(mf - 1);
+  }, 60_000);
+});
+
+// ── Bloque B2: propuestas hipotéticas de venta ────────────────────────────────
+
+import { simulateProposedSales, buildSalesZeroExplanation } from "./sale-simulator";
+import { simulateProposedRebuys, buildRebuysZeroExplanation } from "./rebuy-simulator";
+import type { ProjectionLot } from "./types";
+
+describe("simulateProposedSales", () => {
+  const FIFO_LOT: ProjectionLot = {
+    lotId: "lot-1",
+    assetId: "BTC",
+    acquiredAt: new Date("2024-01-01").getTime(),
+    quantity: 0.1,
+    costPerUnitEur: 40_000,
+    remaining: 0.1,
+    source: "purchase",
+  };
+
+  test("dispara cuando ganancia >= 50%", () => {
+    const triggered = new Set<string>();
+    const { results } = simulateProposedSales(
+      "cycle-1", Date.now(), "base", "plan-1",
+      { BTC: 0.1 },
+      { BTC: 40_000 },
+      { BTC: 65_000 },  // +62.5% → first tier
+      [{ ...FIFO_LOT }],
+      SPANISH_FISCAL_CONFIG_2024,
+      triggered,
+    );
+    const btcSale = results.find(r => r.assetId === "BTC" && r.triggered);
+    expect(btcSale).toBeDefined();
+    expect(btcSale!.quantitySold).toBeGreaterThan(0);
+  });
+
+  test("no dispara cuando ganancia < 50%", () => {
+    const triggered = new Set<string>();
+    const { results } = simulateProposedSales(
+      "cycle-1", Date.now(), "base", "plan-1",
+      { BTC: 0.1 },
+      { BTC: 40_000 },
+      { BTC: 55_000 }, // +37.5% < 50%
+      [{ ...FIFO_LOT }],
+      SPANISH_FISCAL_CONFIG_2024,
+      triggered,
+    );
+    expect(results.every(r => !r.triggered)).toBe(true);
+  });
+
+  test("no re-dispara la misma tier si la clave ya está usada", () => {
+    const triggered = new Set<string>(["BTC-gain50"]);
+    const { results } = simulateProposedSales(
+      "cycle-1", Date.now(), "base", "plan-1",
+      { BTC: 0.1 },
+      { BTC: 40_000 },
+      { BTC: 65_000 },
+      [{ ...FIFO_LOT }],
+      SPANISH_FISCAL_CONFIG_2024,
+      triggered,
+    );
+    expect(results.every(r => !r.triggered)).toBe(true);
+  });
+
+  test("nunca deja balance a cero", () => {
+    const triggered = new Set<string>();
+    const { results } = simulateProposedSales(
+      "cycle-1", Date.now(), "base", "plan-1",
+      { BTC: 0.001 },
+      { BTC: 40_000 },
+      { BTC: 500_000 }, // +1150% → tier 200%
+      [{ ...FIFO_LOT, quantity: 0.001, remaining: 0.001 }],
+      SPANISH_FISCAL_CONFIG_2024,
+      triggered,
+    );
+    const triggeredSale = results.find(r => r.triggered);
+    if (triggeredSale) {
+      const remaining = 0.001 - triggeredSale.quantitySold;
+      expect(remaining).toBeGreaterThan(0);
+    }
+  });
+});
+
+// ── Bloque B2: propuestas hipotéticas de recompra ────────────────────────────
+
+describe("simulateProposedRebuys", () => {
+  test("no dispara sin EURC disponible", () => {
+    const { results } = simulateProposedRebuys(
+      "cycle-1", Date.now(), "base", "plan-1",
+      ["BTC"], { BTC: 50_000 }, 0,
+      { BTC: 70_000 }, new Set<string>(),
+      { next: () => "lot-new" },
+    );
+    expect(results.every(r => !r.triggered)).toBe(true);
+  });
+
+  test("no dispara sin precio de referencia (sin ventas previas)", () => {
+    const { results } = simulateProposedRebuys(
+      "cycle-1", Date.now(), "base", "plan-1",
+      ["BTC"], { BTC: 50_000 }, 1_000,
+      {}, // no lastSalePrice
+      new Set<string>(),
+      { next: () => "lot-new" },
+    );
+    expect(results.every(r => !r.triggered)).toBe(true);
+  });
+
+  test("dispara recompra cuando caída >= 15% desde precio de venta", () => {
+    const { results } = simulateProposedRebuys(
+      "cycle-1", Date.now(), "base", "plan-1",
+      ["BTC"],
+      { BTC: 55_000 },  // actual price
+      5_000,             // EURC available
+      { BTC: 70_000 },   // last sale price → caída 21.4%
+      new Set<string>(),
+      { next: () => "lot-new" },
+    );
+    const rebuy = results.find(r => r.triggered);
+    expect(rebuy).toBeDefined();
+    expect(rebuy!.eurcConsumedEur).toBeGreaterThan(0);
+  });
+
+  test("usa EURC generado por ventas propuestas previas", () => {
+    const triggeredSaleKeys = new Set<string>();
+    const fifoLot: ProjectionLot = {
+      lotId: "lot-a",
+      assetId: "BTC",
+      acquiredAt: new Date("2024-01-01").getTime(),
+      quantity: 0.1,
+      costPerUnitEur: 40_000,
+      remaining: 0.1,
+      source: "purchase",
+    };
+
+    const { results: saleResults, proposals: saleProps } = simulateProposedSales(
+      "cycle-1", Date.now(), "base", "plan-1",
+      { BTC: 0.1 },
+      { BTC: 40_000 },
+      { BTC: 65_000 }, // +62.5%
+      [fifoLot],
+      SPANISH_FISCAL_CONFIG_2024,
+      triggeredSaleKeys,
+    );
+
+    const sale = saleResults.find(r => r.triggered);
+    expect(sale).toBeDefined();
+    expect(saleProps.length).toBeGreaterThan(0);
+    const eurcFromSale = sale!.netEurcEur;
+    expect(eurcFromSale).toBeGreaterThan(0);
+
+    // Now simulate a price drop to test rebuy
+    const { results: rebuyResults } = simulateProposedRebuys(
+      "cycle-1", Date.now() + 1000, "base", "plan-1",
+      ["BTC"],
+      { BTC: 50_000 }, // price dropped from 65k
+      eurcFromSale,
+      { BTC: 65_000 }, // reference = last sale price
+      new Set<string>(),
+      { next: (() => { let n = 0; return () => `lot-r-${++n}`; })() },
+    );
+    const rebuy = rebuyResults.find(r => r.triggered);
+    expect(rebuy).toBeDefined();
+    expect(rebuy!.eurcConsumedEur).toBeGreaterThan(0);
+  });
+});
+
+// ── financial-math tests ───────────────────────────────────────────────────────
+
+describe("financial-math", () => {
+  test("computeXIRR: flujos de suma cero → XIRR ≈ 0%", () => {
+    const now = new Date("2026-01-01").getTime();
+    const MS = (365.25 / 12) * 24 * 3600 * 1000;
+    const months = 12;
+    const monthly = 300;
+    const flows: { date: number; amount: number }[] = [{ date: now, amount: -100 }];
+    for (let i = 1; i <= months; i++) {
+      flows.push({ date: now + i * MS, amount: -monthly });
+    }
+    // Return exactly what was put in (zero net gain)
+    flows.push({ date: now + months * MS, amount: 100 + monthly * months });
+    const xirr = computeXIRR(flows);
+    expect(xirr).not.toBeNull();
+    expect(Math.abs(xirr!)).toBeLessThan(0.01);
+  });
+
+  test("computeControlScenario: 5% anual → XIRR converge a ≈ 5%", () => {
+    const now = new Date("2026-01-01").getTime();
+    const result = computeControlScenario({
+      initialWealthEur: 1000,
+      monthlyContributionEur: 200,
+      annualReturnRate: 0.05,
+      months: 120,
+      projectionStartDate: now,
+    });
+    expect(result.finalWealth).toBeGreaterThan(1000 + 200 * 120);
+    expect(result.xirr).not.toBeNull();
+    expect(Math.abs(result.xirr! - 0.05)).toBeLessThan(0.005);
+  });
+
+  test("computeControlScenario: 7% anual → XIRR converge a ≈ 7%", () => {
+    const now = new Date("2026-01-01").getTime();
+    const result = computeControlScenario({
+      initialWealthEur: 1000,
+      monthlyContributionEur: 200,
+      annualReturnRate: 0.07,
+      months: 120,
+      projectionStartDate: now,
+    });
+    expect(result.xirr).not.toBeNull();
+    expect(Math.abs(result.xirr! - 0.07)).toBeLessThan(0.005);
+  });
+
+  test("computeControlScenario: 7% > 5% > 0%", () => {
+    const now = new Date("2026-01-01").getTime();
+    const params = { initialWealthEur: 500, monthlyContributionEur: 300, months: 216, projectionStartDate: now };
+    const c0 = computeControlScenario({ ...params, annualReturnRate: 0 });
+    const c5 = computeControlScenario({ ...params, annualReturnRate: 0.05 });
+    const c7 = computeControlScenario({ ...params, annualReturnRate: 0.07 });
+    expect(c5.finalWealth).toBeGreaterThan(c0.finalWealth);
+    expect(c7.finalWealth).toBeGreaterThan(c5.finalWealth);
+  });
+
+  test("projection 0% growth: xirrAnnual ≈ 0%", () => {
+    const snap = makeSnapshot();
+    const start = snap.projectionStartDate;
+    const out = runProjection({
+      snapshot: snap,
+      projectionStartDate: start,
+      horizonDate: start + 3 * 365.25 * 24 * 3600 * 1000,
+      scenario: "cero",
+      scenarioHypotheses: buildZeroGrowthHypotheses(["BTC", "ETH"]),
+      fiscalConfig: SPANISH_FISCAL_CONFIG_2024,
+      resolution: "monthly",
+      options: { simulationPolicy: "plan_base" },
+      now: start,
+    });
+    expect(out.summary.xirrAnnual).not.toBeNull();
+    expect(Math.abs(out.summary.xirrAnnual!)).toBeLessThan(0.02);
+  });
+
+  test("períodos: totalCapitalEur es monotónicamente no decreciente", () => {
+    const snap = makeSnapshot();
+    const out = runProjection({
+      snapshot: snap,
+      projectionStartDate: snap.projectionStartDate,
+      horizonDate: snap.projectionStartDate + 24 * 30 * 24 * 3600 * 1000,
+      scenario: "base",
+      scenarioHypotheses: buildDefaultHypotheses("base", ["BTC", "ETH"]),
+      fiscalConfig: SPANISH_FISCAL_CONFIG_2024,
+      resolution: "monthly",
+      options: { simulationPolicy: "plan_base" },
+      now: snap.projectionStartDate,
+    });
+    for (let i = 1; i < out.periods.length; i++) {
+      expect(out.periods[i].totalCapitalEur).toBeGreaterThanOrEqual(out.periods[i - 1].totalCapitalEur - 0.01);
+    }
+  });
+
+  test("conciliación: sin doble conteo de plusvalías", () => {
+    const snap = makeSnapshot();
+    const out = runProjection({
+      snapshot: snap,
+      projectionStartDate: snap.projectionStartDate,
+      horizonDate: snap.projectionStartDate + 12 * 30 * 24 * 3600 * 1000,
+      scenario: "base",
+      scenarioHypotheses: buildDefaultHypotheses("base", ["BTC", "ETH"]),
+      fiscalConfig: SPANISH_FISCAL_CONFIG_2024,
+      resolution: "monthly",
+      options: { simulationPolicy: "plan_base" },
+      now: snap.projectionStartDate,
+    });
+    expect(out.reconciliation.allPassed).toBe(true);
+  });
+
+  test("controles independientes: 5% > 0% y 7% > 5% en summary", () => {
+    const snap = makeSnapshot();
+    const out = runProjection({
+      snapshot: snap,
+      projectionStartDate: snap.projectionStartDate,
+      horizonDate: snap.projectionStartDate + 10 * 365.25 * 24 * 3600 * 1000,
+      scenario: "base",
+      scenarioHypotheses: buildDefaultHypotheses("base", ["BTC", "ETH"]),
+      fiscalConfig: SPANISH_FISCAL_CONFIG_2024,
+      resolution: "monthly",
+      options: { simulationPolicy: "plan_base" },
+      now: snap.projectionStartDate,
+    });
+    const c0 = out.summary.controlCeroWealth ?? 0;
+    const c5 = out.summary.control5pctWealth ?? 0;
+    const c7 = out.summary.control7pctWealth ?? 0;
+    expect(c5).toBeGreaterThan(c0);
+    expect(c7).toBeGreaterThan(c5);
   });
 });

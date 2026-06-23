@@ -18,6 +18,15 @@ import type { ChartPoint } from "../components/MarketChart";
 import type { Period } from "../components/PeriodSelector";
 import { formatDateTime } from "../lib/format";
 
+const PRICE_REFRESH_MS = 5_000;
+const COINBASE_SYNC_REFRESH_MS = 30_000;
+const PORTFOLIO_CHART_REFRESH_MS = 5_000;
+const PORTFOLIO_LONG_CHART_REFRESH_MS = 60_000;
+
+function chartRefreshMs(period: Period) {
+  return period === "1h" || period === "24h" ? PORTFOLIO_CHART_REFRESH_MS : PORTFOLIO_LONG_CHART_REFRESH_MS;
+}
+
 // The backend (portfolio:get-historical-series, given a period) already
 // returns the exact grid for that period — same granularity Mercado's own
 // candles use, generated from "now" backwards, with explicit zeros before
@@ -30,9 +39,11 @@ function toChartPoints(points: { time: number; value: number }[]): ChartPoint[] 
     .sort((a, b) => (a.time as number) - (b.time as number));
 }
 
-function portfolio24hVariation(positions: any[]) {
-  let currentTotal = 0;
-  let previousTotal = 0;
+// eurcFiatStable: EURC reserve in EUR — added symmetrically to current and
+// previous so it dilutes the crypto % without adding spurious gain or loss.
+function portfolio24hVariation(positions: any[], eurcFiatStable: number = 0) {
+  let currentTotal = eurcFiatStable;
+  let previousTotal = eurcFiatStable;
 
   for (const position of positions) {
     const current = position.totalBalanceFiat;
@@ -50,14 +61,6 @@ function portfolio24hVariation(positions: any[]) {
   return { value, percent: (value / previousTotal) * 100 };
 }
 
-function fallbackTotalBalance(balances: any) {
-  const total = balances?.totalBalance?.value;
-  if (typeof total === "number" && Number.isFinite(total)) return total;
-  const crypto = balances?.totalCryptoBalance?.value;
-  const cash = balances?.totalCashEquivalentBalance?.value;
-  const values = [crypto, cash].filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-  return values.length > 0 ? values.reduce((sum, value) => sum + value, 0) : null;
-}
 
 function positionsTotalBalance(positions: any[]) {
   const values = positions
@@ -139,19 +142,6 @@ function hasPositivePositionBalance(position: any) {
   return crypto > 1e-12 || fiat > 0.005;
 }
 
-function coinbasePositionPnl(position: any) {
-  const pnl = typeof position.unrealizedPnl === "number" && Number.isFinite(position.unrealizedPnl)
-    ? position.unrealizedPnl
-    : null;
-  if (pnl !== null) return pnl;
-
-  const cost = position.costBasis?.value;
-  const value = position.totalBalanceFiat;
-  return typeof cost === "number" && Number.isFinite(cost) && typeof value === "number" && Number.isFinite(value)
-    ? value - cost
-    : null;
-}
-
 export function Portfolio() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -181,7 +171,10 @@ export function Portfolio() {
     queryKey: ["coinbase", "breakdown", selectedPortfolioId],
     queryFn: () => window.cryptoControl.coinbase.getPortfolioBreakdown(selectedPortfolioId!, "EUR"),
     enabled: !!selectedPortfolioId,
-    refetchInterval: 60_000,
+    staleTime: 15_000,
+    refetchInterval: PRICE_REFRESH_MS,
+    refetchIntervalInBackground: true,
+    refetchOnMount: "always",
   });
 
   // Real reconstruction: historical qty (from transactionLegs) × historical
@@ -191,7 +184,10 @@ export function Portfolio() {
   const { data: historicalSeriesRes } = useQuery({
     queryKey: ["portfolio", "historical-series", period],
     queryFn: () => window.cryptoControl.portfolio.getHistoricalSeries({ period }),
-    staleTime: 60_000,
+    staleTime: 15_000,
+    refetchInterval: chartRefreshMs(period),
+    refetchIntervalInBackground: true,
+    refetchOnMount: "always",
   });
 
   // Independent of the chart's selected period — always 24h, for the
@@ -199,7 +195,10 @@ export function Portfolio() {
   const { data: historicalSeries24hRes } = useQuery({
     queryKey: ["portfolio", "historical-series", "24h"],
     queryFn: () => window.cryptoControl.portfolio.getHistoricalSeries({ period: "24h" }),
-    staleTime: 60_000,
+    staleTime: 15_000,
+    refetchInterval: PORTFOLIO_CHART_REFRESH_MS,
+    refetchIntervalInBackground: true,
+    refetchOnMount: "always",
   });
 
   const { data: assetsRes } = useQuery({
@@ -210,6 +209,9 @@ export function Portfolio() {
   const { data: localPositionsRes } = useQuery({
     queryKey: ["portfolio", "positions"],
     queryFn: () => window.cryptoControl.portfolio.getPositions(),
+    staleTime: 15_000,
+    refetchInterval: PRICE_REFRESH_MS,
+    refetchIntervalInBackground: true,
   });
 
   useEffect(() => {
@@ -218,16 +220,22 @@ export function Portfolio() {
     const syncInBackground = async () => {
       if (backgroundSyncRunning.current) return;
       backgroundSyncRunning.current = true;
-      const result = await window.cryptoControl.coinbase.sync();
-      if (!cancelled && result.ok) {
-        await queryClient.invalidateQueries({ queryKey: ["coinbase"] });
-        await queryClient.invalidateQueries({ queryKey: ["transactions"] });
+      try {
+        const result = await window.cryptoControl.coinbase.sync();
+        if (!cancelled && result.ok) {
+          await queryClient.invalidateQueries({ queryKey: ["coinbase"] });
+          await queryClient.invalidateQueries({ queryKey: ["transactions"] });
+          await queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+          await queryClient.invalidateQueries({ queryKey: ["market"] });
+          await queryClient.invalidateQueries({ queryKey: ["assets"] });
+        }
+      } finally {
+        backgroundSyncRunning.current = false;
       }
-      backgroundSyncRunning.current = false;
     };
 
     void syncInBackground();
-    const intervalId = window.setInterval(() => void syncInBackground(), 5 * 60_000);
+    const intervalId = window.setInterval(() => void syncInBackground(), COINBASE_SYNC_REFRESH_MS);
     return () => {
       cancelled = true;
       window.clearInterval(intervalId);
@@ -247,16 +255,53 @@ export function Portfolio() {
   );
   const chartData = useMemo((): ChartPoint[] => {
     const reconstructed = toChartPoints(reconstructedSeries);
-    return reconstructed.length >= 2 ? reconstructed : [];
-  }, [reconstructedSeries]);
+    if (reconstructed.length < 2) return [];
+
+    // Pin the chart's right edge to the live breakdown value (refreshes every
+    // 5 s) so price changes are visible immediately without waiting for the
+    // heavier historical-series fetch interval.
+    // Includes EURC (stablecoin reserve) and excludes EUR fiat — same definition
+    // as the header's "Valor total" so the last chart point matches exactly.
+    const liveBreakdown = breakdownRes?.ok && breakdownRes.data.state === "live" ? breakdownRes.data : null;
+    if (liveBreakdown) {
+      const liveValue = liveBreakdown.positions.reduce(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (sum: number, p: any) => {
+          if (typeof p.totalBalanceFiat !== "number" || !Number.isFinite(p.totalBalanceFiat)) return sum;
+          if (p.isCash && p.asset !== "EURC") return sum; // exclude EUR fiat, keep EURC
+          return sum + p.totalBalanceFiat;
+        },
+        0,
+      );
+      if (liveValue > 0) {
+        const nowSeconds = Math.floor(Date.now() / 1000) as import("lightweight-charts").Time;
+        const last = reconstructed[reconstructed.length - 1];
+        if ((nowSeconds as number) > (last.time as number)) {
+          return [...reconstructed, { time: nowSeconds, value: liveValue }];
+        }
+      }
+    }
+    return reconstructed;
+  }, [reconstructedSeries, breakdownRes]);
 
   const localPositionMap = useMemo((): Record<string, number> => {
     const rawPositions = localPositionsRes?.ok ? (localPositionsRes.data as any)?.positions : null;
     if (!rawPositions) return {};
     const map: Record<string, number> = {};
     for (const [assetId, pos] of Object.entries(rawPositions)) {
+      if ((pos as any).hasPendingValuation) continue;
       const invested = (pos as any).totalInvestedEur;
       if (typeof invested === "number" && invested > 0) map[assetId] = invested;
+    }
+    return map;
+  }, [localPositionsRes]);
+
+  const localCostPendingByAsset = useMemo((): Record<string, boolean> => {
+    const rawPositions = localPositionsRes?.ok ? (localPositionsRes.data as any)?.positions : null;
+    if (!rawPositions) return {};
+    const map: Record<string, boolean> = {};
+    for (const [assetId, pos] of Object.entries(rawPositions)) {
+      map[assetId] = Boolean((pos as any).hasPendingValuation);
     }
     return map;
   }, [localPositionsRes]);
@@ -323,37 +368,48 @@ export function Portfolio() {
     );
   }
 
-  const positions = Array.isArray(breakdown.positions)
-    ? aggregatePositionsByAsset(breakdown.positions)
-      .filter(hasPositivePositionBalance)
-      .filter((position) => position.asset !== "EURC" && !position.isCash)
-      .sort((a, b) => (b.totalBalanceFiat ?? -1) - (a.totalBalanceFiat ?? -1))
+  // Aggregate all positions, then split: EURC as reserve, rest as investment cards.
+  const allAggregated = Array.isArray(breakdown.positions)
+    ? aggregatePositionsByAsset(breakdown.positions).filter(hasPositivePositionBalance)
     : [];
 
-  const pnlValues = positions
-    .map(coinbasePositionPnl)
-    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  // EURC reserve: stablecoin held as fiscal/rebuy liquidity.
+  const eurcPosition = allAggregated.find((p) => p.asset === "EURC");
+  const eurcTotalFiat: number =
+    typeof eurcPosition?.totalBalanceFiat === "number" && Number.isFinite(eurcPosition.totalBalanceFiat)
+      ? eurcPosition.totalBalanceFiat
+      : 0;
+
+  // Investment positions: crypto only (no EURC, no EUR fiat).
+  const positions = allAggregated
+    .filter((position) => position.asset !== "EURC" && !position.isCash)
+    .sort((a, b) => (b.totalBalanceFiat ?? -1) - (a.totalBalanceFiat ?? -1));
 
   let totalInvestedSum = 0;
-  let totalInvestedHasAny = false;
+  let totalInvestedComplete = positions.length > 0;
   for (const position of positions) {
-    const coinbaseCost = position.costBasis?.value;
-    if (typeof coinbaseCost === "number" && Number.isFinite(coinbaseCost) && coinbaseCost > 0) {
-      totalInvestedSum += coinbaseCost;
-      totalInvestedHasAny = true;
+    const localCost = localPositionMap[position.asset];
+    if (typeof localCost === "number" && Number.isFinite(localCost) && localCost > 0 && !localCostPendingByAsset[position.asset]) {
+      totalInvestedSum += localCost;
     } else {
-      const localCost = localPositionMap[position.asset];
-      if (typeof localCost === "number" && localCost > 0) {
-        totalInvestedSum += localCost;
-        totalInvestedHasAny = true;
-      }
+      totalInvestedComplete = false;
     }
   }
-  const totalInvested = totalInvestedHasAny ? totalInvestedSum : null;
 
-  const performance = pnlValues.length > 0 ? pnlValues.reduce((sum, value) => sum + value, 0) : null;
-  const totalBalance = fallbackTotalBalance(breakdown.balances) ?? positionsTotalBalance(positions);
-  const variationFromPositions = portfolio24hVariation(positions);
+  const totalInvested = totalInvestedComplete ? totalInvestedSum : null;
+
+  // Crypto value (investment positions only) — used for P&L.
+  const cryptoTotal = positionsTotalBalance(positions);
+
+  // Total patrimonial = cripto + EURC. Same definition used by live chart pin
+  // and historical series. EUR fiat excluded per spec.
+  const totalBalance = cryptoTotal !== null || eurcTotalFiat > 0
+    ? (cryptoTotal ?? 0) + eurcTotalFiat
+    : null;
+
+  // P&L is crypto-only: EURC is a stablecoin reserve, not a speculative asset.
+  const performance = totalInvested !== null && cryptoTotal !== null ? cryptoTotal - totalInvested : null;
+  const variationFromPositions = portfolio24hVariation(positions, eurcTotalFiat);
   const reconstructed24h = toChartPoints(series24h);
   const variationFromChart = chartVariation(reconstructed24h);
   const variation24h = variationFromPositions.value !== null ? variationFromPositions : variationFromChart;
@@ -372,6 +428,8 @@ export function Portfolio() {
 
       <PortfolioMetrics
         totalBalance={totalBalance}
+        cryptoTotalEur={cryptoTotal}
+        eurcTotalEur={eurcTotalFiat > 0 ? eurcTotalFiat : null}
         totalInvested={totalInvested}
         performance={performance}
         variation24h={variation24h.value}
@@ -399,6 +457,7 @@ export function Portfolio() {
         assets={assets}
         onSelect={(assetId) => navigate(`/activo/${assetId}`)}
         localCostByAsset={localPositionMap}
+        localCostPendingByAsset={localCostPendingByAsset}
         portfolioState={breakdown.state}
       />
     </section>

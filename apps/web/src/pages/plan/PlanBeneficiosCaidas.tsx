@@ -1,10 +1,11 @@
 import { useState, type FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { PlusCircle, TrendingDown, TrendingUp, Trash2 } from "lucide-react";
 import { Button } from "../../components/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/Card";
 import { Input } from "../../components/Input";
-import type { PartialSaleRule, CycleRebuyTier, Result } from "@crypto-control/core";
+import type { PartialSaleRule, CycleRebuyTier, CycleStrategyReport, Result } from "@crypto-control/core";
 
 async function unwrap<T>(p: Promise<Result<T>>): Promise<T> {
   const r = await p;
@@ -35,6 +36,123 @@ const STATUS_BADGE: Record<string, string> = {
   pausada: "badge-secondary",
   cancelada: "",
 };
+
+const PROPOSAL_LABELS: Record<string, string> = {
+  mantener: "Mantener",
+  vigilar: "Vigilar",
+  venta_parcial: "Venta parcial",
+  recogida_beneficios: "Recoger beneficios",
+};
+
+const RISK_BADGE: Record<string, string> = {
+  bajo: "badge-success",
+  moderado: "badge-warning",
+  alto: "badge-warning",
+  muy_alto: "badge-error",
+};
+
+function AutomaticProposals({ report, loading }: { report: CycleStrategyReport | null; loading: boolean }) {
+  const saleProposals = report?.partialSaleProposals ?? [];
+  const rebuyProposals = report?.rebuyProposals ?? [];
+  const actionableSales = saleProposals.filter((proposal) => proposal.type !== "mantener");
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Propuestas automáticas</CardTitle>
+        {report ? <span className="badge">{new Date(report.generatedAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}</span> : null}
+      </CardHeader>
+      <CardContent>
+        <p className="panel-caption">
+          Generadas con fase de mercado, sentimiento por activo, Fear & Greed, datos de mercado y señales públicas de medios/analistas cuando están disponibles. No ejecutan operaciones automáticamente.
+        </p>
+
+        {loading ? (
+          <p className="empty-inline">Calculando propuestas…</p>
+        ) : !report ? (
+          <p className="empty-inline">No se pudieron calcular propuestas automáticas.</p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div className="investment-distribution">
+              <span>Fase: <strong>{report.marketPhase.phase}</strong></span>
+              <span>Confianza: <strong>{report.marketPhase.confidence}</strong></span>
+              <span>Indicadores: <strong>{report.marketPhase.indicatorsUsed.length}</strong></span>
+            </div>
+            <p className="substitution-meta">{report.marketPhase.reasoning}</p>
+
+            <section>
+              <h3 className="plan-section-title" style={{ marginBottom: 8 }}>Ventas sugeridas</h3>
+              {actionableSales.length === 0 ? (
+                <p className="empty-inline">No hay ventas sugeridas ahora. Las posiciones se mantienen en observación.</p>
+              ) : (
+                <div className="substitution-list">
+                  {actionableSales.map((proposal) => (
+                    <article key={`${proposal.assetId}-${proposal.type}`} className="substitution-card">
+                      <div className="substitution-card-header">
+                        <span className="substitution-assets">
+                          <strong>{proposal.assetId}</strong> — {PROPOSAL_LABELS[proposal.type] ?? proposal.type}
+                        </span>
+                        <span className={`badge ${RISK_BADGE[proposal.riskLevel] ?? ""}`}>{proposal.riskLevel}</span>
+                      </div>
+                      <p className="substitution-meta">
+                        {proposal.percentageSuggested != null
+                          ? `Sugerido: vender ${proposal.percentageSuggested}% y mantener ${Math.max(0, 100 - proposal.percentageSuggested).toFixed(2)}%`
+                          : "Sin venta directa; vigilar"}
+                        {proposal.estimatedProceedsEur != null ? ` · Estimado: ${formatEur(proposal.estimatedProceedsEur)}` : ""}
+                      </p>
+                      <p className="substitution-notes">{proposal.reason}</p>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section>
+              <h3 className="plan-section-title" style={{ marginBottom: 8 }}>Recompras sugeridas</h3>
+              {rebuyProposals.length === 0 ? (
+                <p className="empty-inline">No hay recompras sugeridas con las señales actuales.</p>
+              ) : (
+                <div className="substitution-list">
+                  {rebuyProposals.map((proposal, index) => (
+                    <article key={`${proposal.assetId}-${proposal.triggerDropPercentage}-${index}`} className="substitution-card">
+                      <div className="substitution-card-header">
+                        <span className="substitution-assets">
+                          <strong>{proposal.assetId}</strong> — Recompra en caída {proposal.triggerDropPercentage}%
+                        </span>
+                        <span className={`badge ${proposal.proposedAmountEur > 0 ? "badge-success" : "badge-warning"}`}>
+                          {proposal.proposedAmountEur > 0 ? formatEur(proposal.proposedAmountEur) : "Pendiente de EURC"}
+                        </span>
+                      </div>
+                      <p className="substitution-meta">
+                        Liquidez libre: {formatEur(proposal.availableLiquidityEur)}
+                        {" · "}Propuesta: {formatEur(proposal.proposedAmountEur)}
+                        {" · "}Quedará: {formatEur(Math.max(0, proposal.availableLiquidityEur - proposal.proposedAmountEur))}
+                      </p>
+                      <p className="substitution-notes">{proposal.reason}</p>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            {report.riskSummary.length > 0 ? (
+              <section>
+                <h3 className="plan-section-title" style={{ marginBottom: 8 }}>Riesgos detectados</h3>
+                <div className="substitution-list">
+                  {report.riskSummary.map((item) => (
+                    <article key={item} className="substitution-card">
+                      <p className="substitution-notes">{item}</p>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 // ── Formulario nueva regla de venta ───────────────────────────────────────────
 
@@ -68,15 +186,15 @@ function NuevaReglaVentaForm({ cycleId, onSuccess }: { cycleId: string; onSucces
     if (!name.trim()) { setError("El nombre es obligatorio."); return; }
     const pct = parseFloat(sellPercentage.replace(",", "."));
     const val = conditionValue ? parseFloat(conditionValue.replace(",", ".")) : null;
-    if (isNaN(pct) || pct <= 0 || pct > 100) { setError("Porcentaje de venta entre 0.01 y 100."); return; }
+    if (isNaN(pct) || pct <= 0 || pct >= 100) { setError("El porcentaje debe ser mayor que 0 y menor que 100 para mantener una posición residual."); return; }
     await create.mutateAsync({ cycleId, assetId, name: name.trim(), conditionType: conditionType as any, conditionValue: val, sellPercentage: pct, notes: notes || null });
   }
 
   if (!open) {
     return (
-      <button className="btn btn-ghost btn-sm" style={{ display: "inline-flex", alignItems: "center", gap: 6 }} onClick={() => setOpen(true)}>
+      <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(true)}>
         <PlusCircle size={14} /> Nueva regla de venta
-      </button>
+      </Button>
     );
   }
 
@@ -111,7 +229,7 @@ function NuevaReglaVentaForm({ cycleId, onSuccess }: { cycleId: string; onSucces
           )}
           <label className="form-group">
             <span>% a vender *</span>
-            <Input type="number" step="0.01" min="0.01" max="100" value={sellPercentage} onChange={e => setSellPercentage(e.target.value)} />
+            <Input type="number" step="0.01" min="0.01" max="99.99" value={sellPercentage} onChange={e => setSellPercentage(e.target.value)} />
           </label>
           <label className="form-group investment-wide">
             <span>Notas</span>
@@ -133,6 +251,7 @@ function NuevaReglaVentaForm({ cycleId, onSuccess }: { cycleId: string; onSucces
 // ── Regla de venta card ───────────────────────────────────────────────────────
 
 function ReglaVentaCard({ rule, onDelete }: { rule: PartialSaleRule; onDelete: () => void }) {
+  const navigate = useNavigate();
   const evalQ = useQuery({
     queryKey: ["partial-sale-rules-eval", rule.cycleId, rule.id],
     queryFn: () => unwrap(window.cryptoControl.partialSaleRules.evaluate({ cycleId: rule.cycleId, assetId: rule.assetId })),
@@ -156,7 +275,7 @@ function ReglaVentaCard({ rule, onDelete }: { rule: PartialSaleRule; onDelete: (
 
       {evaluation ? (
         evaluation.isTriggered ? (
-          <div style={{ marginTop: 8, padding: 8, background: "var(--color-warning-bg, #fef3c7)", borderRadius: 6 }}>
+          <div style={{ marginTop: 8, padding: 8, background: "var(--color-warning-bg, #fef3c7)", borderRadius: "var(--radius-control)" }}>
             <p style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--color-warning-text, #92400e)" }}>
               ⚡ Regla activada: {evaluation.triggeredReason}
             </p>
@@ -168,9 +287,21 @@ function ReglaVentaCard({ rule, onDelete }: { rule: PartialSaleRule; onDelete: (
                 <span>Impuesto est.: {formatEur(evaluation.preview.estimatedTaxEur)}</span>
                 <span>Reserva fiscal: {formatEur(evaluation.preview.fiscalReserveEur)}</span>
                 <span>EURC neto: {formatEur(evaluation.preview.netEurcEur)}</span>
+                <span>Queda: {evaluation.preview.remainingBalance.toFixed(6)}</span>
+                <span>Permanece: {evaluation.preview.remainingPercentage.toFixed(2)}%</span>
               </div>
             )}
-            <Button size="sm" style={{ marginTop: 8 }} onClick={() => alert("Preparar venta: funcionalidad en Operaciones")}>
+            <Button
+              size="sm"
+              style={{ marginTop: 8 }}
+              onClick={() => {
+                const params = new URLSearchParams({ type: "sell", asset: rule.assetId, source: "plan-sell" });
+                if (evaluation.preview?.quantityToSell) {
+                  params.set("baseAmount", evaluation.preview.quantityToSell.toFixed(8));
+                }
+                navigate(`/operaciones?${params.toString()}`);
+              }}
+            >
               Preparar venta
             </Button>
           </div>
@@ -224,15 +355,15 @@ function NuevaTierRecompraForm({ cycleId, onSuccess }: { cycleId: string; onSucc
     const u = parseFloat(usage.replace(",", "."));
     const rv = refValue ? parseFloat(refValue.replace(",", ".")) : null;
     if (isNaN(dd) || dd <= 0 || dd > 100) { setError("Caída entre 0 y 100."); return; }
-    if (isNaN(u) || u <= 0 || u > 100) { setError("% EURC entre 0 y 100."); return; }
+    if (isNaN(u) || u <= 0 || u >= 100) { setError("El % de EURC debe ser mayor que 0 y menor que 100 para mantener liquidez residual."); return; }
     await create.mutateAsync({ cycleId, assetId, name: name || null, drawdownPercentage: dd, usagePercentage: u, referenceType: refType, referenceValue: rv, notes: notes || null });
   }
 
   if (!open) {
     return (
-      <button className="btn btn-ghost btn-sm" style={{ display: "inline-flex", alignItems: "center", gap: 6 }} onClick={() => setOpen(true)}>
+      <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(true)}>
         <PlusCircle size={14} /> Nuevo escalón de recompra
-      </button>
+      </Button>
     );
   }
 
@@ -259,7 +390,7 @@ function NuevaTierRecompraForm({ cycleId, onSuccess }: { cycleId: string; onSucc
           </label>
           <label className="form-group">
             <span>% EURC a usar *</span>
-            <Input type="number" step="0.1" min="1" max="100" value={usage} onChange={e => setUsage(e.target.value)} />
+            <Input type="number" step="0.1" min="0.1" max="99.9" value={usage} onChange={e => setUsage(e.target.value)} />
           </label>
           <label className="form-group">
             <span>Tipo de referencia</span>
@@ -314,6 +445,12 @@ export function PlanBeneficiosCaidas({ cycleId }: { cycleId: string }) {
     staleTime: 60_000,
   });
 
+  const strategyReportQ = useQuery({
+    queryKey: ["strategic-decisions", "cycle-report", cycleId],
+    queryFn: () => unwrap(window.cryptoControl.strategicDecisions.getCycleReport({ cycleId })),
+    staleTime: 5 * 60_000,
+  });
+
   const deleteRule = useMutation({
     mutationFn: (id: string) => unwrap(window.cryptoControl.partialSaleRules.delete(id)),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["partial-sale-rules", cycleId] }),
@@ -327,6 +464,7 @@ export function PlanBeneficiosCaidas({ cycleId }: { cycleId: string }) {
   const treasury = treasuryQ.data;
   const saleRules: PartialSaleRule[] = saleRulesQ.data ?? [];
   const rebuyTiers: CycleRebuyTier[] = rebuyTiersQ.data ?? [];
+  const strategyReport: CycleStrategyReport | null = strategyReportQ.data ?? null;
 
   const eurcAvailable = treasury ? Math.max(0, treasury.eurcBalance - treasury.fiscalReserveBalance) : null;
 
@@ -366,6 +504,8 @@ export function PlanBeneficiosCaidas({ cycleId }: { cycleId: string }) {
           )}
         </CardContent>
       </Card>
+
+      <AutomaticProposals report={strategyReport} loading={strategyReportQ.isLoading} />
 
       {/* ── Reglas de venta parcial ── */}
       <Card>
@@ -430,7 +570,7 @@ export function PlanBeneficiosCaidas({ cycleId }: { cycleId: string }) {
                       </span>
                     </div>
                     <p className="substitution-meta">
-                      Caída ≥ {tier.drawdownPercentage}% → usar {tier.usagePercentage}% del EURC
+                      Caída ≥ {tier.drawdownPercentage}% → usar {tier.usagePercentage}% del EURC libre y mantener {Math.max(0, 100 - tier.usagePercentage).toFixed(2)}%
                       {tier.referenceType ? ` · Ref: ${tier.referenceType}` : ""}
                       {tier.referenceValue != null ? ` (${formatEur(tier.referenceValue)})` : ""}
                     </p>

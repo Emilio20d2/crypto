@@ -106,6 +106,10 @@ export function evaluateRebuyTierExtended(
     return { ...base, isTriggered: false, triggeredReason: null, notTriggeredReason: "Sin liquidez EURC disponible", preview: null };
   }
 
+  if (tier.usagePercentage <= 0 || tier.usagePercentage >= 100) {
+    return { ...base, isTriggered: false, triggeredReason: null, notTriggeredReason: `Porcentaje de EURC inválido: ${tier.usagePercentage}%`, preview: null };
+  }
+
   if (assetPrice === null || assetPrice <= 0) {
     return { ...base, isTriggered: false, triggeredReason: null, notTriggeredReason: "Precio actual no disponible", preview: null };
   }
@@ -156,14 +160,23 @@ export function evaluateRebuyTiersExtended(
   avgCosts: Record<string, number | null> = {},
   now = Date.now()
 ): RebuyEvaluationResult[] {
-  return tiers
-    .sort((a, b) => (b.drawdownPercentage - a.drawdownPercentage) || (a.priority - b.priority))
-    .map(tier => {
-      const price = tier.assetId ? (prices[tier.assetId] ?? null) : null;
-      const balance = tier.assetId ? (balances[tier.assetId] ?? 0) : 0;
-      const avgCost = tier.assetId ? (avgCosts[tier.assetId] ?? null) : null;
-      return evaluateRebuyTierExtended(tier, price, availableLiquidityEur, balance, avgCost, now);
-    });
+  let remainingLiquidityEur = Math.max(0, availableLiquidityEur);
+  const results: RebuyEvaluationResult[] = [];
+
+  for (const tier of tiers
+    .slice()
+    .sort((a, b) => (a.drawdownPercentage - b.drawdownPercentage) || (a.priority - b.priority))) {
+    const price = tier.assetId ? (prices[tier.assetId] ?? null) : null;
+    const balance = tier.assetId ? (balances[tier.assetId] ?? 0) : 0;
+    const avgCost = tier.assetId ? (avgCosts[tier.assetId] ?? null) : null;
+    const result = evaluateRebuyTierExtended(tier, price, remainingLiquidityEur, balance, avgCost, now);
+    results.push(result);
+    if (result.isTriggered && result.preview) {
+      remainingLiquidityEur = result.preview.eurcRemainingAfterEur;
+    }
+  }
+
+  return results;
 }
 
 export function buildPreparedRebuyOperation(result: RebuyEvaluationResult): Record<string, unknown> | null {

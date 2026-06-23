@@ -62,6 +62,12 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
       listPortfolios:         () =>                         ipc("coinbase:list-portfolios"),
       getPortfolioBreakdown:  (uuid: unknown, cur: unknown) => ipc("coinbase:get-portfolio-breakdown", uuid, cur),
       getPortfolioSnapshots:  (uuid: unknown) =>            ipc("coinbase:get-portfolio-snapshots", uuid),
+      previewOrder:           (input: unknown) =>           ipc("coinbase:preview-order", input),
+      submitOrder:            (input: unknown) =>           ipc("coinbase:submit-order", input),
+      listPendingOrders:      () =>                         ipc("coinbase:list-pending-orders"),
+      listScheduledOperations: () =>                        ipc("coinbase:list-scheduled-operations"),
+      createScheduledOperation: (input: unknown) =>          ipc("coinbase:create-scheduled-operation", input),
+      deleteScheduledOperation: (id: unknown) =>             ipc("coinbase:delete-scheduled-operation", id),
     },
     sentiment: {
       getGlobal: (i: unknown) => ipc("sentiment:get-global", i),
@@ -136,13 +142,9 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
     strategicDecisions: {
       getCycleReport: (i: unknown) =>           ipc("strategicDecisions:getCycleReport", i),
     },
-    perspectives: {
-      getGoals:    () =>                        ipc("perspectives:getGoals"),
-      createGoal:  (d: unknown) =>              ipc("perspectives:createGoal", d),
-      updateGoal:  (id: unknown, d: unknown) => ipc("perspectives:updateGoal", id, d),
-      deleteGoal:  (id: unknown) =>             ipc("perspectives:deleteGoal", id),
-      getConsolidatedSnapshot: () =>            ipc("perspectives:getConsolidatedSnapshot"),
-      getProjection: (i?: unknown) =>           ipc("perspectives:getProjection", i),
+    persp2: {
+      getSimulation: (input?: { horizonYears?: number; policy?: string }) =>
+        ipc("persp2:getSimulation", input),
     },
     smartBuy: {
       getRecommendation: (input: unknown) => ipc("smartBuy:getRecommendation", input),

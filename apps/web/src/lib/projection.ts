@@ -1,4 +1,4 @@
-export type ProjectionScenario = "conservador" | "base" | "optimista" | "personalizado";
+export type ProjectionScenario = "conservador" | "moderado" | "base" | "favorable" | "muy_favorable" | "optimista" | "personalizado";
 
 export interface CycleInput {
   id: string;
@@ -34,14 +34,18 @@ export interface ProjectionResult {
   hypotheses: string[];
 }
 
+import { calculateSpanishSavingsTax } from "./taxCalculations";
+
 const ANNUAL_RATES: Record<ProjectionScenario, number> = {
-  conservador: 0.05,
-  base: 0.10,
-  optimista: 0.20,
+  conservador:   0.05,
+  moderado:      0.075,
+  base:          0.10,
+  favorable:     0.14,
+  muy_favorable: 0.18,
+  optimista:     0.22,
   personalizado: 0.10,
 };
 
-const CAPITAL_GAINS_TAX_RATE = 0.19;
 const AVG_DAYS_PER_MONTH = 30.4375;
 const MS_PER_DAY = 24 * 3600 * 1000;
 
@@ -71,11 +75,12 @@ export function computeProjection(
 
     if (effectiveStart >= cycleEnd) {
       const gains = Math.max(0, value - invested);
+      const tax = calculateSpanishSavingsTax(gains);
       points.push({
         cycleId: cycle.id, cycleName: cycle.name, periodEnd: cycle.endDate,
         totalInvested: invested, projectedValue: value, gains,
-        estimatedTax: gains * CAPITAL_GAINS_TAX_RATE,
-        netValue: value - gains * CAPITAL_GAINS_TAX_RATE,
+        estimatedTax: tax,
+        netValue: value - tax,
       });
       continue;
     }
@@ -87,16 +92,17 @@ export function computeProjection(
     }
 
     const gains = Math.max(0, value - invested);
+    const tax = calculateSpanishSavingsTax(gains);
     points.push({
       cycleId: cycle.id, cycleName: cycle.name, periodEnd: cycle.endDate,
       totalInvested: invested, projectedValue: value, gains,
-      estimatedTax: gains * CAPITAL_GAINS_TAX_RATE,
-      netValue: value - gains * CAPITAL_GAINS_TAX_RATE,
+      estimatedTax: tax,
+      netValue: value - tax,
     });
   }
 
   const finalGains = Math.max(0, value - invested);
-  const finalTax = finalGains * CAPITAL_GAINS_TAX_RATE;
+  const finalTax = calculateSpanishSavingsTax(finalGains);
 
   return {
     scenario, annualGrowthRate: annualRate,
@@ -109,7 +115,7 @@ export function computeProjection(
     netProjectedValue: value - finalTax,
     hypotheses: [
       `Tasa de crecimiento anual compuesta (CAGR): ${(annualRate * 100).toFixed(0)}%`,
-      `Impuesto sobre plusvalías aplicado al final: ${(CAPITAL_GAINS_TAX_RATE * 100).toFixed(0)}% (simplificado)`,
+      "Impuesto sobre plusvalías: tramos progresivos españoles del ahorro 2024 (19/21/23/27/28%)",
       "Aportaciones mensuales constantes según plan de cada ciclo",
       "Sin ventas parciales ni recompras intermedias en la simulación",
       "Escenario hipotético ilustrativo. No es una predicción ni asesoramiento financiero.",

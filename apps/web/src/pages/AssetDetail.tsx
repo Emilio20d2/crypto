@@ -21,11 +21,24 @@ const PERIOD_MAP: Record<Period, "1h" | "24h" | "7d" | "30d" | "1y" | "all"> = {
   "all": "all",
 };
 
+const ASSET_PRICE_REFRESH_MS = 5_000;
+
+function historyRefreshMs(period: Period) {
+  if (period === "1h") return 30_000;
+  if (period === "24h") return 60_000;
+  return 120_000;
+}
+
 function chartPoints(points: { time: number; value: number }[]): ChartPoint[] {
-  return points.map((point) => ({
-    time: point.time as import("lightweight-charts").Time,
-    value: point.value,
-  }));
+  const deduped = new Map<number, ChartPoint>();
+  for (const point of points) {
+    if (!Number.isFinite(point.time) || !Number.isFinite(point.value) || point.time <= 0 || point.value <= 0) continue;
+    deduped.set(point.time, {
+      time: point.time as import("lightweight-charts").Time,
+      value: point.value,
+    });
+  }
+  return Array.from(deduped.values()).sort((a, b) => (a.time as number) - (b.time as number));
 }
 
 function matchAsset(asset: any, id: string) {
@@ -76,18 +89,30 @@ export function AssetDetail() {
     queryKey: ["coinbase", "breakdown", selectedPortfolioId],
     queryFn: () => window.cryptoControl.coinbase.getPortfolioBreakdown(selectedPortfolioId!, "EUR"),
     enabled: !!selectedPortfolioId,
+    staleTime: 15_000,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: true,
+    refetchOnMount: "always",
   });
 
   const { data: priceRes } = useQuery({
     queryKey: ["market", "price", requestAssetId],
     queryFn: () => window.cryptoControl.market.getCurrentPrice({ assetId: requestAssetId!, quoteCurrency: "EUR" }),
     enabled: !!requestAssetId,
+    staleTime: 15_000,
+    refetchInterval: ASSET_PRICE_REFRESH_MS,
+    refetchIntervalInBackground: true,
+    refetchOnMount: "always",
   });
 
   const { data: overviewRes } = useQuery({
     queryKey: ["market", "overview", requestAssetId],
     queryFn: () => window.cryptoControl.market.getOverview({ assetId: requestAssetId!, quoteCurrency: "EUR" }),
     enabled: !!requestAssetId,
+    staleTime: 20_000,
+    refetchInterval: ASSET_PRICE_REFRESH_MS,
+    refetchIntervalInBackground: true,
+    refetchOnMount: "always",
   });
 
   const { data: historyRes, isLoading: loadingHistory } = useQuery({
@@ -98,6 +123,10 @@ export function AssetDetail() {
       period: PERIOD_MAP[period],
     }),
     enabled: !!requestAssetId,
+    staleTime: 15_000,
+    refetchInterval: historyRefreshMs(period),
+    refetchIntervalInBackground: true,
+    refetchOnMount: "always",
   });
 
   const { data: txsRes } = useQuery({
