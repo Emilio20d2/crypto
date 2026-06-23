@@ -562,8 +562,8 @@ export function Perspectivas() {
   const { data: rawData, isLoading, error, isFetching } = useQuery({
     queryKey: ["persp2:getSimulation", horizonYears],
     queryFn: async () => {
-      const result = await window.cryptoControl.persp2.getSimulation({ horizonYears });
-      if (!result.success) throw new Error(result.error ?? "Error en la simulación");
+      const result = await window.cryptoControl.persp2.getSimulation({ horizonYears }) as { ok: boolean; data?: unknown; error?: { message?: string } };
+      if (!result.ok) throw new Error(result.error?.message ?? "Error en la simulación");
       return result.data as PerspectivesSimulation;
     },
     staleTime: 5 * 60 * 1000,
