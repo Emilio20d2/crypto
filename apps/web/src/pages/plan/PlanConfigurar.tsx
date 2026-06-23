@@ -303,7 +303,7 @@ function EtapasList() {
     enabled: Boolean(activePlan?.id),
     queryFn: () => unwrap(window.cryptoControl.investmentCycles.list({ planId: activePlan!.id })),
   });
-  const cycles = cyclesQ.data ?? [];
+  const cycles = Array.isArray(cyclesQ.data) ? cyclesQ.data : [];
 
   const assetsQ = useQuery({
     queryKey: ["investment-assets"],
@@ -653,7 +653,7 @@ function PlanEtapaDetalle() {
   });
 
   const isLoading = activePlanQ.isLoading || cyclesQ.isLoading;
-  const cycle = cyclesQ.data?.find(c => c.id === cycleId) ?? null;
+  const cycle = Array.isArray(cyclesQ.data) ? (cyclesQ.data.find(c => c.id === cycleId) ?? null) : null;
 
   if (isLoading) {
     return <Card><CardContent><p className="empty-inline">Cargando etapa…</p></CardContent></Card>;

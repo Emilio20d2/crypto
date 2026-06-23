@@ -36,7 +36,7 @@ export function PlanRepartoMensual({
     queryKey: ["assets"],
     queryFn: () => unwrap(window.cryptoControl.assets.list()),
   });
-  const globalAssets: Asset[] = globalAssetsQ.data ?? [];
+  const globalAssets: Asset[] = Array.isArray(globalAssetsQ.data) ? globalAssetsQ.data : [];
 
   const assetsQ = useQuery({
     queryKey: ["investment-assets"],

@@ -190,11 +190,12 @@ function AssetPicker({
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const selected = catalog.find(a => a.id === value);
+  const selected = Array.isArray(catalog) ? catalog.find(a => a.id === value) : undefined;
 
+  const safeCatalog = Array.isArray(catalog) ? catalog : [];
   const filtered = query.length < 1
-    ? catalog
-    : catalog.filter(a =>
+    ? safeCatalog
+    : safeCatalog.filter(a =>
         a.symbol.toLowerCase().includes(query.toLowerCase()) ||
         a.name.toLowerCase().includes(query.toLowerCase()) ||
         a.id.toLowerCase().includes(query.toLowerCase()),
@@ -767,7 +768,7 @@ function AssetCard({
   onReactivate: (id: string) => Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const asset = globalAssets.find(a => a.id === item.assetId);
+  const asset = Array.isArray(globalAssets) ? globalAssets.find(a => a.id === item.assetId) : undefined;
   const pct = getPct(item);
   const fixed = getFixed(item);
   const monthly = getMonthlyAmount(item, monthlyAmountEur);
@@ -878,16 +879,18 @@ export function PlanEtapaActivos({
     queryKey: ["assets"],
     queryFn: () => unwrap(window.cryptoControl.assets.list()),
   });
-  const globalAssets: Asset[] = globalAssetsQ.data ?? [];
+  const globalAssets: Asset[] = Array.isArray(globalAssetsQ.data) ? globalAssetsQ.data : [];
 
   const catalogQ = useQuery({
     queryKey: ["assets-catalog"],
     queryFn: () => unwrap(window.cryptoControl.assets.catalog()),
     staleTime: 300_000,
   });
-  const catalog: CatalogAsset[] = catalogQ.data ?? globalAssets.map(a => ({
-    ...a, logoUrl: a.logoUrl ?? null, inDb: true, supportedProviders: [], hasCoinbase: false,
-  }));
+  const catalog: CatalogAsset[] = Array.isArray(catalogQ.data)
+    ? catalogQ.data
+    : globalAssets.map(a => ({
+        ...a, logoUrl: a.logoUrl ?? null, inDb: true, supportedProviders: [], hasCoinbase: false,
+      }));
 
   const cycleAssetsQ = useQuery({
     queryKey: ["investment-assets"],
