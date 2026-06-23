@@ -545,3 +545,44 @@ export const marketSentimentSnapshots = sqliteTable("market_sentiment_snapshots"
     uniqSentimentSnapshot: uniqueIndex("uniq_market_sentiment_snapshot").on(table.id)
   };
 });
+
+export const strategicSignals = sqliteTable("strategic_signals", {
+  id: text("id").primaryKey(),
+  deduplicationKey: text("deduplication_key").notNull().unique(),
+  assetId: text("asset_id").notNull(),
+  planId: text("plan_id"),
+  cycleId: text("cycle_id"),
+  ruleId: text("rule_id"),
+  actionType: text("action_type").notNull(),
+  status: text("status").notNull().default("detected"),
+  detectedAt: integer("detected_at").notNull(),
+  validFrom: integer("valid_from").notNull(),
+  expiresAt: integer("expires_at"),
+  currentPriceEur: real("current_price_eur"),
+  referencePriceEur: real("reference_price_eur"),
+  targetPriceEur: real("target_price_eur"),
+  drawdownPct: real("drawdown_pct"),
+  recommendedPercentage: real("recommended_percentage"),
+  recommendedAmountEur: real("recommended_amount_eur"),
+  recommendedQuantity: real("recommended_quantity"),
+  fundingSource: text("funding_source").notNull().default("not_applicable"),
+  availableFundingEur: real("available_funding_eur"),
+  fiscalReserveExcludedEur: real("fiscal_reserve_excluded_eur"),
+  priority: text("priority").notNull().default("medium"),
+  confidence: real("confidence"),
+  dataQuality: text("data_quality").notNull().default("medium"),
+  reasonsJson: text("reasons_json").notNull().default("[]"),
+  conditionsMatchedJson: text("conditions_matched_json").notNull().default("[]"),
+  sourceModulesJson: text("source_modules_json").notNull().default("[]"),
+  simulationOnly: integer("simulation_only").notNull().default(0),
+  acknowledgedAt: integer("acknowledged_at"),
+  dismissedAt: integer("dismissed_at"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => {
+  return {
+    idxSignalsStatus: index("idx_strategic_signals_status").on(table.status),
+    idxSignalsAsset: index("idx_strategic_signals_asset").on(table.assetId),
+    idxSignalsDetected: index("idx_strategic_signals_detected").on(table.detectedAt),
+  };
+});

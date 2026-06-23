@@ -5186,26 +5186,30 @@ function setupIpcHandlers() {
   });
   app.on("will-quit", () => apiServer.close());
 
-  // ── Trade alerts ──────────────────────────────────────────────────────────
+  // ── Motor central de señales estratégicas ─────────────────────────────────
+  // Una señal es la fuente de verdad para una acción (compra/venta/recompra).
+  // computeTradeAlerts y signals:* consumen el mismo signal-engine.
 
   interface SellAlert {
     assetId: string;
     currentPriceEur: number;
     avgCostEur: number;
     gainPct: number;
-    suggestedSellPct: number;   // fraction of position (e.g. 0.10)
+    suggestedSellPct: number;
     suggestedQtyUnits: number;
     suggestedAmountEur: number;
     tier: 50 | 100 | 200;
+    signalId?: string;
   }
   interface RebuyAlert {
     assetId: string;
     currentPriceEur: number;
     lastSalePriceEur: number;
     drawdownPct: number;
-    eurcToUseEur: number;       // EUR to deploy in this tier
+    eurcToUseEur: number;
     suggestedQtyUnits: number;
     tier: 15 | 25 | 40;
+    signalId?: string;
   }
   interface TradeAlertsResult {
     sellAlerts: SellAlert[];
@@ -5214,36 +5218,30 @@ function setupIpcHandlers() {
     checkedAt: number;
   }
 
-  const SELL_TIERS: { gainPct: number; sellPct: number; tier: 50 | 100 | 200 }[] = [
-    { gainPct: 200, sellPct: 0.20, tier: 200 },
-    { gainPct: 100, sellPct: 0.15, tier: 100 },
-    { gainPct:  50, sellPct: 0.10, tier:  50 },
-  ];
-  const REBUY_TIERS: { drawdownPct: number; eurcPct: number; tier: 15 | 25 | 40 }[] = [
-    { drawdownPct: 40, eurcPct: 0.50, tier: 40 },
-    { drawdownPct: 25, eurcPct: 0.30, tier: 25 },
-    { drawdownPct: 15, eurcPct: 0.20, tier: 15 },
-  ];
-
-  async function computeTradeAlerts(): Promise<TradeAlertsResult> {
+  async function gatherSignalInput(now: number) {
     const db = getDb();
-    const now = Date.now();
+    const { evaluateSignals } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
 
-    // 1. Portfolio positions (balance + avg cost)
     const posResult = await getPortfolioService().getPositions().catch(() => ({ positions: {} }));
-    const positions = posResult.positions as Record<string, { balance: number; averagePriceEur: number | null }>;
+    const rawPositions = posResult.positions as Record<string, {
+      balance: number; averagePriceEur: number | null; totalInvestedEur: number;
+    }>;
+    const assetIds = Object.keys(rawPositions).filter(id => (rawPositions[id].balance ?? 0) > 1e-12 && id !== "EURC");
 
-    // 2. Current prices (fast cached)
-    const assetIds = Object.keys(positions).filter(id => (positions[id].balance ?? 0) > 1e-12 && id !== "EURC");
     const priceMap: Record<string, number | null> = {};
-    await Promise.all(
-      assetIds.map(async id => {
-        const r = await getCurrentPriceFast(id).catch(() => null);
-        priceMap[id] = r?.price ?? null;
-      })
-    );
+    await Promise.all(assetIds.map(async id => {
+      const r = await getCurrentPriceFast(id).catch(() => null);
+      priceMap[id] = r?.price ?? null;
+    }));
 
-    // 3. Last sale price per asset (from realizedGains, most recent per assetId)
+    const positions = assetIds.map(assetId => ({
+      assetId,
+      balance: rawPositions[assetId].balance,
+      averagePriceEur: rawPositions[assetId].averagePriceEur,
+      currentPriceEur: priceMap[assetId] ?? null,
+      totalInvestedEur: rawPositions[assetId].totalInvestedEur ?? 0,
+    }));
+
     const allGains = db.select().from(schema.realizedGains).orderBy(desc(schema.realizedGains.date)).all();
     const lastSalePriceByAsset: Record<string, number> = {};
     for (const g of allGains) {
@@ -5252,66 +5250,258 @@ function setupIpcHandlers() {
       }
     }
 
-    // 4. EURC available (from treasury)
     const coinbaseEurc = getCoinbaseEurcBalance?.() ?? 0;
     const treasurySummary = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), coinbaseEurc);
-    const eurcAvailableEur = Math.max(0, (treasurySummary as any).eurcAvailableEur ?? 0);
+    const freeRebuyLiquidity = Math.max(0, (treasurySummary as any).freeRebuyLiquidity ?? 0);
+    const eurcAvailableEur = Math.max(0, (treasurySummary as any).eurcAvailableEur ?? freeRebuyLiquidity);
 
+    // Cargar reglas y tiers del plan activo
+    const planRows = db.select().from(schema.investmentPlans)
+      .where(eq(schema.investmentPlans.status, "active")).all();
+    const activePlanId = planRows[0]?.id ?? null;
+
+    const cycleRows = activePlanId
+      ? db.select().from(schema.investmentCycles)
+        .where(eq(schema.investmentCycles.planId, activePlanId)).all()
+        .filter(c => c.status === "active")
+      : [];
+    const activeCycleId = cycleRows[0]?.id ?? null;
+    const cycleIds = cycleRows.map(c => c.id);
+
+    const saleRuleRows = cycleIds.length
+      ? db.select().from(schema.partialSaleRules)
+        .where(inArray(schema.partialSaleRules.cycleId, cycleIds)).all()
+      : [];
+
+    const rebuyTierRows = cycleIds.length
+      ? db.select().from(schema.cycleRebuyTiers)
+        .where(inArray(schema.cycleRebuyTiers.cycleId, cycleIds)).all()
+      : [];
+
+    return {
+      evaluateSignals,
+      now,
+      positions,
+      lastSalePriceByAsset,
+      eurcAvailableEur,
+      freeRebuyLiquidity,
+      activePlanId,
+      activeCycleId,
+      saleRules: saleRuleRows.map(r => ({
+        id: r.id,
+        assetId: r.assetId,
+        cycleId: r.cycleId,
+        name: r.name,
+        conditionType: r.conditionType,
+        conditionValue: r.conditionValue ?? null,
+        conditionValue2: r.conditionValue2 ?? null,
+        sellPercentage: r.sellPercentage,
+        priority: r.priority,
+        status: r.status,
+        effectiveDate: r.effectiveDate ?? null,
+        notes: r.notes ?? null,
+      })),
+      rebuyTiers: rebuyTierRows.map(r => ({
+        id: r.id,
+        cycleId: r.cycleId,
+        assetId: r.assetId ?? null,
+        name: r.name ?? null,
+        drawdownPercentage: r.drawdownPercentage,
+        usagePercentage: r.usagePercentage,
+        priority: r.priority ?? 0,
+        status: r.status ?? "activa",
+        referenceType: r.referenceType ?? null,
+        referenceValue: r.referenceValue ?? null,
+        referenceDate: r.referenceDate ?? null,
+        effectiveDate: (r as any).effectiveDate ?? null,
+        notes: r.notes ?? null,
+        lastTriggeredAt: r.lastTriggeredAt ?? null,
+      })),
+      treasury: {
+        eurcBalance: (treasurySummary as any).eurcBalance ?? 0,
+        fiscalReserveBalance: (treasurySummary as any).fiscalReserveBalance ?? 0,
+        freeRebuyLiquidity,
+      },
+    };
+  }
+
+  function persistSignals(signals: import("@crypto-control/portfolio").StrategicSignal[]): void {
+    if (!signals.length) return;
+    const db = getDb();
+    const now = Date.now();
+    for (const sig of signals) {
+      try {
+        db.insert(schema.strategicSignals).values({
+          id: sig.id,
+          deduplicationKey: sig.deduplicationKey,
+          assetId: sig.assetId,
+          planId: sig.planId,
+          cycleId: sig.cycleId,
+          ruleId: sig.ruleId,
+          actionType: sig.actionType,
+          status: sig.status,
+          detectedAt: sig.detectedAt,
+          validFrom: sig.validFrom,
+          expiresAt: sig.expiresAt,
+          currentPriceEur: sig.currentPriceEur,
+          referencePriceEur: sig.referencePriceEur,
+          targetPriceEur: sig.targetPriceEur,
+          drawdownPct: sig.drawdownPct,
+          recommendedPercentage: sig.recommendedPercentage,
+          recommendedAmountEur: sig.recommendedAmountEur,
+          recommendedQuantity: sig.recommendedQuantity,
+          fundingSource: sig.fundingSource,
+          availableFundingEur: sig.availableFundingEur,
+          fiscalReserveExcludedEur: sig.fiscalReserveExcludedEur,
+          priority: sig.priority,
+          confidence: sig.confidence,
+          dataQuality: sig.dataQuality,
+          reasonsJson: JSON.stringify(sig.reasons),
+          conditionsMatchedJson: JSON.stringify(sig.conditionsMatched),
+          sourceModulesJson: JSON.stringify(sig.sourceModules),
+          simulationOnly: sig.simulationOnly ? 1 : 0,
+          createdAt: now,
+          updatedAt: now,
+        }).onConflictDoUpdate({
+          target: schema.strategicSignals.deduplicationKey,
+          set: {
+            status: sig.status,
+            currentPriceEur: sig.currentPriceEur,
+            recommendedAmountEur: sig.recommendedAmountEur,
+            recommendedQuantity: sig.recommendedQuantity,
+            availableFundingEur: sig.availableFundingEur,
+            reasonsJson: JSON.stringify(sig.reasons),
+            updatedAt: now,
+          },
+        }).run();
+      } catch (e) {
+        console.error("[signals] persist error:", e);
+      }
+    }
+  }
+
+  async function computeTradeAlerts(): Promise<TradeAlertsResult> {
+    const ctx = await gatherSignalInput(Date.now());
+    const result = ctx.evaluateSignals({
+      now: ctx.now,
+      positions: ctx.positions,
+      saleRules: ctx.saleRules,
+      rebuyTiers: ctx.rebuyTiers,
+      treasury: ctx.treasury,
+      lastSalePriceByAsset: ctx.lastSalePriceByAsset,
+      activePlanId: ctx.activePlanId,
+      activeCycleId: ctx.activeCycleId,
+      mode: "live",
+    });
+
+    persistSignals(result.signals);
+
+    // Map señales → formato SellAlert/RebuyAlert existente (backwards compat)
     const sellAlerts: SellAlert[] = [];
     const rebuyAlerts: RebuyAlert[] = [];
 
-    for (const assetId of assetIds) {
-      const pos = positions[assetId];
-      const price = priceMap[assetId];
-      if (price == null || price <= 0) continue;
-      const avgCost = pos.averagePriceEur;
-      if (avgCost == null || avgCost <= 0) continue;
-      const balance = pos.balance;
-      if (balance < 1e-12) continue;
-
-      // Sell alerts
-      const gainPct = (price / avgCost - 1) * 100;
-      for (const t of SELL_TIERS) {
-        if (gainPct >= t.gainPct) {
-          const qty = balance * t.sellPct;
-          sellAlerts.push({
-            assetId,
-            currentPriceEur: price,
-            avgCostEur: avgCost,
-            gainPct,
-            suggestedSellPct: t.sellPct,
-            suggestedQtyUnits: qty,
-            suggestedAmountEur: qty * price,
-            tier: t.tier,
-          });
-          break; // only highest tier per asset
-        }
-      }
-
-      // Rebuy alerts
-      const lastSalePrice = lastSalePriceByAsset[assetId] ?? null;
-      if (lastSalePrice != null && lastSalePrice > 0 && price < lastSalePrice && eurcAvailableEur > 0) {
-        const drawdownPct = (lastSalePrice - price) / lastSalePrice * 100;
-        for (const t of REBUY_TIERS) {
-          if (drawdownPct >= t.drawdownPct) {
-            const eurcToUse = eurcAvailableEur * t.eurcPct;
-            rebuyAlerts.push({
-              assetId,
-              currentPriceEur: price,
-              lastSalePriceEur: lastSalePrice,
-              drawdownPct,
-              eurcToUseEur: eurcToUse,
-              suggestedQtyUnits: eurcToUse / price,
-              tier: t.tier,
-            });
-            break; // only highest tier per asset
-          }
-        }
+    for (const sig of result.signals) {
+      if (sig.actionType === "sell_partial" && sig.currentPriceEur != null && sig.referencePriceEur != null) {
+        const gainPct = sig.referencePriceEur > 0
+          ? (sig.currentPriceEur / sig.referencePriceEur - 1) * 100 : 0;
+        const sellFraction = (sig.recommendedPercentage ?? 10) / 100;
+        const tier = sellFraction >= 0.18 ? 200 : sellFraction >= 0.13 ? 100 : 50;
+        sellAlerts.push({
+          assetId: sig.assetId,
+          currentPriceEur: sig.currentPriceEur,
+          avgCostEur: sig.referencePriceEur,
+          gainPct,
+          suggestedSellPct: sellFraction,
+          suggestedQtyUnits: sig.recommendedQuantity ?? 0,
+          suggestedAmountEur: sig.recommendedAmountEur ?? 0,
+          tier: tier as 50 | 100 | 200,
+          signalId: sig.id,
+        });
+      } else if (sig.actionType === "rebuy" && sig.currentPriceEur != null && sig.referencePriceEur != null) {
+        const drawdownPct = sig.drawdownPct ?? 0;
+        const tier = drawdownPct >= 35 ? 40 : drawdownPct >= 22 ? 25 : 15;
+        rebuyAlerts.push({
+          assetId: sig.assetId,
+          currentPriceEur: sig.currentPriceEur,
+          lastSalePriceEur: sig.referencePriceEur,
+          drawdownPct,
+          eurcToUseEur: sig.recommendedAmountEur ?? 0,
+          suggestedQtyUnits: sig.recommendedQuantity ?? 0,
+          tier: tier as 15 | 25 | 40,
+          signalId: sig.id,
+        });
       }
     }
 
-    return { sellAlerts, rebuyAlerts, eurcAvailableEur, checkedAt: now };
+    return { sellAlerts, rebuyAlerts, eurcAvailableEur: ctx.eurcAvailableEur, checkedAt: ctx.now };
   }
+
+  // ── Señales: handlers IPC ─────────────────────────────────────────────────
+
+  ipcMain.handle("signals:evaluate", withResult(async () => {
+    const ctx = await gatherSignalInput(Date.now());
+    const result = ctx.evaluateSignals({
+      now: ctx.now,
+      positions: ctx.positions,
+      saleRules: ctx.saleRules,
+      rebuyTiers: ctx.rebuyTiers,
+      treasury: ctx.treasury,
+      lastSalePriceByAsset: ctx.lastSalePriceByAsset,
+      activePlanId: ctx.activePlanId,
+      activeCycleId: ctx.activeCycleId,
+      mode: "live",
+    });
+    persistSignals(result.signals);
+    const db = getDb();
+    const allSignals = db.select().from(schema.strategicSignals)
+      .where(inArray(schema.strategicSignals.status, ["detected", "active", "acknowledged"]))
+      .orderBy(desc(schema.strategicSignals.detectedAt))
+      .all()
+      .map(s => ({
+        ...s,
+        reasons: JSON.parse(s.reasonsJson ?? "[]"),
+        conditionsMatched: JSON.parse(s.conditionsMatchedJson ?? "[]"),
+        sourceModules: JSON.parse(s.sourceModulesJson ?? "[]"),
+        simulationOnly: s.simulationOnly === 1,
+      }));
+    return { signals: allSignals, meta: result };
+  }));
+
+  ipcMain.handle("signals:list", withResult(async (_, input?: { status?: string; assetId?: string }) => {
+    const db = getDb();
+    let rows = db.select().from(schema.strategicSignals)
+      .orderBy(desc(schema.strategicSignals.detectedAt))
+      .all();
+    if (input?.status) rows = rows.filter(s => s.status === input.status);
+    if (input?.assetId) rows = rows.filter(s => s.assetId === input.assetId);
+    return rows.map(s => ({
+      ...s,
+      reasons: JSON.parse(s.reasonsJson ?? "[]"),
+      conditionsMatched: JSON.parse(s.conditionsMatchedJson ?? "[]"),
+      sourceModules: JSON.parse(s.sourceModulesJson ?? "[]"),
+      simulationOnly: s.simulationOnly === 1,
+    }));
+  }));
+
+  ipcMain.handle("signals:acknowledge", withResult(async (_, id: string) => {
+    const db = getDb();
+    const now = Date.now();
+    db.update(schema.strategicSignals)
+      .set({ status: "acknowledged", acknowledgedAt: now, updatedAt: now })
+      .where(eq(schema.strategicSignals.id, id))
+      .run();
+    return { ok: true };
+  }));
+
+  ipcMain.handle("signals:dismiss", withResult(async (_, id: string) => {
+    const db = getDb();
+    const now = Date.now();
+    db.update(schema.strategicSignals)
+      .set({ status: "dismissed", dismissedAt: now, updatedAt: now })
+      .where(eq(schema.strategicSignals.id, id))
+      .run();
+    return { ok: true };
+  }));
 
   ipcMain.handle("trade:get-alerts", withResult(async () => computeTradeAlerts()));
 

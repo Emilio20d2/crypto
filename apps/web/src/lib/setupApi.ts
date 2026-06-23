@@ -150,6 +150,12 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
       getConsolidatedSnapshot: () =>                         ipc("perspectives:getConsolidatedSnapshot"),
       getProjection:          (input?: unknown) =>           ipc("perspectives:getProjection", input),
     },
+    signals: {
+      evaluate:    ()                                         => ipc("signals:evaluate"),
+      list:        (input?: { status?: string; assetId?: string }) => ipc("signals:list", input),
+      acknowledge: (id: unknown)                              => ipc("signals:acknowledge", id),
+      dismiss:     (id: unknown)                              => ipc("signals:dismiss", id),
+    },
     persp2: {
       getSimulation: (input?: { horizonYears?: number; policy?: string }) =>
         ipc("persp2:getSimulation", input),

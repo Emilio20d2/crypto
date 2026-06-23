@@ -6,7 +6,8 @@ export type PlanSectionId =
   | "aportaciones"
   | "compra-inteligente"
   | "ventas-recompras"
-  | "seguimiento";
+  | "seguimiento"
+  | "escenarios";
 
 interface PlanNavItem {
   id: PlanSectionId;
@@ -20,6 +21,7 @@ const PLAN_NAV: PlanNavItem[] = [
   { id: "compra-inteligente", label: "Compra Inteligente" },
   { id: "ventas-recompras", label: "Ventas/Recompras" },
   { id: "seguimiento", label: "Seguimiento" },
+  { id: "escenarios", label: "Escenarios" },
 ];
 
 // Compatibilidad con rutas antiguas de la arquitectura provisional

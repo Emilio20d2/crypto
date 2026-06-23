@@ -7,6 +7,7 @@ import { PlanResumen } from "./plan/PlanResumen";
 import { PlanAportaciones } from "./plan/PlanAportaciones";
 import { PlanBeneficiosCaidas } from "./plan/PlanBeneficiosCaidas";
 import { PlanSeguimiento } from "./plan/PlanSeguimiento";
+import { PlanEscenarios } from "./plan/PlanEscenarios";
 import type {
   Asset,
   AssetHealthResult,
@@ -2836,6 +2837,7 @@ export function PlanInversion() {
         <Route path="compra-inteligente" element={<PlanCompraInteligenteWrapper />} />
         <Route path="ventas-recompras" element={<PlanBeneficiosCaidasWrapper />} />
         <Route path="seguimiento" element={<PlanSeguimientoWrapper />} />
+        <Route path="escenarios" element={<PlanEscenarios />} />
         {/* Redirects desde rutas antiguas de la arquitectura provisional */}
         <Route path="ciclos/*" element={<Navigate to="/plan-inversion/configurar" replace />} />
         <Route path="estrategia" element={<Navigate to="/plan-inversion/configurar" replace />} />

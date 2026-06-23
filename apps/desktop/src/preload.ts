@@ -181,6 +181,12 @@ const cryptoControl = {
   planMonitoring: {
     getSummary: (input: unknown) => ipcRenderer.invoke("planMonitoring:getSummary", input),
   },
+  signals: {
+    evaluate:    ()                    => ipcRenderer.invoke("signals:evaluate"),
+    list:        (input?: { status?: string; assetId?: string }) => ipcRenderer.invoke("signals:list", input),
+    acknowledge: (id: string)          => ipcRenderer.invoke("signals:acknowledge", id),
+    dismiss:     (id: string)          => ipcRenderer.invoke("signals:dismiss", id),
+  },
   trade: {
     getAlerts: () => ipcRenderer.invoke("trade:get-alerts"),
     onNewAlerts: (cb: (alerts: unknown) => void) => {

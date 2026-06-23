@@ -314,6 +314,44 @@ export function ensureEssentialTables(): void {
       key TEXT PRIMARY KEY NOT NULL,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS strategic_signals (
+      id TEXT PRIMARY KEY NOT NULL,
+      deduplication_key TEXT NOT NULL UNIQUE,
+      asset_id TEXT NOT NULL,
+      plan_id TEXT,
+      cycle_id TEXT,
+      rule_id TEXT,
+      action_type TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'detected',
+      detected_at INTEGER NOT NULL,
+      valid_from INTEGER NOT NULL,
+      expires_at INTEGER,
+      current_price_eur REAL,
+      reference_price_eur REAL,
+      target_price_eur REAL,
+      drawdown_pct REAL,
+      recommended_percentage REAL,
+      recommended_amount_eur REAL,
+      recommended_quantity REAL,
+      funding_source TEXT NOT NULL DEFAULT 'not_applicable',
+      available_funding_eur REAL,
+      fiscal_reserve_excluded_eur REAL,
+      priority TEXT NOT NULL DEFAULT 'medium',
+      confidence REAL,
+      data_quality TEXT NOT NULL DEFAULT 'medium',
+      reasons_json TEXT NOT NULL DEFAULT '[]',
+      conditions_matched_json TEXT NOT NULL DEFAULT '[]',
+      source_modules_json TEXT NOT NULL DEFAULT '[]',
+      simulation_only INTEGER NOT NULL DEFAULT 0,
+      acknowledged_at INTEGER,
+      dismissed_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_strategic_signals_status ON strategic_signals (status);
+    CREATE INDEX IF NOT EXISTS idx_strategic_signals_asset ON strategic_signals (asset_id);
+    CREATE INDEX IF NOT EXISTS idx_strategic_signals_detected ON strategic_signals (detected_at);
   `);
 }
 
