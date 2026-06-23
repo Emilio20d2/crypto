@@ -414,6 +414,12 @@ function evaluateSales(
   }
 }
 
+// ─── Formato moneda (para descripciones de eventos) ─────────────────────────
+
+function fmtEur(v: number): string {
+  return v.toLocaleString("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
+}
+
 // ─── Evaluación de recompras ─────────────────────────────────────────────────
 
 function evaluateRebuys(
@@ -488,6 +494,87 @@ function evaluateRebuys(
       priceEur,
       description: `Recompra ${assetId}: -${(tier.drawdownPercentage)}% desde referencia`,
     });
+  }
+}
+
+// ─── Recompras propuestas (sin escalones configurados) ───────────────────────
+
+function evaluateProposedRebuys(
+  cycle: SimCycle,
+  state: MonthlyState,
+  prices: Record<string, Record<string, number>>,
+  mKey: string,
+  options: SimOptions,
+  date: number,
+  cycleAssets: SimCycleAsset[],
+): void {
+  if (options.policy !== "full_strategy") return;
+  if (state.eurcFree < 1) return;
+
+  const DEFAULT_TIERS = [
+    { drawdown: 0.20, usePct: 0.15 },
+    { drawdown: 0.35, usePct: 0.25 },
+    { drawdown: 0.50, usePct: 0.40 },
+  ];
+
+  const eligibleAssets = cycleAssets.filter(ca => {
+    const st = state.assetStates[ca.assetId];
+    return st != null && !st.failed && !st.deteriorated;
+  });
+
+  for (const ca of eligibleAssets) {
+    const st = state.assetStates[ca.assetId];
+    if (!st) continue;
+    const priceEur = prices[ca.assetId]?.[mKey];
+    if (!priceEur || priceEur <= 0) continue;
+    if (!st.peakPriceEur || st.peakPriceEur <= 0) continue;
+
+    const drawdown = (st.peakPriceEur - priceEur) / st.peakPriceEur;
+
+    for (const tier of DEFAULT_TIERS) {
+      if (drawdown < tier.drawdown) continue;
+
+      const tierKey = `proposed-rebuy-${ca.assetId}-${Math.round(tier.drawdown * 100)}-peak${Math.round(st.peakPriceEur)}`;
+      if (st.usedRebuyTierIds.has(tierKey)) continue;
+
+      const eurcToUse = state.eurcFree * tier.usePct;
+      if (eurcToUse < 0.5) continue;
+
+      const commission = eurcToUse * options.commissionRate;
+      const netEur = eurcToUse - commission;
+      const quantity = netEur / priceEur;
+
+      st.balance += quantity;
+      st.totalRebuys += quantity;
+      const newLot: SimLot = {
+        id: nextLotId(`prop-rebuy-${ca.assetId}`),
+        assetId: ca.assetId,
+        acquiredAt: date,
+        quantity,
+        remaining: quantity,
+        costPerUnitEur: priceEur,
+        source: "sim_rebuy",
+      };
+      st.lots.push(newLot);
+      st.avgCostEur = calcAvgCost(st.lots);
+      st.usedRebuyTierIds.add(tierKey);
+
+      state.eurcFree -= eurcToUse;
+      state.monthRebuysEur += eurcToUse;
+      state.monthCommissionsEur += commission;
+
+      state.events.push({
+        date,
+        type: "rebuy",
+        assetId: ca.assetId,
+        amountEur: eurcToUse,
+        quantity,
+        priceEur,
+        description: `Recompra propuesta ${ca.assetId}: −${(drawdown * 100).toFixed(0)}% desde máximo (${fmtEur(eurcToUse)})`,
+      });
+
+      break; // solo el primer umbral activado por mes y activo
+    }
   }
 }
 
@@ -710,6 +797,13 @@ function simulateMonth(
     const priceEur = prices[assetId]?.[mKey];
     if (!priceEur || priceEur <= 0) continue;
     if (st.peakPriceEur == null || priceEur > st.peakPriceEur) {
+      // Nueva ATH: limpiar escalones propuestos del pico anterior
+      if (st.peakPriceEur != null) {
+        const prefix = `proposed-rebuy-${assetId}-`;
+        for (const key of [...st.usedRebuyTierIds]) {
+          if (key.startsWith(prefix)) st.usedRebuyTierIds.delete(key);
+        }
+      }
       st.peakPriceEur = priceEur;
     }
     if (st.peakPriceEur != null && st.peakPriceEur > 0) {
@@ -809,9 +903,14 @@ function simulateMonth(
     }
   }
 
-  // 7. Evaluate rebuys
+  // 7. Evaluate rebuys (configured tiers)
   if (activeCycle) {
     evaluateRebuys(activeCycle, next, prices, mKey, options, date);
+  }
+
+  // 7b. Proposed rebuys (when no configured tiers or as supplement, full_strategy only)
+  if (activeCycle && cycleAssets.length > 0) {
+    evaluateProposedRebuys(activeCycle, next, prices, mKey, options, date, cycleAssets);
   }
 
   // 8. Reinvest residual EURC (after rebuys)
