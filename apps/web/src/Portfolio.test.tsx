@@ -300,6 +300,9 @@ beforeEach(() => {
       setFiscalReserve: () => ok({ cashBalance: 0, eurcBalance: 0, fiscalReserveBalance: 0, totalLiquidity: 0, freeRebuyLiquidity: 0, allocatedToRebuy: 0, freeCashForRebuy: 0, allocatedCashToRebuy: 0, recommendedFiscalReserve: 0, pendingEstimatedTaxes: 0, updatedAt: 0 }),
       allocateEurcToRebuy: () => ok({ id: "mock-allocation" }),
     },
+    persp2: {
+      getSimulation: async () => ({ ok: true as const, data: null }),
+    },
   };
 });
 

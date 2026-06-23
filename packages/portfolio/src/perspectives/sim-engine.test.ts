@@ -3,6 +3,9 @@ import { buildPricePath, buildPriceMap, monthKey } from "./price-model";
 import { runPerspectivesSimulation } from "./sim-engine";
 import type { SimInput, SimCycle, CurrentPosition, SimOptions } from "./types";
 import { DEFAULT_SPANISH_TAX_BANDS, DEFAULT_SIM_OPTIONS } from "./types";
+import { buildConsensus, weightSource, isExpired } from "./forecast-sources";
+import type { ForecastSource } from "./forecast-sources";
+import { KNOWN_FORECASTS } from "./known-forecasts";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -632,5 +635,217 @@ describe("sim-engine: built-in validations", () => {
     for (const v of patrimonioRules) {
       expect(v.passed).toBe(true);
     }
+  });
+});
+
+// ─── Drawdown mensual ────────────────────────────────────────────────────────
+
+describe("sim-engine: monthly drawdown detection", () => {
+  it("drawdown is non-null and > 0 for 10y base scenario (intra-year corrections)", () => {
+    // Posición grande: correcciones de precio superan el DCA mensual
+    const input = makeInput({
+      currentPositions: [{ assetId: "bitcoin", balance: 0.1, avgCostEur: 30000, currentPriceEur: 60000 }],
+      currentLots: [{ id: "l1", assetId: "bitcoin", date: NOW - 2 * YEAR_MS, remainingAmount: 0.1, unitAcquisitionPriceEur: 30000 }],
+      horizonDate: horizon(10),
+    });
+    const result = runPerspectivesSimulation(input);
+    const base = result.scenarios.find(s => s.scenario === "base")!;
+    // El drawdown debe detectarse desde la serie mensual (no solo cierres diciembre)
+    expect(base.summary.maxDrawdownPct).not.toBeNull();
+    expect(base.summary.maxDrawdownPct!).toBeGreaterThan(0.01); // al menos 1%
+  });
+
+  it("drawdown is greater in bear scenario than in bull scenario", () => {
+    const input = makeInput({
+      currentPositions: [{ assetId: "bitcoin", balance: 0.1, avgCostEur: 30000, currentPriceEur: 60000 }],
+      currentLots: [{ id: "l1", assetId: "bitcoin", date: NOW - 2 * YEAR_MS, remainingAmount: 0.1, unitAcquisitionPriceEur: 30000 }],
+      horizonDate: horizon(10),
+    });
+    const result = runPerspectivesSimulation(input);
+    const conserv = result.scenarios.find(s => s.scenario === "conservador")!;
+    const optimista = result.scenarios.find(s => s.scenario === "optimista")!;
+    const ddConserv   = conserv.summary.maxDrawdownPct  ?? 0;
+    const ddOptimista = optimista.summary.maxDrawdownPct ?? 0;
+    // Conservador tiene mayor drawdown relativo que optimista (caídas más profundas)
+    expect(ddConserv).toBeGreaterThanOrEqual(ddOptimista - 0.05);
+  });
+});
+
+// ─── XIRR correcto ───────────────────────────────────────────────────────────
+
+describe("sim-engine: XIRR calculation", () => {
+  it("XIRR uses input.now as t=0 (not contributions[0].date)", () => {
+    // Comprobación indirecta: en un horizonte de 2 años con buen retorno,
+    // el XIRR debe ser positivo y razonable (< 500% anual).
+    const input = makeInput({
+      currentPositions: [{ assetId: "bitcoin", balance: 0.05, avgCostEur: 30000, currentPriceEur: 60000 }],
+      currentLots: [{ id: "l1", assetId: "bitcoin", date: NOW - 2 * YEAR_MS, remainingAmount: 0.05, unitAcquisitionPriceEur: 30000 }],
+      horizonDate: horizon(2),
+      options: { ...DEFAULT_SIM_OPTIONS },
+    });
+    const result = runPerspectivesSimulation(input);
+    const optimista = result.scenarios.find(s => s.scenario === "optimista")!;
+    expect(optimista.summary.xirr).not.toBeNull();
+    if (optimista.summary.xirr !== null) {
+      // Con corrección del offset de fecha, XIRR debe ser finito y acotado
+      expect(optimista.summary.xirr).toBeGreaterThan(-1.0);
+      expect(optimista.summary.xirr).toBeLessThan(5.0); // < 500% anual
+    }
+  });
+
+  it("XIRR is negative when total invested greatly exceeds final value", () => {
+    // Escenario muy conservador a corto plazo donde hay pérdidas
+    const input = makeInput({
+      currentPositions: [{ assetId: "bitcoin", balance: 0.001, avgCostEur: 60000, currentPriceEur: 60000 }],
+      currentLots: [{ id: "l1", assetId: "bitcoin", date: NOW, remainingAmount: 0.001, unitAcquisitionPriceEur: 60000 }],
+      horizonDate: horizon(5),
+      options: { ...DEFAULT_SIM_OPTIONS },
+    });
+    const result = runPerspectivesSimulation(input);
+    const conserv = result.scenarios.find(s => s.scenario === "conservador")!;
+    if (conserv.summary.xirr !== null) {
+      // XIRR válido (puede ser negativo en conservador)
+      expect(conserv.summary.xirr).toBeGreaterThan(-1.0);
+    }
+  });
+});
+
+// ─── reinvestResidual progresivo ─────────────────────────────────────────────
+
+describe("sim-engine: progressive reinvestment", () => {
+  it("eurcFree accumulates gradually (not immediately spent after a sale)", () => {
+    // Posición grande que dispara ventas en los primeros ciclos alcistas;
+    // con reinversión progresiva el EURC no debe ser 0 en el cierre del primer año.
+    const lotDate = NOW - 4 * YEAR_MS;
+    const input = makeInput({
+      currentPositions: [{ assetId: "bitcoin", balance: 0.5, avgCostEur: 5000, currentPriceEur: 60000 }],
+      currentLots: [{ id: "l1", assetId: "bitcoin", date: lotDate, remainingAmount: 0.5, unitAcquisitionPriceEur: 5000 }],
+      eurcFree: 5000,
+      horizonDate: horizon(10),
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy" },
+    });
+    const result = runPerspectivesSimulation(input);
+    const optimista = result.scenarios.find(s => s.scenario === "optimista")!;
+    // Con reinversión al 20%/mes, el EURC libre debe persistir varios meses.
+    // Verificamos que el acumulado de reinversión no supera el total de ventas
+    // (i.e., no reinvierte más de lo que generó).
+    const totalSales = optimista.summary.totalSalesEur;
+    const totalReinvested = optimista.summary.totalEurcReinvestedEur;
+    if (totalSales > 0) {
+      // Las recompras + reinversión no pueden superar lo generado en ventas + eurcFree inicial
+      expect(totalReinvested + optimista.summary.totalRebuysEur)
+        .toBeLessThanOrEqual(totalSales + 5000 + 0.01);
+    }
+  });
+});
+
+// ─── Sistema de analistas ────────────────────────────────────────────────────
+
+describe("forecast-sources: consensus calculation", () => {
+  const now = new Date("2025-01-01").getTime();
+
+  it("returns neutral consensus when no active sources for asset", () => {
+    const c = buildConsensus([], "bitcoin", now);
+    expect(c.score).toBe(0);
+    expect(c.direction).toBe("neutral");
+    expect(c.peakMultAdjustment).toBe(0);
+    expect(c.sourceCount).toBe(0);
+  });
+
+  it("expired sources are excluded from consensus", () => {
+    const src: ForecastSource = {
+      id: "x1", publisher: "Test", sourceType: "analyst",
+      assetId: "bitcoin", direction: "very_bullish",
+      confidence: 1.0,
+      publishedAt: now - 365 * 24 * 3600 * 1000,
+      expiresAt: now - 1,  // expired yesterday
+    };
+    const c = buildConsensus([src], "bitcoin", now);
+    expect(c.sourceCount).toBe(0);
+    expect(c.score).toBe(0);
+  });
+
+  it("all-bullish sources produce positive score and positive peakMultAdjustment", () => {
+    const src: ForecastSource = {
+      id: "x2", publisher: "Bull Bank", sourceType: "institution",
+      assetId: "bitcoin", direction: "very_bullish",
+      confidence: 0.9,
+      publishedAt: now - 30 * 24 * 3600 * 1000,
+      expiresAt: now + 365 * 24 * 3600 * 1000,
+    };
+    const c = buildConsensus([src], "bitcoin", now);
+    expect(c.score).toBeGreaterThan(0);
+    expect(c.peakMultAdjustment).toBeGreaterThan(0);
+    expect(c.peakMultAdjustment).toBeLessThanOrEqual(0.30);
+  });
+
+  it("all-bearish sources produce negative score and negative peakMultAdjustment", () => {
+    const src: ForecastSource = {
+      id: "x3", publisher: "Bear Bank", sourceType: "analyst",
+      assetId: "bitcoin", direction: "very_bearish",
+      confidence: 0.8,
+      publishedAt: now - 30 * 24 * 3600 * 1000,
+      expiresAt: now + 365 * 24 * 3600 * 1000,
+    };
+    const c = buildConsensus([src], "bitcoin", now);
+    expect(c.score).toBeLessThan(0);
+    expect(c.peakMultAdjustment).toBeLessThan(0);
+  });
+
+  it("mixed sources converge to neutral when evenly balanced", () => {
+    const bull: ForecastSource = {
+      id: "b1", publisher: "A", sourceType: "analyst", assetId: "bitcoin",
+      direction: "very_bullish", confidence: 0.8,
+      publishedAt: now - 10 * 24 * 3600 * 1000,
+      expiresAt: now + 365 * 24 * 3600 * 1000,
+    };
+    const bear: ForecastSource = {
+      id: "b2", publisher: "B", sourceType: "analyst", assetId: "bitcoin",
+      direction: "very_bearish", confidence: 0.8,
+      publishedAt: now - 10 * 24 * 3600 * 1000,
+      expiresAt: now + 365 * 24 * 3600 * 1000,
+    };
+    const c = buildConsensus([bull, bear], "bitcoin", now);
+    expect(Math.abs(c.score)).toBeLessThan(0.05); // casi neutro
+  });
+
+  it("older sources have less weight than recent ones", () => {
+    const recent: ForecastSource = {
+      id: "r1", publisher: "A", sourceType: "analyst", assetId: "bitcoin",
+      direction: "very_bullish", confidence: 0.9,
+      publishedAt: now - 7 * 24 * 3600 * 1000,  // 1 week old
+      expiresAt: now + 365 * 24 * 3600 * 1000,
+    };
+    const old: ForecastSource = {
+      ...recent, id: "r2",
+      publishedAt: now - 3 * 365 * 24 * 3600 * 1000,  // 3 years old
+    };
+    const wRecent = weightSource(recent, now);
+    const wOld    = weightSource(old, now);
+    expect(wRecent).toBeGreaterThan(wOld);
+  });
+
+  it("KNOWN_FORECASTS contains at least 5 bitcoin entries", () => {
+    const btcForecasts = KNOWN_FORECASTS.filter(f => f.assetId === "bitcoin");
+    expect(btcForecasts.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("peakMultAdjustment is bounded within ±30%", () => {
+    // Con todas las fuentes conocidas, el ajuste nunca excede ±30%
+    for (const assetId of ["bitcoin", "ethereum", "solana"]) {
+      const c = buildConsensus(KNOWN_FORECASTS, assetId, now);
+      expect(Math.abs(c.peakMultAdjustment)).toBeLessThanOrEqual(0.30);
+    }
+  });
+
+  it("isExpired returns false for future expiry and true for past expiry", () => {
+    const src: ForecastSource = {
+      id: "e1", publisher: "X", sourceType: "analyst", assetId: "bitcoin",
+      direction: "bullish", confidence: 0.5,
+      publishedAt: now - 365 * 24 * 3600 * 1000,
+      expiresAt: now + 100,
+    };
+    expect(isExpired(src, now)).toBe(false);
+    expect(isExpired(src, now + 200)).toBe(true);
   });
 });

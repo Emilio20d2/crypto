@@ -12,6 +12,8 @@ import type {
 } from "./types";
 import { SIM_SCENARIOS, SCENARIO_LABELS, DEFAULT_SIM_OPTIONS } from "./types";
 import { buildPriceMap, monthKey } from "./price-model";
+import { buildConsensus } from "./forecast-sources";
+import { KNOWN_FORECASTS } from "./known-forecasts";
 
 // ─── FIFO helpers ─────────────────────────────────────────────────────────────
 
@@ -592,6 +594,9 @@ function reinvestResidual(
   activeCycleAssets: SimCycleAsset[],
 ): void {
   if (state.eurcFree < 0.5) return;
+  // No reinvertir en el mismo mes en que hubo ventas: el EURC queda en reserva
+  // para posibles recompras en correcciones futuras (evita wash-sale inmediato).
+  if (state.monthSalesEur > 0) return;
 
   // Eligible: not failed, not deteriorated, not goal-reached, has price
   const eligible = activeCycleAssets.filter(ca => {
@@ -604,7 +609,9 @@ function reinvestResidual(
 
   if (eligible.length === 0) return;
 
-  const budget = state.eurcFree;
+  // Reinversión progresiva: máximo 20% del EURC disponible por mes,
+  // para que el EURC acumulado siga disponible para recompras en correcciones.
+  const budget = state.eurcFree * 0.20;
   const totalAlloc = eligible.reduce((s, ca) => {
     const pct = ca.allocationType === "percentage"
       ? (ca.allocationPercentage ?? ca.allocationValue)
@@ -1104,49 +1111,84 @@ function calcXirr(
   contributions: Array<{ date: number; amount: number }>,
   finalValue: number,
   finalDate: number,
+  initialDate: number,   // t=0 para todos los flujos (= input.now)
 ): number | null {
   if (finalValue <= 0) return null;
+  const MS_PER_YEAR = 365.25 * 24 * 3600 * 1000;
   // Newton-Raphson XIRR
+  // t=0 es initialDate (inversión inicial). Las aportaciones se sitúan en su
+  // fecha real relativa a ese t=0, eliminando el sesgo que causaba usar
+  // contributions[0].date como referencia (colocaba el año 1 en t=0).
   const cashFlows = [
     { t: 0, v: -initialInvestment },
-    ...contributions.map((c, i) => ({
-      t: (c.date - (contributions[0]?.date ?? finalDate)) / (365.25 * 24 * 3600 * 1000),
+    ...contributions.map(c => ({
+      t: (c.date - initialDate) / MS_PER_YEAR,
       v: -c.amount,
     })),
-    { t: (finalDate - (contributions[0]?.date ?? finalDate)) / (365.25 * 24 * 3600 * 1000), v: finalValue },
+    { t: (finalDate - initialDate) / MS_PER_YEAR, v: finalValue },
   ];
 
-  let r = 0.10;
-  for (let iter = 0; iter < 100; iter++) {
-    let f = 0; let df = 0;
-    for (const cf of cashFlows) {
-      const factor = Math.pow(1 + r, cf.t);
-      f += cf.v / factor;
-      df -= cf.t * cf.v / (factor * (1 + r));
+  const npv = (rate: number) =>
+    cashFlows.reduce((s, cf) => s + cf.v / Math.pow(1 + rate, cf.t), 0);
+
+  // Newton-Raphson desde varios puntos de arranque (cubre tanto retornos
+  // positivos como negativos; la raíz puede estar en [-0.99, +∞)).
+  const tryNR = (start: number): number | null => {
+    let r = start;
+    for (let iter = 0; iter < 120; iter++) {
+      let f = 0, df = 0;
+      for (const cf of cashFlows) {
+        const base = 1 + r;
+        if (base <= 0) return null;
+        const factor = Math.pow(base, cf.t);
+        f  += cf.v / factor;
+        df -= cf.t * cf.v / (factor * base);
+      }
+      if (Math.abs(df) < 1e-12) break;
+      const nr = r - f / df;
+      if (!isFinite(nr) || nr <= -0.9999) return null;
+      if (Math.abs(nr - r) < 1e-8) return nr;
+      r = nr;
     }
-    if (Math.abs(df) < 1e-10) break;
-    const nr = r - f / df;
-    if (Math.abs(nr - r) < 1e-7) { r = nr; break; }
-    r = nr;
-    if (r < -0.99) return null;
+    return isFinite(r) && r > -0.9999 ? r : null;
+  };
+
+  // Intenta primero un arranque optimista, luego pesimista.
+  for (const start of [0.10, -0.10, 0.50, -0.30]) {
+    const r = tryNR(start);
+    if (r !== null) return r;
   }
-  return isFinite(r) ? r : null;
+
+  // Bisección de respaldo: garantiza convergencia si existe raíz en [-0.95, 20].
+  const lo = -0.95, hi = 20.0;
+  const flo = npv(lo), fhi = npv(hi);
+  if (Math.sign(flo) === Math.sign(fhi)) return null; // sin raíz en el rango
+  let a = lo, b = hi;
+  for (let i = 0; i < 200; i++) {
+    const mid = (a + b) / 2;
+    if (Math.abs(b - a) < 1e-8) return mid;
+    if (Math.sign(npv(mid)) === Math.sign(npv(a))) a = mid;
+    else b = mid;
+  }
+  return (a + b) / 2;
 }
 
 // ─── Máximo drawdown ─────────────────────────────────────────────────────────
 
-function calcMaxDrawdown(snapshots: AnnualSnapshot[]): number | null {
-  if (snapshots.length < 2) return null;
-  let peak = snapshots[0].closingWealthEur;
+// Recibe la serie de patrimonio neto mensual (incluyendo el valor inicial en [0])
+// para detectar correcciones intra-anuales que los cierres diciembre-diciembre ocultan.
+function calcMaxDrawdown(monthlyWealth: number[]): number | null {
+  if (monthlyWealth.length < 2) return null;
+  let peak = monthlyWealth[0];
   let maxDD = 0;
-  for (const s of snapshots) {
-    if (s.closingWealthEur > peak) peak = s.closingWealthEur;
+  for (const w of monthlyWealth) {
+    if (w > peak) peak = w;
     if (peak > 0) {
-      const dd = (peak - s.closingWealthEur) / peak;
+      const dd = (peak - w) / peak;
       if (dd > maxDD) maxDD = dd;
     }
   }
-  return maxDD;
+  return maxDD > 0.001 ? maxDD : null; // null si drawdown < 0.1% (ruido de redondeo)
 }
 
 // ─── Ejecución de un escenario completo ──────────────────────────────────────
@@ -1171,11 +1213,17 @@ function runScenario(
     }
   }
 
+  // Consenso de analistas por activo (ajusta el multiplicador de pico ±30%)
+  const consensusByAsset = Object.fromEntries(
+    allAssetIds.map(id => [id, buildConsensus(KNOWN_FORECASTS, id, input.now)])
+  );
+
   const prices: Record<string, Record<string, number>> = {};
   for (const assetId of allAssetIds) {
     const currentPrice = currentPriceMap[assetId] ?? 1.0;
     prices[assetId] = buildPriceMap(
-      assetId, currentPrice, scenario, input.now, input.horizonDate
+      assetId, currentPrice, scenario, input.now, input.horizonDate,
+      consensusByAsset[assetId],
     );
   }
 
@@ -1253,20 +1301,30 @@ function runScenario(
     ? Math.pow(twrProduct, 12 / allMonthlyStates.length) - 1
     : null;
 
-  // XIRR contributions
-  const contributions = annualSnapshots.map(s => ({
-    date: new Date(s.year, 0, 1).getTime(),
-    amount: s.contributionsEur,
-  }));
+  // XIRR contributions: aprox. a mitad de año para representar DCA mensual.
+  // Clampeado a input.now para que el primer año parcial no genere t<0.
+  const contributions = annualSnapshots
+    .filter(s => s.contributionsEur > 0)
+    .map(s => ({
+      date: Math.max(input.now, new Date(s.year, 6, 1).getTime()),
+      amount: s.contributionsEur,
+    }));
 
   const xirr = calcXirr(
     initialWealth,
     contributions,
     lastSnap?.closingWealthEur ?? 0,
     input.horizonDate,
+    input.now,  // t=0 correcto: fecha de la inversión inicial
   );
 
-  const maxDD = calcMaxDrawdown(annualSnapshots);
+  // Serie mensual de patrimonio neto (incluye t=0 inicial) para detectar
+  // drawdowns intra-anuales que los cierres diciembre-diciembre enmascaran.
+  const monthlyWealthSeries: number[] = [initialWealth];
+  for (const { state: ms } of allMonthlyStates) {
+    monthlyWealthSeries.push(calcWealth(ms, monthKey(ms.monthDate)));
+  }
+  const maxDD = calcMaxDrawdown(monthlyWealthSeries);
 
   const finalState = prevYearLastMonth;
   const assetSummaries: AssetSimSummary[] = allAssetIds.map(assetId => {

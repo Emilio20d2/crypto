@@ -5,6 +5,7 @@
 // La trayectoria es determinista y reproducible dado assetId + escenario.
 
 import type { SimScenario, AssetTier } from "./types";
+import type { ForecastConsensus } from "./forecast-sources";
 
 // ─── Clasificación de tier ───────────────────────────────────────────────────
 
@@ -108,12 +109,14 @@ const CYCLE_MONTHS: Record<SimScenario, Record<AssetTier, number>> = {
 };
 
 // Multiplicador de precio en el pico del ciclo (sobre el precio de inicio del ciclo)
+// Parámetros calibrados para que el escenario Base produzca años bajistas reales
+// con un capital pequeño (DCA no compensa la caída) — verificado con BTC a ~€93k inicio.
 const CYCLE_PEAK_MULT: Record<SimScenario, Record<AssetTier, number>> = {
-  conservador: { store_of_value: 1.5,  large_cap: 1.8,  mid_cap: 2.0,  small_cap: 2.5,  speculative: 1.5 },
-  moderado:    { store_of_value: 2.5,  large_cap: 3.0,  mid_cap: 3.5,  small_cap: 4.0,  speculative: 2.0 },
-  base:        { store_of_value: 4.0,  large_cap: 5.0,  mid_cap: 6.0,  small_cap: 8.0,  speculative: 4.0 },
-  favorable:   { store_of_value: 7.0,  large_cap: 9.0,  mid_cap: 12.0, small_cap: 15.0, speculative: 8.0 },
-  optimista:   { store_of_value: 12.0, large_cap: 15.0, mid_cap: 20.0, small_cap: 25.0, speculative: 15.0 },
+  conservador: { store_of_value: 1.4,  large_cap: 1.6,  mid_cap: 1.8,  small_cap: 2.2,  speculative: 1.4 },
+  moderado:    { store_of_value: 2.0,  large_cap: 2.5,  mid_cap: 3.0,  small_cap: 3.5,  speculative: 2.0 },
+  base:        { store_of_value: 2.5,  large_cap: 3.5,  mid_cap: 4.5,  small_cap: 6.0,  speculative: 3.0 },
+  favorable:   { store_of_value: 4.5,  large_cap: 6.0,  mid_cap: 8.0,  small_cap: 10.0, speculative: 5.5 },
+  optimista:   { store_of_value: 7.0,  large_cap: 9.0,  mid_cap: 12.0, small_cap: 16.0, speculative: 9.0 },
 };
 
 // Drawdown desde el pico hasta el valle de capitulación
@@ -125,13 +128,15 @@ const CYCLE_DRAWDOWN: Record<SimScenario, Record<AssetTier, number>> = {
   optimista:   { store_of_value: 0.35, large_cap: 0.45, mid_cap: 0.55, small_cap: 0.62, speculative: 0.72 },
 };
 
-// Precio de inicio del siguiente ciclo relativo al valle (crecimiento inter-ciclo)
+// Precio de inicio del siguiente ciclo relativo al valle (crecimiento inter-ciclo).
+// Conservador < 1.0 refleja que ciclos prolongados pueden cotizar por debajo del
+// valle previo; base ≈ 1.1 implica ~10% de apreciación residual entre ciclos.
 const NEXT_CYCLE_MULT: Record<SimScenario, number> = {
-  conservador: 1.00,
-  moderado:    1.25,
-  base:        1.50,
-  favorable:   2.00,
-  optimista:   3.00,
+  conservador: 0.90,
+  moderado:    1.00,
+  base:        1.10,
+  favorable:   1.30,
+  optimista:   1.60,
 };
 
 // ─── Utilidades ───────────────────────────────────────────────────────────────
@@ -208,10 +213,15 @@ export function buildPricePath(
   scenario: SimScenario,
   startDate: number,
   horizonDate: number,
+  consensus?: ForecastConsensus,  // ajuste opcional basado en analistas
 ): PricePoint[] {
   const tier = getAssetTier(assetId);
   const cycleDuration = CYCLE_MONTHS[scenario][tier];
-  const peakMult      = CYCLE_PEAK_MULT[scenario][tier];
+  // Aplica ajuste de consenso de analistas al multiplicador de pico (±30% máx).
+  const basePeakMult  = CYCLE_PEAK_MULT[scenario][tier];
+  const peakMult      = consensus
+    ? basePeakMult * (1 + consensus.peakMultAdjustment)
+    : basePeakMult;
   const drawdownFrac  = CYCLE_DRAWDOWN[scenario][tier];
   const nextMult      = NEXT_CYCLE_MULT[scenario];
 
@@ -314,8 +324,9 @@ export function buildPriceMap(
   scenario: SimScenario,
   startDate: number,
   horizonDate: number,
+  consensus?: ForecastConsensus,
 ): Record<string, number> {
-  const path = buildPricePath(assetId, currentPriceEur, scenario, startDate, horizonDate);
+  const path = buildPricePath(assetId, currentPriceEur, scenario, startDate, horizonDate, consensus);
   const map: Record<string, number> = {};
   for (const pt of path) {
     const d = new Date(pt.monthDate);

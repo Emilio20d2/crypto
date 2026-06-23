@@ -350,8 +350,8 @@ function YearDetail({ snap }: { snap: AnnualSnapshot }) {
                 <tr key={p.assetId}>
                   <td>
                     <span className="font-mono font-semibold text-xs">{p.assetId.toUpperCase()}</span>
-                    {p.failed && <Badge variant="danger" style={{ marginLeft: 4 }}>Fallido</Badge>}
-                    {p.goalReached && <Badge variant="success" style={{ marginLeft: 4 }}>Obj.</Badge>}
+                    {p.failed && <span className="ml-1"><Badge variant="danger">Fallido</Badge></span>}
+                    {p.goalReached && <span className="ml-1"><Badge variant="success">Obj.</Badge></span>}
                   </td>
                   <td className="num font-mono text-xs">{p.balance.toPrecision(4)}</td>
                   <td className="num">{fmt(p.priceEur)}</td>
@@ -581,7 +581,7 @@ export function Perspectivas() {
   if (isLoading) {
     return (
       <div className="flex-1 overflow-y-auto">
-        <PageToolbar title="Perspectivas" icon={ChartNoAxesCombined} />
+        <PageToolbar title="Perspectivas" />
         <div className="p-4"><LoadingState message="Calculando simulación de perspectivas..." /></div>
       </div>
     );
@@ -592,10 +592,10 @@ export function Perspectivas() {
     if (msg.includes("No hay un plan de inversión activo")) {
       return (
         <div className="flex-1 overflow-y-auto">
-          <PageToolbar title="Perspectivas" icon={ChartNoAxesCombined} />
+          <PageToolbar title="Perspectivas" />
           <div className="p-4">
             <EmptyState
-              icon={ChartNoAxesCombined}
+              icon={<ChartNoAxesCombined />}
               title="Sin plan de inversión"
               description="Crea un plan de inversión activo en la sección Plan para ver las perspectivas de evolución."
             />
@@ -605,7 +605,7 @@ export function Perspectivas() {
     }
     return (
       <div className="flex-1 overflow-y-auto">
-        <PageToolbar title="Perspectivas" icon={ChartNoAxesCombined} />
+        <PageToolbar title="Perspectivas" />
         <div className="p-4"><ErrorState message={msg} /></div>
       </div>
     );
@@ -614,9 +614,9 @@ export function Perspectivas() {
   if (!simData || !activeScenario) {
     return (
       <div className="flex-1 overflow-y-auto">
-        <PageToolbar title="Perspectivas" icon={ChartNoAxesCombined} />
+        <PageToolbar title="Perspectivas" />
         <div className="p-4">
-          <EmptyState icon={ChartNoAxesCombined} title="Sin datos" description="No hay datos de simulación disponibles." />
+          <EmptyState icon={<ChartNoAxesCombined />} title="Sin datos" description="No hay datos de simulación disponibles." />
         </div>
       </div>
     );
@@ -630,7 +630,6 @@ export function Perspectivas() {
     <div className="flex-1 overflow-y-auto">
       <PageToolbar
         title="Perspectivas"
-        icon={ChartNoAxesCombined}
         actions={
           <div className="flex items-center gap-2">
             {isFetching && <span className="text-xs text-muted-foreground">Calculando…</span>}
