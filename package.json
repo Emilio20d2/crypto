@@ -11,8 +11,38 @@
     "7zip-bin": "^5.2.0"
   },
   "main": "dist/main.js",
+  "scripts": {
+    "build:desktop": "cd apps/desktop && tsc && cp dist/main.js ../../dist/main.js && cp dist/preload.js ../../dist/preload.js",
+    "dist:mac": "npm run build:desktop && electron-builder --mac --config.directories.output=dist-packaged"
+  },
   "private": true,
   "devDependencies": {
     "electron": "^30.5.1"
+  },
+  "build": {
+    "appId": "com.cryptocontrol.app",
+    "productName": "Crypto Control",
+    "directories": {
+      "output": "dist-packaged"
+    },
+    "npmRebuild": true,
+    "asarUnpack": [
+      "**/*.node",
+      "node_modules/better-sqlite3/**/*"
+    ],
+    "mac": {
+      "icon": "assets/brand/logo.icns",
+      "target": ["dmg"],
+      "category": "public.app-category.finance"
+    },
+    "extraResources": [
+      { "from": "assets/brand/logo.png", "to": "assets/brand/logo.png" },
+      { "from": "apps/web/dist", "to": "web/dist" },
+      { "from": "packages/database/drizzle", "to": "migrations" },
+      { "from": "apps/desktop/bin/keychain-helper", "to": "bin/keychain-helper" }
+    ],
+    "dmg": {
+      "title": "Crypto Control"
+    }
   }
 }

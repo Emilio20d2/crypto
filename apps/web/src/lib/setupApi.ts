@@ -142,6 +142,14 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
     strategicDecisions: {
       getCycleReport: (i: unknown) =>           ipc("strategicDecisions:getCycleReport", i),
     },
+    perspectives: {
+      getGoals:               () =>                          ipc("perspectives:getGoals"),
+      createGoal:             (data: unknown) =>             ipc("perspectives:createGoal", data),
+      updateGoal:             (id: unknown, data: unknown) => ipc("perspectives:updateGoal", id, data),
+      deleteGoal:             (id: unknown) =>               ipc("perspectives:deleteGoal", id),
+      getConsolidatedSnapshot: () =>                         ipc("perspectives:getConsolidatedSnapshot"),
+      getProjection:          (input?: unknown) =>           ipc("perspectives:getProjection", input),
+    },
     persp2: {
       getSimulation: (input?: { horizonYears?: number; policy?: string }) =>
         ipc("persp2:getSimulation", input),

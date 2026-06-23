@@ -91,6 +91,18 @@ interface ValidationResult {
   detail: string;
 }
 
+interface SimDiagnostics {
+  engineIsNew: true;
+  source: string;
+  engineVersion: string;
+  engineBuildHash: string;
+  engineGeneratedAt: number;
+  negativeMonthCount: number;
+  negativeYearCount: number;
+  maxDrawdownPct: number | null;
+  hasBearPeriods: boolean;
+}
+
 interface PerspectivesSimulation {
   computedAt: number;
   startYear: number;
@@ -98,6 +110,7 @@ interface PerspectivesSimulation {
   horizonDate: number;
   scenarios: ScenarioResult[];
   validations: ValidationResult[];
+  diagnostics: SimDiagnostics;
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -551,8 +564,23 @@ export function Perspectivas() {
     queryKey: ["persp2:getSimulation", horizonYears],
     queryFn: async () => {
       const result = await window.cryptoControl.persp2.getSimulation({ horizonYears }) as { ok: boolean; data?: unknown; error?: { message?: string } };
+      console.log("[Perspectivas] RAW SIMULATION RESPONSE:", JSON.stringify(result, null, 2).slice(0, 2000));
       if (!result.ok) throw new Error(result.error?.message ?? "Error en la simulación");
-      return result.data as PerspectivesSimulation;
+      const sim = result.data as PerspectivesSimulation;
+      console.log("[Perspectivas] MOTOR RECIBIDO:", {
+        engineVersion: sim.diagnostics?.engineVersion,
+        engineBuildHash: sim.diagnostics?.engineBuildHash,
+        source: sim.diagnostics?.source,
+        engineGeneratedAt: new Date(sim.diagnostics?.engineGeneratedAt ?? 0).toISOString(),
+        negativeYearCount: sim.diagnostics?.negativeYearCount,
+        negativeMonthCount: sim.diagnostics?.negativeMonthCount,
+        maxDrawdownPct: sim.diagnostics?.maxDrawdownPct,
+        hasBearPeriods: sim.diagnostics?.hasBearPeriods,
+        scenarioCount: sim.scenarios.length,
+        startYear: sim.startYear,
+        endYear: sim.endYear,
+      });
+      return sim;
     },
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,

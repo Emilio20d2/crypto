@@ -204,14 +204,26 @@ export interface AssetSimSummary {
 
 // ─── Resultado completo de la simulación ────────────────────────────────────
 
+export interface SimDiagnostics {
+  engineIsNew: true;
+  source: "perspectives-v2-cycle-model";
+  engineVersion: string;
+  engineBuildHash: string;
+  engineGeneratedAt: number;
+  negativeMonthCount: number;
+  negativeYearCount: number;
+  maxDrawdownPct: number | null;
+  hasBearPeriods: boolean;
+}
+
 export interface PerspectivesSimulation {
   computedAt: number;
   startYear: number;
   endYear: number;
   horizonDate: number;
   scenarios: ScenarioResult[];
-  // Validaciones de integridad
   validations: ValidationResult[];
+  diagnostics: SimDiagnostics;
 }
 
 export interface ValidationResult {

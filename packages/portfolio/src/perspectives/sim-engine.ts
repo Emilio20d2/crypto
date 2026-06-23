@@ -8,7 +8,7 @@ import type {
   AnnualSnapshot, AnnualAssetPosition, SimEvent, ScenarioResult,
   ScenarioSummary, AssetSimSummary, SimCycle, SimCycleAsset,
   SimSaleRule, SimRebuyTier, SimSubstitution, PerspectivesSimulation,
-  ValidationResult,
+  ValidationResult, SimDiagnostics,
 } from "./types";
 import { SIM_SCENARIOS, SCENARIO_LABELS, DEFAULT_SIM_OPTIONS } from "./types";
 import { buildPriceMap, monthKey } from "./price-model";
@@ -1426,6 +1426,27 @@ export function runPerspectivesSimulation(input: SimInput): PerspectivesSimulati
     });
   }
 
+  // Build diagnostics from base scenario
+  const baseResult = results.find(r => r.scenario === "base");
+  const negativeYearCount = baseResult
+    ? baseResult.annualSnapshots.filter(s => s.marketGainEur < 0).length
+    : 0;
+  const negativeMonthCount = results.reduce((acc, r) =>
+    acc + r.annualSnapshots.filter(s => s.marketGainEur < 0).length, 0);
+  const maxDrawdownPct = baseResult?.summary.maxDrawdownPct ?? null;
+
+  const diagnostics: SimDiagnostics = {
+    engineIsNew: true,
+    source: "perspectives-v2-cycle-model",
+    engineVersion: "perspectives-v2.1",
+    engineBuildHash: "6025cd3",
+    engineGeneratedAt: Date.now(),
+    negativeMonthCount,
+    negativeYearCount,
+    maxDrawdownPct,
+    hasBearPeriods: negativeYearCount > 0 || (maxDrawdownPct !== null && maxDrawdownPct > 0.05),
+  };
+
   return {
     computedAt: Date.now(),
     startYear,
@@ -1433,5 +1454,6 @@ export function runPerspectivesSimulation(input: SimInput): PerspectivesSimulati
     horizonDate: input.horizonDate,
     scenarios: results,
     validations,
+    diagnostics,
   };
 }
