@@ -5767,7 +5767,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    title: "Crypto Control",
+    title: "Crypto Control Nueva",
     icon: appIconPath,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -5800,7 +5800,7 @@ function createWindow() {
 }
 
 // Force correct userData path to match productName in electron-builder.yml
-app.setName("Crypto Control");
+app.setName("Crypto Control Nueva");
 
 const _processStart = Date.now();
 
