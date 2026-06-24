@@ -518,6 +518,7 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
     deleteGoal: (id: string) => Promise<Result<null>>;
     getConsolidatedSnapshot: () => Promise<Result<PlanConsolidatedSnapshot>>;
     getProjection: (input?: { horizonYears?: number; complianceRate?: number; simulationPolicy?: string }) => Promise<Result<ProjectionResult>>;
+    getAnalystForecasts: () => Promise<Result<unknown>>;
   };
   persp2: {
     getSimulation: (input?: { horizonYears?: number; policy?: "plan_base" | "full_strategy" }) => Promise<Result<unknown>>;

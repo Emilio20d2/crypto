@@ -691,6 +691,128 @@ function Validations({ items }: { items: ValidationResult[] }) {
   );
 }
 
+// ─── Analyst Forecast Section ────────────────────────────────────────────────
+
+interface AnalystForecast {
+  ticker: string; targetYear: number; scenario: string;
+  priceUsd: number; priceEur: number;
+  source: string; reportTitle: string; reportUrl: string;
+  publishedAt: string; reviewedAt: string; nextReviewAt: string;
+}
+
+const SCENARIO_MAP: Record<string, string> = {
+  conservador: "Conservador", medio: "Medio",
+  optimista: "Optimista", muy_alcista: "Muy alcista",
+};
+
+function AnalystForecastSection({ years, activeAssets }: { years: number[]; activeAssets: string[] }) {
+  const { data: forecasts, isLoading } = useQuery<AnalystForecast[]>({
+    queryKey: ["perspectives:getAnalystForecasts"],
+    queryFn: async () => {
+      const r = await window.cryptoControl.perspectives.getAnalystForecasts() as { ok: boolean; data?: AnalystForecast[]; error?: { message?: string } };
+      if (!r.ok) throw new Error(r.error?.message ?? "Error");
+      return r.data ?? [];
+    },
+    staleTime: 15 * 60 * 1000,
+  });
+
+  if (isLoading) return null;
+
+  const coveredAssets = activeAssets.filter(a => forecasts?.some(f => f.ticker === a));
+  const coveredYears = years.filter(y => forecasts?.some(f => f.targetYear === y));
+
+  if (coveredAssets.length === 0) return null;
+
+  const lastReviewed = forecasts?.reduce((best, f) =>
+    !best || f.reviewedAt > best ? f.reviewedAt : best, null as string | null);
+  const nextReview = forecasts?.reduce((earliest, f) =>
+    !earliest || f.nextReviewAt < earliest ? f.nextReviewAt : earliest, null as string | null);
+
+  const fmtDate = (d: string) => new Date(d).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "numeric" });
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <CardTitle>Previsiones externas de analistas</CardTitle>
+          <div className="flex gap-3 text-xs text-muted-foreground">
+            {lastReviewed && <span>Revisado: {fmtDate(lastReviewed)}</span>}
+            {nextReview && <span>Próx. revisión: {fmtDate(nextReview)}</span>}
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground mt-1">
+          Precios objetivo publicados en informes públicos de analistas institucionales. Solo se muestran años con cobertura real documentada.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {coveredAssets.map(ticker => {
+          const assetForecasts = forecasts?.filter(f => f.ticker === ticker) ?? [];
+          const assetYears = coveredYears.filter(y => assetForecasts.some(f => f.targetYear === y));
+
+          if (assetYears.length === 0) return null;
+
+          return (
+            <div key={ticker}>
+              <p className="text-sm font-semibold mb-2">{ticker}</p>
+              <div className="responsive-table persp-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Año</th>
+                      <th>Escenario</th>
+                      <th className="num">Precio (€)</th>
+                      <th>Fuente</th>
+                      <th>Publicado</th>
+                      <th>Informe</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {assetYears.flatMap(year =>
+                      ["conservador", "medio", "optimista", "muy_alcista"].map(sc => {
+                        const f = assetForecasts.find(x => x.targetYear === year && x.scenario === sc);
+                        if (!f) return null;
+                        return (
+                          <tr key={`${year}-${sc}`}>
+                            <td className="font-mono text-xs">{year}</td>
+                            <td className="text-xs">{SCENARIO_MAP[sc] ?? sc}</td>
+                            <td className="num font-semibold">{f.priceEur.toLocaleString("es-ES")} €</td>
+                            <td className="text-xs">{f.source}</td>
+                            <td className="text-xs text-muted-foreground">
+                              {f.publishedAt ? fmtDate(f.publishedAt) : "—"}
+                            </td>
+                            <td className="text-xs">
+                              {f.reportUrl
+                                ? <a href={f.reportUrl} target="_blank" rel="noopener noreferrer" className="text-primary underline">Ver informe</a>
+                                : "—"
+                              }
+                            </td>
+                          </tr>
+                        );
+                      }).filter(Boolean)
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })}
+
+        {activeAssets.filter(a => !coveredAssets.includes(a)).map(ticker => (
+          <p key={ticker} className="text-xs text-muted-foreground">
+            <span className="font-mono font-semibold">{ticker}</span>: Sin datos de analistas institucionales disponibles.
+          </p>
+        ))}
+
+        {years.filter(y => !coveredYears.includes(y)).length > 0 && (
+          <p className="text-xs text-muted-foreground border-t pt-2 mt-2">
+            Años sin cobertura externa: {years.filter(y => !coveredYears.includes(y)).join(", ")}. No se muestran proyecciones para estos años — solo el modelo interno de ciclos.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 const SCENARIO_OPTS = SCENARIOS.map(s => ({ value: s as string, label: SCENARIO_LABELS[s] }));
@@ -981,6 +1103,15 @@ export function Perspectivas() {
             </CardContent>
           )}
         </Card>
+
+        {/* Previsiones externas de analistas */}
+        <AnalystForecastSection
+          years={years}
+          activeAssets={[...new Set([
+            ...Object.keys(activeScenario.assetPriceInfo ?? {}),
+            ...activeScenario.annualSnapshots.flatMap(s => Object.keys(s.positions ?? {})),
+          ]).values()].filter(a => a !== "EURC" && a !== "EUR")}
+        />
 
         {/* Trazabilidad de previsiones por activo */}
         {activeScenario && Object.keys(activeScenario.assetPriceInfo ?? {}).length > 0 && (

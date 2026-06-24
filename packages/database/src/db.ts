@@ -352,7 +352,39 @@ export function ensureEssentialTables(): void {
     CREATE INDEX IF NOT EXISTS idx_strategic_signals_status ON strategic_signals (status);
     CREATE INDEX IF NOT EXISTS idx_strategic_signals_asset ON strategic_signals (asset_id);
     CREATE INDEX IF NOT EXISTS idx_strategic_signals_detected ON strategic_signals (detected_at);
+
+    -- Analyst forecast targets from real public reports
+    -- Primary key includes targetYear so multiple years can coexist per asset/scenario
+    CREATE TABLE IF NOT EXISTS analyst_targets_v2 (
+      ticker        TEXT    NOT NULL,
+      target_year   INTEGER NOT NULL,
+      scenario      TEXT    NOT NULL,
+      price_usd     REAL    NOT NULL,
+      source        TEXT    NOT NULL,
+      report_title  TEXT,
+      report_url    TEXT,
+      published_at  TEXT,
+      reviewed_at   TEXT    NOT NULL,
+      PRIMARY KEY (ticker, target_year, scenario)
+    );
   `);
+
+  // Migrate data from old analyst_targets (PK: ticker+scenario, only 2030 data) if needed
+  const legacy = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='analyst_targets'"
+  ).get() as { name: string } | undefined;
+  if (legacy) {
+    const existing = db.prepare(
+      "SELECT COUNT(*) as c FROM analyst_targets_v2"
+    ).get() as { c: number };
+    if (existing.c === 0) {
+      db.exec(`
+        INSERT OR IGNORE INTO analyst_targets_v2 (ticker, target_year, scenario, price_usd, source, report_title, report_url, published_at, reviewed_at)
+        SELECT ticker, targetYear, scenario, price, COALESCE(source,''), detail, url, '2024-01-01', COALESCE(updatedAt, date('now'))
+        FROM analyst_targets;
+      `);
+    }
+  }
 }
 
 export { schema };

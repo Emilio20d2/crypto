@@ -270,6 +270,7 @@ beforeEach(() => {
       deleteGoal:  async () => ({ ok: true as const, data: null }),
       getConsolidatedSnapshot: async (): Promise<any> => ({ ok: true as const, data: {} }),
       getProjection: async (): Promise<any> => ({ ok: true as const, data: {} }),
+      getAnalystForecasts: async (): Promise<any> => ({ ok: true as const, data: [] }),
     },
     smartBuy: {
       getRecommendation: async () => ({ ok: true as const, data: { cycleId: "mock-cycle", analyzedAmountEur: 200, totalPortfolioValueEur: 5000, recommendations: [], hasOpportunities: false, restrictionsApplied: [], dataQuality: "sin_datos" as const, generatedAt: 0 } }),

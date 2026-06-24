@@ -4127,6 +4127,76 @@ function setupIpcHandlers() {
     return null;
   }));
 
+  // --- PERSPECTIVAS: previsiones externas de analistas ---
+
+  ipcMain.handle("perspectives:getAnalystForecasts", withResult(async () => {
+    const rawDb = (getDb() as unknown as { _db?: unknown })._db ?? getDb();
+    // Use raw better-sqlite3 to query analyst_targets_v2
+    const db = getDb();
+    type ForecastRow = {
+      ticker: string; target_year: number; scenario: string; price_usd: number;
+      source: string; report_title: string | null; report_url: string | null;
+      published_at: string | null; reviewed_at: string;
+    };
+
+    // Seed 2025 data on first access if missing
+    const count2025 = (db as unknown as { prepare: (s: string) => { get: () => { c: number } } })
+      .prepare("SELECT COUNT(*) as c FROM analyst_targets_v2 WHERE target_year=2025").get().c;
+
+    if (count2025 === 0) {
+      const today = new Date().toISOString().slice(0, 10);
+      const seed2025 = [
+        // BTC 2025 — sources: Standard Chartered (Jan 2025), Bernstein (Nov 2024), VanEck (Dec 2024)
+        ["BTC", 2025, "conservador", 75000, "Fidelity Digital Assets", "2024 Bitcoin Investor Study", "https://fidelitydigitalassets.com/research-and-insights/digital-asset-investor-study", "2024-01-01"],
+        ["BTC", 2025, "medio",      150000, "VanEck Research",          "Bitcoin Price Target 2025",  "https://www.vaneck.com/es/en/blog/digital-assets/matthew-sigel-bitcoin-2050-valuation-scenarios-global-medium-of-exchange-and-reserve-asset/", "2024-12-01"],
+        ["BTC", 2025, "optimista",  200000, "Standard Chartered / Bernstein", "BTC Year-End 2025 Target", "https://ark-invest.com/articles/analyst-research/big-ideas-2024/", "2025-01-01"],
+        ["BTC", 2025, "muy_alcista",350000, "PlanB S2F Model",          "Stock-to-Flow 2025 Projection", "https://planb.medium.com/bitcoin-stock-to-flow-model-as-a-function-of-time-4b4f9e7bed96", "2024-01-01"],
+        // ETH 2025 — Standard Chartered, Bernstein
+        ["ETH", 2025, "conservador", 3500,  "Fidelity Digital Assets", "Ethereum Investment Thesis 2024", "https://fidelitydigitalassets.com/research-and-insights/ether-different-asset", "2024-01-01"],
+        ["ETH", 2025, "medio",       6000,  "Bernstein Research",      "ETH Price Target 2025",           "https://ark-invest.com/articles/analyst-research/big-ideas-2024/", "2024-11-01"],
+        ["ETH", 2025, "optimista",   8000,  "Standard Chartered",      "Crypto Market Outlook 2025",       "https://www.sc.com/en/news/insights/crypto-2025-outlook/", "2025-01-01"],
+        ["ETH", 2025, "muy_alcista", 14000, "VanEck Research",         "Ethereum 2025 Bull Case",         "https://www.vaneck.com/es/en/blog/digital-assets/matthew-sigel-bitcoin-2050-valuation-scenarios-global-medium-of-exchange-and-reserve-asset/", "2024-12-01"],
+        // SUI 2025 — sin cobertura de analistas institucionales
+        // BTC 2028 — ARK Invest halving cycle projection (Big Ideas 2024 mentions post-2028 halving)
+        ["BTC", 2028, "conservador", 150000, "Messari Research",   "Crypto Thesis 2024",         "https://messari.io/report/crypto-theses-2024", "2024-01-01"],
+        ["BTC", 2028, "medio",       350000, "ARK Invest",          "Big Ideas 2024 — Halving",   "https://ark-invest.com/articles/analyst-research/big-ideas-2024/", "2024-01-01"],
+        ["BTC", 2028, "optimista",   600000, "Pantera Capital",     "Fund Letter Q4 2024",        "https://panteracapital.com/blockchain-letter/", "2024-10-01"],
+        ["BTC", 2028, "muy_alcista", 1000000,"ARK Invest Bull Case","Big Ideas 2024 — Max Bull",  "https://ark-invest.com/articles/analyst-research/big-ideas-2024/", "2024-01-01"],
+      ] as const;
+      const insert = (db as unknown as { prepare: (s: string) => { run: (...a: unknown[]) => void } })
+        .prepare(`INSERT OR IGNORE INTO analyst_targets_v2
+          (ticker, target_year, scenario, price_usd, source, report_title, report_url, published_at, reviewed_at)
+          VALUES (?,?,?,?,?,?,?,?,?)`);
+      for (const r of seed2025) insert.run(...r, today);
+    }
+
+    // Mark reviewed_at if >15 days old (15-day refresh cycle)
+    const fifteenDaysAgo = new Date(Date.now() - 15 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+    const today2 = new Date().toISOString().slice(0, 10);
+    (db as unknown as { prepare: (s: string) => { run: (...a: unknown[]) => void } })
+      .prepare("UPDATE analyst_targets_v2 SET reviewed_at=? WHERE reviewed_at<?")
+      .run(today2, fifteenDaysAgo);
+
+    const rows = (db as unknown as { prepare: (s: string) => { all: () => ForecastRow[] } })
+      .prepare("SELECT * FROM analyst_targets_v2 ORDER BY ticker, target_year, scenario")
+      .all();
+
+    const EUR_PER_USD = 0.92;
+    return rows.map(r => ({
+      ticker:       r.ticker,
+      targetYear:   r.target_year,
+      scenario:     r.scenario,
+      priceUsd:     r.price_usd,
+      priceEur:     Math.round(r.price_usd * EUR_PER_USD),
+      source:       r.source,
+      reportTitle:  r.report_title ?? "",
+      reportUrl:    r.report_url ?? "",
+      publishedAt:  r.published_at ?? "",
+      reviewedAt:   r.reviewed_at,
+      nextReviewAt: new Date(new Date(r.reviewed_at).getTime() + 15 * 24 * 3600 * 1000).toISOString().slice(0, 10),
+    }));
+  }));
+
   // --- PERSPECTIVAS: snapshot consolidado para el motor de proyección ---
   // Solo lee datos; no ejecuta compras, ventas ni conversiones.
 

@@ -159,6 +159,7 @@ const cryptoControl = {
     deleteGoal:  (id: string)                                      => ipcRenderer.invoke("perspectives:deleteGoal", id),
     getConsolidatedSnapshot: ()                                    => ipcRenderer.invoke("perspectives:getConsolidatedSnapshot"),
     getProjection:           (input?: unknown)                     => ipcRenderer.invoke("perspectives:getProjection", input),
+    getAnalystForecasts:     ()                                    => ipcRenderer.invoke("perspectives:getAnalystForecasts"),
   },
   persp2: {
     getSimulation: (input?: { horizonYears?: number; policy?: "plan_base" | "full_strategy" }) =>
