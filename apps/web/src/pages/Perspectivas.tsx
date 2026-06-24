@@ -142,7 +142,10 @@ const SCENARIO_LABELS: Record<SimScenario, string> = {
   favorable:   "Favorable",
   optimista:   "Optimista",
 };
-const HORIZON_OPTIONS = [3, 5, 7, 10, 15, 20];
+const CURRENT_YEAR = new Date().getFullYear();
+// Opciones de año final: desde el año siguiente hasta 25 años vista
+const END_YEAR_OPTIONS: number[] = Array.from({ length: 25 }, (_, i) => CURRENT_YEAR + 1 + i);
+const DEFAULT_END_YEAR = CURRENT_YEAR + 10;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -212,6 +215,101 @@ function YearSelector({
           {y}
         </button>
       ))}
+    </div>
+  );
+}
+
+// ─── Asset price table (year by year) ────────────────────────────────────────
+
+interface AssetPriceTableProps {
+  scenarios: PerspectivesSimulation["scenarios"];
+  selectedScenario: SimScenario;
+}
+
+function AssetPriceTable({ scenarios, selectedScenario }: AssetPriceTableProps) {
+  const activeScenario = scenarios.find(s => s.scenario === selectedScenario);
+  if (!activeScenario || activeScenario.annualSnapshots.length === 0) return null;
+
+  // Collect all asset IDs that appear in any snapshot with a price
+  const assetIds = Array.from(new Set(
+    activeScenario.annualSnapshots.flatMap(s =>
+      Object.values(s.positions)
+        .filter(p => p.priceEur != null)
+        .map(p => p.assetId)
+    )
+  )).sort();
+
+  if (assetIds.length === 0) return null;
+
+  const snapshots = activeScenario.annualSnapshots;
+
+  // Format price compactly: €1.234 / €12.345 / €1,23M
+  function fmtPrice(v: number | null): string {
+    if (v == null) return "—";
+    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2).replace(".", ",")} M€`;
+    if (v >= 1_000) return `${Math.round(v).toLocaleString("es-ES")} €`;
+    return `${v.toFixed(2).replace(".", ",")} €`;
+  }
+
+  // Determine year direction vs previous year's price for the same asset
+  function direction(snap: AnnualSnapshot, prev: AnnualSnapshot | undefined, assetId: string): "up" | "down" | "flat" | null {
+    const cur = snap.positions[assetId]?.priceEur;
+    const prv = prev?.positions[assetId]?.priceEur;
+    if (cur == null || prv == null) return null;
+    const delta = (cur - prv) / prv;
+    if (delta > 0.02) return "up";
+    if (delta < -0.02) return "down";
+    return "flat";
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="responsive-table persp-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Año</th>
+              {assetIds.map(id => (
+                <th key={id} className="num">{id.toUpperCase()}</th>
+              ))}
+              <th className="num text-muted-foreground" style={{ fontSize: "0.75rem" }}>Resultado año</th>
+            </tr>
+          </thead>
+          <tbody>
+            {snapshots.map((snap, i) => {
+              const prev = snapshots[i - 1];
+              const marketDelta = snap.marketGainEur;
+              const phase = marketDelta > 0 ? "alcista" : marketDelta < -50 ? "bajista" : "lateral";
+              return (
+                <tr key={snap.year} className={snap.scope === "extrapol" ? "opacity-70" : ""}>
+                  <td>
+                    <span style={{ fontWeight: 600 }}>{snap.year}</span>
+                    {snap.scope === "extrapol" && <span className="ml-1 text-xs text-muted-foreground">*</span>}
+                  </td>
+                  {assetIds.map(id => {
+                    const price = snap.positions[id]?.priceEur ?? null;
+                    const dir = direction(snap, prev, id);
+                    const cls = dir === "up" ? "text-gain" : dir === "down" ? "text-loss" : "";
+                    const arrow = dir === "up" ? " ↑" : dir === "down" ? " ↓" : "";
+                    return (
+                      <td key={id} className={`num ${cls}`}>
+                        {fmtPrice(price)}{arrow}
+                      </td>
+                    );
+                  })}
+                  <td className={`num text-xs ${marketDelta >= 0 ? "text-gain" : "text-loss"}`}>
+                    {phase}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Precios proyectados por el modelo interno de ciclos de mercado. ↑ sube / ↓ baja respecto al año anterior (umbral ±2%).
+        {snapshots.some(s => s.scope === "extrapol") && " * Años extrapolados fuera del plan explícito."}
+      </p>
     </div>
   );
 }
@@ -595,18 +693,18 @@ function Validations({ items }: { items: ValidationResult[] }) {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
-const HORIZON_OPTS = HORIZON_OPTIONS.map(y => ({ value: String(y) as string, label: `${y}a` }));
 const SCENARIO_OPTS = SCENARIOS.map(s => ({ value: s as string, label: SCENARIO_LABELS[s] }));
 
 export function Perspectivas() {
-  const [horizonYears, setHorizonYears] = useState(10);
+  const [endYear, setEndYear] = useState(DEFAULT_END_YEAR);
+  const horizonYears = endYear - CURRENT_YEAR;
   const [selectedScenario, setSelectedScenario] = useState<SimScenario>("base");
   const [selectedYear, setSelectedYear] = useState<number | null>(null);
   const [showComparison, setShowComparison] = useState(false);
   const [showChart, setShowChart] = useState(true);
 
   const { data: simData, isLoading, error, isFetching } = useQuery<PerspectivesSimulation>({
-    queryKey: ["persp2:getSimulation", horizonYears],
+    queryKey: ["persp2:getSimulation", endYear],
     queryFn: async () => {
       const result = await window.cryptoControl.persp2.getSimulation({ horizonYears }) as { ok: boolean; data?: unknown; error?: { message?: string } };
       if (!result.ok) throw new Error(result.error?.message ?? "Error en la simulación");
@@ -706,13 +804,20 @@ export function Perspectivas() {
         <Card>
           <CardContent className="pt-4 space-y-3">
             <div className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">Horizonte</span>
-              <SegmentedControl
-                value={String(horizonYears)}
-                options={HORIZON_OPTS}
-                onChange={v => { setHorizonYears(Number(v)); setSelectedYear(null); }}
-                label="Horizonte de simulación"
-              />
+              <span className="text-xs text-muted-foreground">Año final</span>
+              <div className="flex items-center gap-2">
+                <select
+                  className="persp-year-select"
+                  value={endYear}
+                  onChange={e => { setEndYear(Number(e.target.value)); setSelectedYear(null); }}
+                  aria-label="Año final de la simulación"
+                >
+                  {END_YEAR_OPTIONS.map(y => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+                <span className="text-xs text-muted-foreground">({horizonYears} año{horizonYears !== 1 ? "s" : ""} desde {CURRENT_YEAR})</span>
+              </div>
             </div>
             <div className="flex flex-col gap-1">
               <span className="text-xs text-muted-foreground">Escenario</span>
@@ -820,6 +925,16 @@ export function Perspectivas() {
                 <YearDetail snap={selectedSnap} />
               </div>
             )}
+          </CardContent>
+        </Card>
+
+        {/* Asset price table year by year */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Precios por activo y año — {SCENARIO_LABELS[selectedScenario]}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <AssetPriceTable scenarios={simData.scenarios} selectedScenario={selectedScenario} />
           </CardContent>
         </Card>
 
