@@ -3211,6 +3211,7 @@ function setupIpcHandlers() {
         legId: schema.transactionLegs.id,
         assetId: schema.transactionLegs.assetId,
         amount: schema.transactionLegs.amount,
+        valuationEur: schema.transactionLegs.valuationEur,
         transactionDate: schema.transactions.date,
       })
       .from(schema.transactionLegs)
@@ -3246,16 +3247,33 @@ function setupIpcHandlers() {
       if (priceSeries.length === 0) continue;
 
       for (const leg of legs) {
+        let acquisitionValueEur: number | null = null;
+        let unitAcquisitionPriceEur: number | null = null;
+        let valuationSource: string;
+
         const price = priceAtOrBefore(priceSeries, leg.transactionDate);
         const backfill = computeBackfillForLeg({ id: leg.legId, assetId, amount: leg.amount, transactionDate: leg.transactionDate }, price);
-        if (!backfill) continue;
+
+        if (backfill) {
+          acquisitionValueEur = backfill.acquisitionValueEur;
+          unitAcquisitionPriceEur = backfill.unitAcquisitionPriceEur;
+          valuationSource = "historical-price-backfill";
+        } else if (leg.valuationEur != null && leg.valuationEur > 0 && leg.amount > 0) {
+          // Fallback: the leg already carries the EUR market value at transfer time.
+          // For transfer_in and convert_in legs this is the best available cost basis.
+          acquisitionValueEur = leg.valuationEur;
+          unitAcquisitionPriceEur = leg.valuationEur / leg.amount;
+          valuationSource = "valuation-eur-fallback";
+        } else {
+          continue;
+        }
 
         db.update(schema.transactionLegs)
           .set({
-            acquisitionValueEur: backfill.acquisitionValueEur,
-            unitAcquisitionPriceEur: backfill.unitAcquisitionPriceEur,
+            acquisitionValueEur,
+            unitAcquisitionPriceEur,
             valuationStatus: "estimated",
-            valuationSource: "historical-price-backfill",
+            valuationSource,
             valuationTimestamp: Date.now(),
           })
           .where(eq(schema.transactionLegs.id, leg.legId))
