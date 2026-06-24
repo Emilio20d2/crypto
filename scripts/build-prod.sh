@@ -123,7 +123,7 @@ echo "  dist/preload.js: $(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$REPO_ROOT/dist
 echo ""
 echo "→ Validando frescura de artefactos…"
 NOW_TS=$(date +%s)
-WEB_MTIME=$(stat -f %m "$WEB_BUNDLE")
+WEB_MTIME=$(stat -f %m "$MAIN_BUNDLE")
 MAIN_MTIME=$(stat -f %m "$REPO_ROOT/dist/main.js")
 MAX_AGE=300  # 5 minutos
 
