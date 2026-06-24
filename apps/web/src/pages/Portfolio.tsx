@@ -257,11 +257,13 @@ export function Portfolio() {
     const reconstructed = toChartPoints(reconstructedSeries);
     if (reconstructed.length < 2) return [];
 
-    // Pin the chart's right edge to the live breakdown value (refreshes every
-    // 5 s) so price changes are visible immediately without waiting for the
-    // heavier historical-series fetch interval.
-    // Includes EURC (stablecoin reserve) and excludes EUR fiat — same definition
-    // as the header's "Valor total" so the last chart point matches exactly.
+    // Only pin the live value for short periods (1h, 24h) where the series
+    // refreshes every 5s and the live point is genuinely contemporaneous.
+    // For longer periods (1w, 1m, 1y, all) the last historical point may be
+    // hours or days old: appending a live value from a different time creates
+    // an artificial spike/drop at the right edge of the chart.
+    if (period !== "1h" && period !== "24h") return reconstructed;
+
     const liveBreakdown = breakdownRes?.ok && breakdownRes.data.state === "live" ? breakdownRes.data : null;
     if (liveBreakdown) {
       const liveValue = liveBreakdown.positions.reduce(
@@ -282,7 +284,7 @@ export function Portfolio() {
       }
     }
     return reconstructed;
-  }, [reconstructedSeries, breakdownRes]);
+  }, [reconstructedSeries, breakdownRes, period]);
 
   const localPositionMap = useMemo((): Record<string, number> => {
     const rawPositions = localPositionsRes?.ok ? (localPositionsRes.data as any)?.positions : null;

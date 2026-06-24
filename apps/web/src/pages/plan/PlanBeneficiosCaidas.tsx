@@ -1,7 +1,7 @@
-import { useState, type FormEvent } from "react";
+import { useState, type ReactNode, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { PlusCircle, TrendingDown, TrendingUp, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, PlusCircle, TrendingDown, TrendingUp, Trash2 } from "lucide-react";
 import { Button } from "../../components/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/Card";
 import { Input } from "../../components/Input";
@@ -51,6 +51,59 @@ const RISK_BADGE: Record<string, string> = {
   muy_alto: "badge-error",
 };
 
+function ProposalCard({
+  header,
+  metrics,
+  reason,
+  badge,
+}: {
+  header: ReactNode;
+  metrics: { label: string; value: string }[];
+  reason: string;
+  badge?: ReactNode;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const shortReason = reason.length > 120 ? reason.slice(0, 120).trimEnd() + "…" : reason;
+
+  return (
+    <article className="substitution-card" style={{ padding: "10px 12px" }}>
+      {/* Header row */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+        <span style={{ fontWeight: 600, fontSize: "0.85rem", flexShrink: 0 }}>{header}</span>
+        {badge && <span style={{ marginLeft: "auto", flexShrink: 0 }}>{badge}</span>}
+      </div>
+
+      {/* Metric grid */}
+      {metrics.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "2px 12px", marginBottom: 6 }}>
+          {metrics.map(m => (
+            <div key={m.label} style={{ display: "flex", gap: 4, fontSize: "0.78rem" }}>
+              <span style={{ color: "var(--color-text-muted)" }}>{m.label}:</span>
+              <span style={{ fontWeight: 500 }}>{m.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Collapsible reason */}
+      {reason && (
+        <div style={{ fontSize: "0.78rem", color: "var(--color-text-muted)" }}>
+          <span>{expanded ? reason : shortReason}</span>
+          {reason.length > 120 && (
+            <button
+              type="button"
+              onClick={() => setExpanded(v => !v)}
+              style={{ background: "none", border: "none", cursor: "pointer", padding: "0 4px", color: "var(--color-primary)", fontSize: "0.75rem", display: "inline-flex", alignItems: "center", gap: 2 }}
+            >
+              {expanded ? <><ChevronUp size={11} /> Menos</> : <><ChevronDown size={11} /> Ver análisis</>}
+            </button>
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
+
 function AutomaticProposals({ report, loading }: { report: CycleStrategyReport | null; loading: boolean }) {
   const saleProposals = report?.partialSaleProposals ?? [];
   const rebuyProposals = report?.rebuyProposals ?? [];
@@ -64,7 +117,7 @@ function AutomaticProposals({ report, loading }: { report: CycleStrategyReport |
       </CardHeader>
       <CardContent>
         <p className="panel-caption">
-          Generadas con fase de mercado, sentimiento por activo, Fear & Greed, datos de mercado y señales públicas de medios/analistas cuando están disponibles. No ejecutan operaciones automáticamente.
+          Generadas con fase de mercado, sentimiento por activo, Fear &amp; Greed, datos de mercado y señales públicas de medios/analistas cuando están disponibles. No ejecutan operaciones automáticamente.
         </p>
 
         {loading ? (
@@ -72,81 +125,78 @@ function AutomaticProposals({ report, loading }: { report: CycleStrategyReport |
         ) : !report ? (
           <p className="empty-inline">No se pudieron calcular propuestas automáticas.</p>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div className="investment-distribution">
               <span>Fase: <strong>{report.marketPhase.phase}</strong></span>
               <span>Confianza: <strong>{report.marketPhase.confidence}</strong></span>
               <span>Indicadores: <strong>{report.marketPhase.indicatorsUsed.length}</strong></span>
             </div>
-            <p className="substitution-meta">{report.marketPhase.reasoning}</p>
 
             <section>
-              <h3 className="plan-section-title" style={{ marginBottom: 8 }}>Ventas sugeridas</h3>
+              <h3 className="plan-section-title" style={{ marginBottom: 6 }}>Ventas sugeridas</h3>
               {actionableSales.length === 0 ? (
                 <p className="empty-inline">No hay ventas sugeridas ahora. Las posiciones se mantienen en observación.</p>
               ) : (
                 <div className="substitution-list">
                   {actionableSales.map((proposal) => (
-                    <article key={`${proposal.assetId}-${proposal.type}`} className="substitution-card">
-                      <div className="substitution-card-header">
-                        <span className="substitution-assets">
-                          <strong>{proposal.assetId}</strong> — {PROPOSAL_LABELS[proposal.type] ?? proposal.type}
-                        </span>
-                        <span className={`badge ${RISK_BADGE[proposal.riskLevel] ?? ""}`}>{proposal.riskLevel}</span>
-                      </div>
-                      <p className="substitution-meta">
-                        {proposal.percentageSuggested != null
-                          ? `Sugerido: vender ${proposal.percentageSuggested}% y mantener ${Math.max(0, 100 - proposal.percentageSuggested).toFixed(2)}%`
-                          : "Sin venta directa; vigilar"}
-                        {proposal.estimatedProceedsEur != null ? ` · Estimado: ${formatEur(proposal.estimatedProceedsEur)}` : ""}
-                      </p>
-                      <p className="substitution-notes">{proposal.reason}</p>
-                    </article>
+                    <ProposalCard
+                      key={`${proposal.assetId}-${proposal.type}`}
+                      header={<><strong>{proposal.assetId}</strong> — {PROPOSAL_LABELS[proposal.type] ?? proposal.type}</>}
+                      badge={<span className={`badge ${RISK_BADGE[proposal.riskLevel] ?? ""}`}>{proposal.riskLevel}</span>}
+                      metrics={[
+                        proposal.percentageSuggested != null
+                          ? { label: "Vender", value: `${proposal.percentageSuggested}%` }
+                          : { label: "Acción", value: "Vigilar" },
+                        ...(proposal.estimatedProceedsEur != null
+                          ? [{ label: "Estimado", value: formatEur(proposal.estimatedProceedsEur) }]
+                          : []),
+                      ]}
+                      reason={proposal.reason}
+                    />
                   ))}
                 </div>
               )}
             </section>
 
             <section>
-              <h3 className="plan-section-title" style={{ marginBottom: 8 }}>Recompras sugeridas</h3>
+              <h3 className="plan-section-title" style={{ marginBottom: 6 }}>Recompras sugeridas</h3>
               {rebuyProposals.length === 0 ? (
                 <p className="empty-inline">No hay recompras sugeridas con las señales actuales.</p>
               ) : (
                 <div className="substitution-list">
                   {rebuyProposals.map((proposal, index) => (
-                    <article key={`${proposal.assetId}-${proposal.triggerDropPercentage}-${index}`} className="substitution-card">
-                      <div className="substitution-card-header">
-                        <span className="substitution-assets">
-                          <strong>{proposal.assetId}</strong> — Recompra en caída {proposal.triggerDropPercentage}%
-                        </span>
+                    <ProposalCard
+                      key={`${proposal.assetId}-${proposal.triggerDropPercentage}-${index}`}
+                      header={<><strong>{proposal.assetId}</strong> — Recompra en caída {proposal.triggerDropPercentage}%</>}
+                      badge={
                         <span className={`badge ${proposal.proposedAmountEur > 0 ? "badge-success" : "badge-warning"}`}>
-                          {proposal.proposedAmountEur > 0 ? formatEur(proposal.proposedAmountEur) : "Pendiente de EURC"}
+                          {proposal.proposedAmountEur > 0 ? formatEur(proposal.proposedAmountEur) : "Sin EURC"}
                         </span>
-                      </div>
-                      <p className="substitution-meta">
-                        Liquidez libre: {formatEur(proposal.availableLiquidityEur)}
-                        {" · "}Propuesta: {formatEur(proposal.proposedAmountEur)}
-                        {" · "}Quedará: {formatEur(Math.max(0, proposal.availableLiquidityEur - proposal.proposedAmountEur))}
-                      </p>
-                      <p className="substitution-notes">{proposal.reason}</p>
-                    </article>
+                      }
+                      metrics={[
+                        { label: "Liquidez", value: formatEur(proposal.availableLiquidityEur) },
+                        { label: "Propuesta", value: formatEur(proposal.proposedAmountEur) },
+                        { label: "Queda", value: formatEur(Math.max(0, proposal.availableLiquidityEur - proposal.proposedAmountEur)) },
+                      ]}
+                      reason={proposal.reason}
+                    />
                   ))}
                 </div>
               )}
             </section>
 
-            {report.riskSummary.length > 0 ? (
+            {report.riskSummary.length > 0 && (
               <section>
-                <h3 className="plan-section-title" style={{ marginBottom: 8 }}>Riesgos detectados</h3>
+                <h3 className="plan-section-title" style={{ marginBottom: 6 }}>Riesgos detectados</h3>
                 <div className="substitution-list">
                   {report.riskSummary.map((item) => (
-                    <article key={item} className="substitution-card">
-                      <p className="substitution-notes">{item}</p>
+                    <article key={item} className="substitution-card" style={{ padding: "8px 12px" }}>
+                      <p style={{ fontSize: "0.78rem", color: "var(--color-text-muted)", margin: 0 }}>{item}</p>
                     </article>
                   ))}
                 </div>
               </section>
-            ) : null}
+            )}
           </div>
         )}
       </CardContent>

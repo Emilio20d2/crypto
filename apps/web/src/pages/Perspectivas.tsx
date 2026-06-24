@@ -146,9 +146,8 @@ const SCENARIO_LABELS: Record<SimScenario, string> = {
   optimista:   "Optimista",
 };
 const CURRENT_YEAR = new Date().getFullYear();
-// Opciones de año final: desde el año siguiente hasta 20 años vista
-const END_YEAR_OPTIONS: number[] = Array.from({ length: 20 }, (_, i) => CURRENT_YEAR + 1 + i);
-const DEFAULT_END_YEAR = CURRENT_YEAR + 10;
+const HORIZON_YEARS = 20; // siempre 2026-2045, no configurable
+const END_YEAR = CURRENT_YEAR + HORIZON_YEARS;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -667,15 +666,13 @@ function EurcReconciliationSection({ sum }: { sum: ScenarioSummary }) {
 const SCENARIO_OPTS = SCENARIOS.map(s => ({ value: s as string, label: SCENARIO_LABELS[s] }));
 
 export function Perspectivas() {
-  const [endYear, setEndYear] = useState(DEFAULT_END_YEAR);
-  const horizonYears = endYear - CURRENT_YEAR;
   const [selectedScenario, setSelectedScenario] = useState<SimScenario>("base");
   const [selectedYear, setSelectedYear] = useState<number | null>(null);
 
   const { data: simData, isLoading, error, isFetching } = useQuery<PerspectivesSimulation>({
-    queryKey: ["persp2:getSimulation", endYear],
+    queryKey: ["persp2:getSimulation", END_YEAR],
     queryFn: async () => {
-      const result = await window.cryptoControl.persp2.getSimulation({ horizonYears }) as { ok: boolean; data?: unknown; error?: { message?: string } };
+      const result = await window.cryptoControl.persp2.getSimulation({ horizonYears: HORIZON_YEARS }) as { ok: boolean; data?: unknown; error?: { message?: string } };
       if (!result.ok) throw new Error(result.error?.message ?? "Error en la simulación");
       const sim = result.data as PerspectivesSimulation;
       return sim;
@@ -771,21 +768,8 @@ export function Perspectivas() {
         {/* Selectors */}
         <Card>
           <CardContent className="pt-4 space-y-3">
-            <div className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">Año final</span>
-              <div className="flex items-center gap-2">
-                <select
-                  className="persp-year-select"
-                  value={endYear}
-                  onChange={e => { setEndYear(Number(e.target.value)); setSelectedYear(null); }}
-                  aria-label="Año final de la simulación"
-                >
-                  {END_YEAR_OPTIONS.map(y => (
-                    <option key={y} value={y}>{y}</option>
-                  ))}
-                </select>
-                <span className="text-xs text-muted-foreground">({horizonYears} año{horizonYears !== 1 ? "s" : ""} desde {CURRENT_YEAR})</span>
-              </div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Horizonte: {CURRENT_YEAR}–{END_YEAR} ({HORIZON_YEARS} años)</span>
             </div>
             <div className="flex flex-col gap-1">
               <span className="text-xs text-muted-foreground">Escenario</span>

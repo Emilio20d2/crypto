@@ -5724,6 +5724,20 @@ function setupIpcHandlers() {
   setTimeout(() => runTradeAlertCheck(), 30_000);
   setInterval(() => runTradeAlertCheck(), 15 * 60 * 1000);
 
+  // Backfill cost basis on startup so pending legs (rewards, transfers, converts)
+  // get resolved immediately without requiring a manual Coinbase sync.
+  setTimeout(() => {
+    backfillCostBasis()
+      .then(async (r) => {
+        console.log(`[CostBasis] Startup backfill: ${r.legsBackfilled}/${r.legsChecked} legs resueltos, ${r.legsStillPending} siguen pendientes.`);
+        if (r.legsBackfilled > 0) {
+          await getPortfolioService().recalculateFifo();
+          console.log("[CostBasis] FIFO recalculado tras backfill de arranque.");
+        }
+      })
+      .catch((e) => console.warn("[CostBasis] Startup backfill falló:", e));
+  }, 10_000);
+
 }
 
 function createWindow() {
