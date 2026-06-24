@@ -4562,12 +4562,28 @@ function setupIpcHandlers() {
       prices[assetId] = finiteOrNull(r.price);
     }));
 
-    const currentPositions = investablePositionIds.map(assetId => ({
-      assetId,
-      balance: portfolioPositions[assetId]?.balance ?? 0,
-      avgCostEur: finiteOrNull(portfolioPositions[assetId]?.averagePriceEur ?? null),
-      currentPriceEur: prices[assetId] ?? null,
-    }));
+    // Include plan-only assets (balance=0) so the sim engine gets real prices,
+    // not the 1.0 EUR fallback that causes wrong DCA projections.
+    const planOnlyAssetIds = allAssetRows
+      .map(a => a.assetId)
+      .filter(isInvestableAsset)
+      .filter(id => !investablePositionIds.includes(id));
+    const planOnlySet = new Set(planOnlyAssetIds);
+
+    const currentPositions = [
+      ...investablePositionIds.map(assetId => ({
+        assetId,
+        balance: portfolioPositions[assetId]?.balance ?? 0,
+        avgCostEur: finiteOrNull(portfolioPositions[assetId]?.averagePriceEur ?? null),
+        currentPriceEur: prices[assetId] ?? null,
+      })),
+      ...[...planOnlySet].map(assetId => ({
+        assetId,
+        balance: 0,
+        avgCostEur: null,
+        currentPriceEur: prices[assetId] ?? null,
+      })),
+    ];
 
     const currentLots = lotRows
       .filter(l => isInvestableAsset(l.assetId))
