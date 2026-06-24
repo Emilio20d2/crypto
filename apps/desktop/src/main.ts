@@ -5678,6 +5678,9 @@ function createWindow() {
   }
 }
 
+// Force correct userData path to match productName in electron-builder.yml
+app.setName("Crypto Control");
+
 app.whenReady().then(() => {
   setupDatabase();
   setupIpcHandlers();
