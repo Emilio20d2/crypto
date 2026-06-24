@@ -13,7 +13,7 @@
   "main": "dist/main.js",
   "scripts": {
     "build:desktop": "cd apps/desktop && tsc && cp dist/main.js ../../dist/main.js && cp dist/preload.js ../../dist/preload.js",
-    "dist:mac": "npm run build:desktop && electron-builder --mac --config.directories.output=dist-packaged"
+    "dist:mac": "cd apps/web && npm run build && cd ../.. && npm run build:desktop && electron-builder --mac --config.directories.output=dist-packaged"
   },
   "private": true,
   "devDependencies": {
