@@ -5771,8 +5771,8 @@ app.setName("Crypto Control");
 
 app.whenReady().then(() => {
   setupDatabase();
-  setupIpcHandlers();
-  createWindow();
+  createWindow();       // show window first so the user sees it immediately
+  setupIpcHandlers();   // register handlers while renderer is loading its JS
 
   app.on("activate", function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
