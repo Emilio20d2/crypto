@@ -190,23 +190,34 @@ function initState(input: SimInput): MonthlyState {
 
 // ─── Obtener el ciclo activo para una fecha ───────────────────────────────────
 
+// Normaliza un timestamp al inicio del día en hora local para evitar que
+// diferencias de zona horaria (CET/CEST vs UTC) rompan los límites de ciclo.
+function localDayStart(ms: number): number {
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
 function getActiveCycle(cycles: SimCycle[], date: number): SimCycle | null {
-  // Find all cycles whose date range covers `date`
-  const active = cycles.filter(c =>
-    c.startDate <= date && (c.endDate == null || c.endDate > date)
-  );
+  const dayMs = localDayStart(date);
+  const active = cycles.filter(c => {
+    const start = localDayStart(c.startDate);
+    const end   = c.endDate != null ? localDayStart(c.endDate) : null;
+    return start <= dayMs && (end == null || end > dayMs);
+  });
   if (active.length === 0) return null;
-  // When multiple cycles overlap (e.g. new cycle starts mid-year while old one hasn't ended),
-  // pick the one with the latest startDate — the most recently started cycle takes priority.
+  // When multiple cycles overlap, pick the one with the latest startDate.
   return active.reduce((best, c) => c.startDate > best.startDate ? c : best);
 }
 
 function getActiveCycleAssets(cycle: SimCycle, date: number): SimCycleAsset[] {
-  return cycle.assets.filter(a =>
-    a.startDate <= date &&
-    (a.endDate == null || a.endDate > date) &&
-    (a.status === "active" || a.status === "goal_reached")
-  );
+  const dayMs = localDayStart(date);
+  return cycle.assets.filter(a => {
+    const start = localDayStart(a.startDate);
+    const end   = a.endDate != null ? localDayStart(a.endDate) : null;
+    return start <= dayMs && (end == null || end > dayMs) &&
+      (a.status === "active" || a.status === "goal_reached");
+  });
 }
 
 // ─── Distribución mensual de aportaciones ────────────────────────────────────
@@ -872,7 +883,8 @@ function simulateMonth(
   }
 
   // 6. Add monthly contribution
-  if (activeCycle && activeCycle.startDate <= date && (activeCycle.endDate == null || activeCycle.endDate > date)) {
+  const _dayMs = localDayStart(date);
+  if (activeCycle && localDayStart(activeCycle.startDate) <= _dayMs && (activeCycle.endDate == null || localDayStart(activeCycle.endDate) > _dayMs)) {
     const budget = activeCycle.monthlyAmountEur;
     const allocations = distributeMonthly(activeCycle, cycleAssets, budget, next.assetStates);
 
