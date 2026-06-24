@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Database, KeyRound, MonitorCog, Settings, Shield, SlidersHorizontal } from "lucide-react";
+import { BUILD_INFO } from "../lib/buildInfo";
 import { useNavigate, useParams } from "react-router-dom";
 import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
@@ -90,6 +91,15 @@ function DiagnosticsPanel() {
           ))}
         </div>
       )}
+
+      {/* BUILD VALIDATION — identifies the compiled commit unambiguously */}
+      <div style={{ marginTop: 16, padding: "10px 14px", background: "var(--color-surface-alt, #1e1e2e)", borderRadius: 6, fontFamily: "monospace", fontSize: "0.78rem", lineHeight: 1.8 }}>
+        <div style={{ fontWeight: 700, marginBottom: 4, color: "var(--color-primary)" }}>BUILD VALIDATION</div>
+        <div>Commit: <strong>{BUILD_INFO.commit}</strong></div>
+        <div>Commit corto: <strong>{BUILD_INFO.commitShort}</strong></div>
+        <div>Rama: <strong>{BUILD_INFO.branch}</strong></div>
+        <div>Compilado: <strong>{new Date(BUILD_INFO.builtAt).toLocaleString("es-ES")}</strong></div>
+      </div>
     </>
   );
 }

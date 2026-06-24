@@ -1,5 +1,6 @@
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BUILD_INFO } from "./lib/buildInfo";
 import { ArrowRightLeft, BriefcaseBusiness, ChartNoAxesCombined, Landmark, LineChart, Receipt, Settings, Target } from "lucide-react";
 import { AppShell, type NavigationItem } from "./components/AppShell";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -22,6 +23,12 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+// Build identity — visible in browser console and Configuración > Diagnóstico
+console.log(
+  `%c[BUILD] commit=${BUILD_INFO.commitShort} branch=${BUILD_INFO.branch} builtAt=${BUILD_INFO.builtAt}`,
+  "color:#6366f1;font-weight:bold"
+);
 
 const NAV_ITEMS: NavigationItem[] = [
   { to: "/cartera", label: "Cartera", icon: BriefcaseBusiness, end: true },
