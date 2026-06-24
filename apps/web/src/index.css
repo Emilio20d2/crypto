@@ -4399,6 +4399,10 @@ dd {
   white-space: normal;
   min-width: 90px;
 }
+.persp-row-no-coverage td {
+  color: var(--text-muted);
+  font-style: italic;
+}
 
 .fiscal-tax-note {
   font-size: 12px;

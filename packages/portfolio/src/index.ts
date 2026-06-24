@@ -24,6 +24,10 @@ export type {
   ScenarioResult, ScenarioSummary, AssetSimSummary,
   PerspectivesSimulation, CurrentPosition, HistoricalLot,
   SimInput, SimCycle, SimCycleAsset, SimSaleRule, SimRebuyTier,
-  SimSubstitution, SimRevision, SimOptions, TaxBand, PricePoint,
+  SimSubstitution, SimRevision, SimOptions, TaxBand,
+  PriceModelType, CoverageState, ExternalPriceResult,
 } from "./perspectives";
-export { SIM_SCENARIOS, SCENARIO_LABELS, DEFAULT_SPANISH_TAX_BANDS, DEFAULT_SIM_OPTIONS, buildPricePath, buildPriceMap, monthKey, runPerspectivesSimulation } from "./perspectives";
+export {
+  SIM_SCENARIOS, SCENARIO_LABELS, DEFAULT_SPANISH_TAX_BANDS, DEFAULT_SIM_OPTIONS,
+  monthKey, runPerspectivesSimulation, buildExternalPriceMap,
+} from "./perspectives";

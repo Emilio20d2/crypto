@@ -11,8 +11,10 @@ import type {
   ValidationResult, SimDiagnostics, AssetPriceInfo,
 } from "./types";
 import { SIM_SCENARIOS, SCENARIO_LABELS, DEFAULT_SIM_OPTIONS } from "./types";
-import { buildPriceMap, monthKey, getAssetTier, CIRCULATING_SUPPLY_M } from "./price-model";
-import { buildConsensus } from "./forecast-sources";
+import {
+  buildExternalPriceMap, monthKey, getAssetTier, CIRCULATING_SUPPLY_M,
+  type CoverageState,
+} from "./external-price-builder";
 import { KNOWN_FORECASTS } from "./known-forecasts";
 
 // ─── FIFO helpers ─────────────────────────────────────────────────────────────
@@ -987,6 +989,7 @@ function buildAnnualSnapshot(
   prices: Record<string, Record<string, number>>,
   lastMonthPrevYear: MonthlyState | null,
   input: SimInput,
+  yearCoverageStates: CoverageState[],
 ): AnnualSnapshot {
   if (monthsOfYear.length === 0) throw new Error(`No months for year ${year}`);
 
@@ -1151,6 +1154,7 @@ function buildAnnualSnapshot(
     events,
     salesSkipReasons,
     rebuysSkipReasons,
+    forecastCoverage: yearCoverageStates.some(s => s !== "uncovered") ? "covered" : "uncovered",
   };
 }
 
@@ -1263,40 +1267,46 @@ function runScenario(
     }
   }
 
-  // Consenso de analistas por activo (ajusta el multiplicador de pico ±30%)
-  const consensusByAsset = Object.fromEntries(
-    allAssetIds.map(id => [id, buildConsensus(KNOWN_FORECASTS, id, input.now)])
-  );
-
+  // Construir mapas de precios a partir exclusivamente de previsiones externas verificables.
+  // Sin modelo de ciclos interno. Sin extrapolación inventada.
+  const externalResultsByAsset: Record<string, ReturnType<typeof buildExternalPriceMap>> = {};
   const prices: Record<string, Record<string, number>> = {};
   for (const assetId of allAssetIds) {
     const currentPrice = currentPriceMap[assetId] ?? 1.0;
-    prices[assetId] = buildPriceMap(
-      assetId, currentPrice, scenario, input.now, input.horizonDate,
-      consensusByAsset[assetId],
+    const result = buildExternalPriceMap(
+      assetId, currentPrice, scenario, input.now, input.horizonDate, KNOWN_FORECASTS,
     );
+    externalResultsByAsset[assetId] = result;
+    prices[assetId] = result.pricesByMonth;
   }
 
-  // Trazabilidad de previsiones por activo
+  // Trazabilidad de previsiones por activo (exclusivamente externa)
   const horizonMKey = monthKey(input.horizonDate);
+  const horizonYear = new Date(input.horizonDate).getFullYear();
   const assetPriceInfo: Record<string, AssetPriceInfo> = {};
   for (const assetId of allAssetIds) {
     const currentPos = input.currentPositions.find(p => p.assetId === assetId);
     const currentPriceEur = currentPos?.currentPriceEur ?? null;
     const horizonPriceEur = prices[assetId]?.[horizonMKey] ?? null;
     const tier = getAssetTier(assetId);
-    const consensus = consensusByAsset[assetId];
+    const extResult = externalResultsByAsset[assetId];
     const priceMultiple = currentPriceEur && currentPriceEur > 0 && horizonPriceEur
       ? horizonPriceEur / currentPriceEur : null;
     const supplyM = CIRCULATING_SUPPLY_M[assetId.toUpperCase()] ?? null;
     const impliedMarketCapBnEur = supplyM != null && horizonPriceEur != null
       ? (horizonPriceEur * supplyM) / 1_000 : null;
+    const horizonCoverage = extResult.coverageByYear[horizonYear] ?? "uncovered";
+    const modelType =
+      horizonCoverage === "direct"        ? "external_direct" :
+      horizonCoverage === "interpolated"  ? "external_interpolated" :
+                                            "no_coverage";
     assetPriceInfo[assetId] = {
       assetId, tier, currentPriceEur, horizonPriceEur, priceMultiple,
-      modelType: consensus && consensus.sourceCount > 0 ? "analyst_consensus_adjusted" : "internal_cycle_model",
-      consensusScore: consensus?.score ?? null,
-      consensusSourceCount: consensus?.sourceCount ?? 0,
-      peakMultAdjustment: consensus?.peakMultAdjustment ?? null,
+      modelType,
+      externalSourceCount: extResult.sourceCount,
+      directCoverageYears: extResult.directYears,
+      interpolatedCoverageYears: extResult.interpolatedYears,
+      lastCoveredYear: extResult.lastCoveredYear,
       circulatingSupplyM: supplyM,
       impliedMarketCapBnEur,
       impliedMarketCapWarning: impliedMarketCapBnEur != null && impliedMarketCapBnEur > 5_000,
@@ -1338,7 +1348,11 @@ function runScenario(
 
   for (const year of years) {
     const monthsOfYear = byYear[year];
-    const snap = buildAnnualSnapshot(year, monthsOfYear, prices, prevYearLastMonth, input);
+    // Aggregate coverage state for this year across all assets
+    const yearCoverageStates: CoverageState[] = allAssetIds.map(id =>
+      externalResultsByAsset[id]?.coverageByYear[year] ?? "uncovered"
+    );
+    const snap = buildAnnualSnapshot(year, monthsOfYear, prices, prevYearLastMonth, input, yearCoverageStates);
     annualSnapshots.push(snap);
     prevYearLastMonth = monthsOfYear[monthsOfYear.length - 1];
   }
@@ -1570,7 +1584,7 @@ export function runPerspectivesSimulation(input: SimInput): PerspectivesSimulati
 
   const diagnostics: SimDiagnostics = {
     engineIsNew: true,
-    source: "perspectives-v2-cycle-model",
+    source: "perspectives-external-forecasts",
     engineVersion: "perspectives-v2.2",
     engineBuildHash: "a774336",
     engineGeneratedAt: Date.now(),

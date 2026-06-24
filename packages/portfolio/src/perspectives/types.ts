@@ -118,6 +118,11 @@ export interface AnnualSnapshot {
   // Motivos de ausencia de operaciones (para transparencia del motor)
   salesSkipReasons: string[];
   rebuysSkipReasons: string[];
+
+  // Cobertura de previsiones externas para este año
+  // "covered" = al menos un activo con datos directos o interpolados
+  // "uncovered" = ningún activo tiene cobertura externa para este año
+  forecastCoverage: "covered" | "uncovered";
 }
 
 export interface AnnualAssetPosition {
@@ -164,16 +169,19 @@ export interface SimEvent {
 
 // ─── Trazabilidad de previsiones por activo ──────────────────────────────────
 
+export type PriceModelType = "external_direct" | "external_interpolated" | "no_coverage";
+
 export interface AssetPriceInfo {
   assetId: string;
   tier: AssetTier;
   currentPriceEur: number | null;
   horizonPriceEur: number | null;
   priceMultiple: number | null;
-  modelType: "internal_cycle_model" | "analyst_consensus_adjusted";
-  consensusScore: number | null;
-  consensusSourceCount: number;
-  peakMultAdjustment: number | null;
+  modelType: PriceModelType;
+  externalSourceCount: number;
+  directCoverageYears: number[];
+  interpolatedCoverageYears: number[];
+  lastCoveredYear: number | null;
   circulatingSupplyM: number | null;
   impliedMarketCapBnEur: number | null;
   impliedMarketCapWarning: boolean;
@@ -241,7 +249,7 @@ export interface ScenarioDiagnostic {
 
 export interface SimDiagnostics {
   engineIsNew: true;
-  source: "perspectives-v2-cycle-model";
+  source: "perspectives-external-forecasts";
   engineVersion: string;
   engineBuildHash: string;
   engineGeneratedAt: number;

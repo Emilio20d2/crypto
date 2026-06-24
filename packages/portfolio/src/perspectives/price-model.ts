@@ -1,4 +1,10 @@
-// ─── Modelo de precios por activo — Perspectivas ─────────────────────────────
+// ─── ARCHIVO DEPRECADO — NO USAR EN PRODUCCIÓN ───────────────────────────────
+// Este modelo interno de precios por ciclos NO se usa en Perspectivas.
+// El motor de Perspectivas usa exclusivamente previsiones externas verificables.
+// Fuente de precios activa: external-price-builder.ts
+// NO importar este archivo en código de producción.
+// Se conserva únicamente como referencia histórica.
+// ─────────────────────────────────────────────────────────────────────────────
 // Genera trayectorias de precio mensuales basadas en ciclos de mercado reales.
 // Cada ciclo pasa por: acumulación → recuperación → alcista → euforia →
 //   distribución → bajista → capitulación → fondo
