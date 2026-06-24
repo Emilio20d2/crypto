@@ -5362,3 +5362,268 @@ dd {
 
 /* ─── End Perspectivas year selector ─── */
 
+/* ─── Trade Alerts ─────────────────────────────────────────────────────── */
+
+.trade-alerts-card {
+  /* inherits ui-card */
+}
+
+.trade-alerts-time {
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.trade-alerts-section {
+  /* container per section */
+}
+
+.trade-alerts-section--sep {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-color);
+}
+
+.trade-alerts-section-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+
+.trade-alert-icon-sell  { color: #16a34a; }
+.trade-alert-icon-rebuy { color: #d97706; }
+
+/* ── Signal cards grid ─────────────────────────────────────────── */
+
+.trade-alerts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: 10px;
+}
+
+/* ── Individual signal card ────────────────────────────────────── */
+
+.trade-alert-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+
+/* Card header: logo + name/symbol + tier badge */
+.trade-alert-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--bg-surface-muted);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.trade-alert-card-identity {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.trade-alert-card-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trade-alert-card-sym {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.trade-alert-tier-badge {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+
+/* Card data grid: 2 columns */
+.trade-alert-card-data {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  padding: 10px 14px 8px;
+}
+
+.trade-alert-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 0;
+}
+
+.trade-alert-cell + .trade-alert-cell {
+  /* no extra margin — gap comes from padding */
+}
+
+/* Full-width cell (caída / ganancia) */
+.trade-alert-cell--span {
+  grid-column: 1 / -1;
+  padding-top: 7px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border-color);
+}
+
+.trade-alert-cell-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+  line-height: 1;
+}
+
+.trade-alert-cell-value {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+/* Full-width cell value is larger */
+.trade-alert-cell--span .trade-alert-cell-value {
+  font-size: 16px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+
+.trade-alert-positive { color: #16a34a; }
+.trade-alert-negative { color: #dc2626; }
+
+/* Action box: highlighted "buy/sell" row */
+.trade-alert-action-box {
+  display: flex;
+  align-items: stretch;
+  margin: 0 14px 14px;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-primary-muted);
+  overflow: hidden;
+}
+
+.trade-alert-action-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 12px;
+}
+
+.trade-alert-action-sep {
+  width: 1px;
+  background: var(--color-primary);
+  opacity: 0.25;
+  flex-shrink: 0;
+}
+
+.trade-alert-action-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.trade-alert-action-amount {
+  font-size: 15px;
+  font-weight: 750;
+  color: var(--color-primary);
+  letter-spacing: -0.02em;
+}
+
+.trade-alert-action-units {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* ── EURC summary footer ────────────────────────────────────────── */
+
+.trade-alerts-eurc-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface-muted);
+}
+
+.trade-alerts-eurc-summary--mt {
+  margin-top: 16px;
+}
+
+.trade-alerts-eurc-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.trade-alerts-eurc-amount {
+  font-size: 15px;
+  font-weight: 750;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+}
+
+.trade-alerts-eurc-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+/* ── Mobile: single column, vertical scroll ────────────────────── */
+
+@media (max-width: 600px) {
+  .trade-alerts-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .trade-alert-action-box {
+    margin: 0 12px 12px;
+  }
+
+  .trade-alert-card-head {
+    padding: 10px 12px;
+  }
+
+  .trade-alert-card-data {
+    padding: 8px 12px 6px;
+  }
+
+  .trade-alerts-eurc-summary {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .trade-alerts-eurc-note {
+    margin-left: 0;
+  }
+}
+
+/* ─── End Trade Alerts ─── */
+
