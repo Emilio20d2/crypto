@@ -483,7 +483,9 @@ function CycleDetailForm({ cycle }: { cycle: InvestmentCycle }) {
     setFormError(null);
     setSaved(false);
     if (!name.trim()) { setFormError("El nombre de la etapa es obligatorio."); return; }
-    const start = fromDateInput(startDate, true);
+    let start: number | null;
+    try { start = fromDateInput(startDate, true); }
+    catch { setFormError("Fecha de inicio obligatoria."); return; }
     const end = fromDateInput(endDate);
     if (!start) { setFormError("Fecha de inicio inválida."); return; }
     if (end !== null && end < start) {
@@ -493,17 +495,21 @@ function CycleDetailForm({ cycle }: { cycle: InvestmentCycle }) {
     const amount = parseNumber(monthlyAmount);
     if (!amount || amount <= 0) { setFormError("La aportación mensual debe ser mayor de 0."); return; }
 
-    await updateCycle.mutateAsync({
-      name: name.trim(),
-      startDate: start,
-      endDate: end,
-      monthlyAmountEur: amount,
-      status,
-      objetivo: objetivo || null,
-      riesgo: riesgo || null,
-      allowExtraContributions,
-      notes: notes || null,
-    });
+    try {
+      await updateCycle.mutateAsync({
+        name: name.trim(),
+        startDate: start,
+        endDate: end,
+        monthlyAmountEur: amount,
+        status,
+        objetivo: objetivo || null,
+        riesgo: riesgo || null,
+        allowExtraContributions,
+        notes: notes || null,
+      });
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Error al guardar la etapa.");
+    }
   }
 
   return (

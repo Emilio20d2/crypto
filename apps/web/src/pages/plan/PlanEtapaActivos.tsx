@@ -567,14 +567,18 @@ function AssetEditForm({
     const allocationType = allocationMode === "porcentaje" ? "percentage" : "amount";
     const allocationValue = pct ?? fixed ?? 0;
 
-    await onUpdate(item.id, {
-      allocationType, allocationValue, allocationPercentage: pct, fixedAmountEur: fixed,
-      targetAmount, targetValueEur, targetPortfolioPercentage,
-      priority: Math.trunc(parseNumber(priority)),
-      startDate: start, endDate: end, status, isActive: status === "active",
-      notes: notes || null,
-    });
-    onCollapse();
+    try {
+      await onUpdate(item.id, {
+        allocationType, allocationValue, allocationPercentage: pct, fixedAmountEur: fixed,
+        targetAmount, targetValueEur, targetPortfolioPercentage,
+        priority: Math.trunc(parseNumber(priority)),
+        startDate: start, endDate: end, status, isActive: status === "active",
+        notes: notes || null,
+      });
+      onCollapse();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error al guardar la moneda.");
+    }
   }
 
   const targetLabel = targetType === "cantidad" ? "Número de monedas" : targetType === "valor" ? "Valor en euros (€)" : "Porcentaje de cartera (%)";
