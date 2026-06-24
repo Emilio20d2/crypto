@@ -114,10 +114,9 @@ function pointChange(points: { time: number; value: number }[]): number | null {
 
 function seedDatabase() {
   const db = getDb();
-  let existing = db.select().from(schema.assets).all();
+  const requiredSymbols = ["BTC", "ETH", "ADA", "SUI", "SEI", "EURC"];
 
   // Catálogo canónico de activos — sincronizado con ASSET_MAP de market-data.
-  // Añadir aquí cualquier activo nuevo que ya tenga fuente de precio configurada.
   const defaultAssets = [
     { id: "BTC",  symbol: "BTC",  name: "Bitcoin",       type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/1/small/bitcoin.png" },
     { id: "ETH",  symbol: "ETH",  name: "Ethereum",      type: "crypto", logoUrl: "https://assets.coingecko.com/coins/images/279/small/ethereum.png" },
@@ -132,57 +131,76 @@ function seedDatabase() {
     { id: "LMTS", symbol: "LMTS", name: "Limitless",     type: "crypto", logoUrl: null },
   ];
 
-  console.log(`[DB] Se encontraron ${existing.length} activos. Ejecutando siembra de activos ausentes...`);
+  const existing = db.select().from(schema.assets).all();
 
+  // Fast-path: if all required symbols present, only upsert missing logos (no full loop)
+  const existingSymbols = new Set(existing.map(a => a.symbol));
+  const allRequired = requiredSymbols.every(s => existingSymbols.has(s));
+  const allPresent = defaultAssets.every(a => existingSymbols.has(a.symbol));
+
+  if (allPresent) {
+    // Only update missing logos — avoids touching rows that don't need it
+    const now = Date.now();
+    const existingById = new Map(existing.map(a => [a.id, a]));
+    let logoUpdates = 0;
+    for (const asset of defaultAssets) {
+      if (asset.logoUrl && !existingById.get(asset.id)?.logoUrl) {
+        db.update(schema.assets).set({ logoUrl: asset.logoUrl, updatedAt: now }).where(eq(schema.assets.id, asset.id)).run();
+        logoUpdates++;
+      }
+    }
+    console.log(`[DB] Siembra: catálogo completo (${existing.length} activos). ${logoUpdates > 0 ? `${logoUpdates} logos actualizados.` : "Nada que hacer."}`);
+    return;
+  }
+
+  console.log(`[DB] Siembra: ${existing.length} activos, faltan ${!allRequired ? "símbolos requeridos" : "opcionales"}. Insertando ausentes…`);
   const now = Date.now();
+  const existingById = new Map(existing.map(a => [a.id, a]));
   for (const asset of defaultAssets) {
-    const found = existing.some(a => a.id === asset.id);
-    if (!found) {
+    if (!existingById.has(asset.id)) {
       db.insert(schema.assets).values({
         id: asset.id, symbol: asset.symbol, name: asset.name,
         type: asset.type, logoUrl: asset.logoUrl, createdAt: now, updatedAt: now
       }).run();
     } else {
-      const existingAsset = existing.find(a => a.id === asset.id);
-      if (!existingAsset?.logoUrl && asset.logoUrl) {
-        db.update(schema.assets)
-          .set({ logoUrl: asset.logoUrl, updatedAt: now })
-          .where(eq(schema.assets.id, asset.id))
-          .run();
+      const existingAsset = existingById.get(asset.id)!;
+      if (!existingAsset.logoUrl && asset.logoUrl) {
+        db.update(schema.assets).set({ logoUrl: asset.logoUrl, updatedAt: now }).where(eq(schema.assets.id, asset.id)).run();
       }
     }
   }
 
-  existing = db.select().from(schema.assets).all();
-  console.log(`[DB] Consulta post-siembra: ${existing.length} activos en base de datos.`);
-
-  const requiredSymbols = ["BTC", "ETH", "ADA", "SUI", "SEI", "EURC"];
-  const missingSymbols = requiredSymbols.filter(sym => !existing.some(a => a.symbol === sym));
+  const after = db.select().from(schema.assets).all();
+  const missingSymbols = requiredSymbols.filter(sym => !after.some(a => a.symbol === sym));
   if (missingSymbols.length > 0) {
     throw new Error(`La siembra de activos no se completó. Faltan los símbolos: ${missingSymbols.join(", ")}`);
   }
+  console.log(`[DB] Siembra completada: ${after.length} activos.`);
 }
 
 function setupDatabase() {
+  const t0 = Date.now();
   const userDataPath = app.getPath("userData");
   const dbPath = path.join(userDataPath, "crypto-control.sqlite");
-  
-  // Imprimir ruta para el informe
   console.log("[DB] Ruta SQLite:", dbPath);
-  
+
+  const tOpen = Date.now();
   initializeDatabase(dbPath);
+  console.log(`[Timing] DB open: ${Date.now() - tOpen}ms`);
 
   try {
-    // La carpeta de migraciones en empaquetado estará junto al asar o en app.getAppPath()
-    const migrationsPath = app.isPackaged 
-      ? path.join(process.resourcesPath, "migrations") 
+    const migrationsPath = app.isPackaged
+      ? path.join(process.resourcesPath, "migrations")
       : path.join(__dirname, "../../../packages/database/drizzle");
-    
-    // Fallback if the path exists, else we skip (e.g. during test without migrations copied)
+
     if (fs.existsSync(migrationsPath)) {
+      const tMig = Date.now();
       runMigrations(migrationsPath);
-      console.log("[DB] Migraciones aplicadas");
+      console.log(`[Timing] Migrations: ${Date.now() - tMig}ms`);
+
+      const tSeed = Date.now();
       seedDatabase();
+      console.log(`[Timing] Seed: ${Date.now() - tSeed}ms`);
     } else {
       console.warn("[DB] No se encontró carpeta de migraciones en", migrationsPath);
     }
@@ -190,14 +208,15 @@ function setupDatabase() {
     console.error("[DB] Fallo en migración:", e instanceof Error ? e.message : String(e));
   }
 
-  // Ensure plan/cycle tables exist even if the migration above failed on a legacy DB.
-  // Uses CREATE TABLE IF NOT EXISTS — safe to run multiple times.
   try {
+    const tEssential = Date.now();
     ensureEssentialTables();
-    console.log("[DB] Tablas esenciales verificadas");
+    console.log(`[Timing] Essential tables: ${Date.now() - tEssential}ms`);
   } catch (e: unknown) {
     console.error("[DB] Error al verificar tablas esenciales:", e instanceof Error ? e.message : String(e));
   }
+
+  console.log(`[Timing] setupDatabase total: ${Date.now() - t0}ms`);
 }
 
 function setupIpcHandlers() {
@@ -5783,10 +5802,25 @@ function createWindow() {
 // Force correct userData path to match productName in electron-builder.yml
 app.setName("Crypto Control");
 
+const _processStart = Date.now();
+
 app.whenReady().then(() => {
+  const tReady = Date.now();
+  console.log(`[Timing] electronReady: ${tReady - _processStart}ms desde inicio proceso`);
+
+  const tDb = Date.now();
   setupDatabase();
-  createWindow();       // show window first so the user sees it immediately
-  setupIpcHandlers();   // register handlers while renderer is loading its JS
+  console.log(`[Timing] setupDatabase: ${Date.now() - tDb}ms`);
+
+  const tWin = Date.now();
+  createWindow();
+  console.log(`[Timing] createWindow: ${Date.now() - tWin}ms`);
+
+  const tIpc = Date.now();
+  setupIpcHandlers();
+  console.log(`[Timing] setupIpcHandlers: ${Date.now() - tIpc}ms`);
+
+  console.log(`[Timing] TOTAL arranque hasta IPC listo: ${Date.now() - _processStart}ms`);
 
   app.on("activate", function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

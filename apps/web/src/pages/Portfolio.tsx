@@ -18,10 +18,13 @@ import type { ChartPoint } from "../components/MarketChart";
 import type { Period } from "../components/PeriodSelector";
 import { formatDateTime } from "../lib/format";
 
-const PRICE_REFRESH_MS = 5_000;
-const COINBASE_SYNC_REFRESH_MS = 30_000;
-const PORTFOLIO_CHART_REFRESH_MS = 5_000;
-const PORTFOLIO_LONG_CHART_REFRESH_MS = 60_000;
+const PRICE_REFRESH_MS = 10_000;
+// Auto-sync every 5 min — a full Coinbase sync is heavy; 30s was excessive
+const COINBASE_SYNC_REFRESH_MS = 5 * 60_000;
+// Initial sync delayed so the UI is interactive before the network round-trip
+const COINBASE_SYNC_INITIAL_DELAY_MS = 8_000;
+const PORTFOLIO_CHART_REFRESH_MS = 10_000;
+const PORTFOLIO_LONG_CHART_REFRESH_MS = 120_000;
 
 function chartRefreshMs(period: Period) {
   return period === "1h" || period === "24h" ? PORTFOLIO_CHART_REFRESH_MS : PORTFOLIO_LONG_CHART_REFRESH_MS;
@@ -167,38 +170,33 @@ export function Portfolio() {
   const portfolioOptions = portfoliosRes?.ok ? portfoliosRes.data : [];
   const selectedPortfolioId = manualPortfolioId ?? portfolioOptions[0]?.uuid ?? null;
 
-  const { data: breakdownRes, isLoading: loadingBreakdown } = useQuery({
+  const { data: breakdownRes, isLoading: loadingBreakdown, isFetching: fetchingBreakdown } = useQuery({
     queryKey: ["coinbase", "breakdown", selectedPortfolioId],
     queryFn: () => window.cryptoControl.coinbase.getPortfolioBreakdown(selectedPortfolioId!, "EUR"),
     enabled: !!selectedPortfolioId,
     staleTime: 15_000,
     refetchInterval: PRICE_REFRESH_MS,
     refetchIntervalInBackground: true,
-    refetchOnMount: "always",
+    // Do not force a refetch on every mount — use cached data while revalidating
   });
 
   // Real reconstruction: historical qty (from transactionLegs) × historical
-  // price (from priceHistory/candle cache) per asset, summed per timestamp —
-  // not Coinbase's sparse point-in-time snapshots, which only exist for
-  // moments the app happened to be open and online.
+  // price (from priceHistory/candle cache) per asset, summed per timestamp.
   const { data: historicalSeriesRes } = useQuery({
     queryKey: ["portfolio", "historical-series", period],
     queryFn: () => window.cryptoControl.portfolio.getHistoricalSeries({ period }),
     staleTime: 15_000,
     refetchInterval: chartRefreshMs(period),
     refetchIntervalInBackground: true,
-    refetchOnMount: "always",
   });
 
-  // Independent of the chart's selected period — always 24h, for the
-  // "Variación 24h" metric above the chart.
+  // Always 24h, for the "Variación 24h" metric.
   const { data: historicalSeries24hRes } = useQuery({
     queryKey: ["portfolio", "historical-series", "24h"],
     queryFn: () => window.cryptoControl.portfolio.getHistoricalSeries({ period: "24h" }),
     staleTime: 15_000,
     refetchInterval: PORTFOLIO_CHART_REFRESH_MS,
     refetchIntervalInBackground: true,
-    refetchOnMount: "always",
   });
 
   const { data: assetsRes } = useQuery({
@@ -209,8 +207,8 @@ export function Portfolio() {
   const { data: localPositionsRes } = useQuery({
     queryKey: ["portfolio", "positions"],
     queryFn: () => window.cryptoControl.portfolio.getPositions(),
-    staleTime: 15_000,
-    refetchInterval: PRICE_REFRESH_MS,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
     refetchIntervalInBackground: true,
   });
 
@@ -223,21 +221,24 @@ export function Portfolio() {
       try {
         const result = await window.cryptoControl.coinbase.sync();
         if (!cancelled && result.ok) {
-          await queryClient.invalidateQueries({ queryKey: ["coinbase"] });
+          // Selective invalidation: only what a Coinbase sync actually changes.
+          // Mercado prices/assets are unaffected by personal transaction import.
+          await queryClient.invalidateQueries({ queryKey: ["coinbase", "breakdown"] });
+          await queryClient.invalidateQueries({ queryKey: ["coinbase", "portfolios"] });
           await queryClient.invalidateQueries({ queryKey: ["transactions"] });
           await queryClient.invalidateQueries({ queryKey: ["portfolio"] });
-          await queryClient.invalidateQueries({ queryKey: ["market"] });
-          await queryClient.invalidateQueries({ queryKey: ["assets"] });
         }
       } finally {
         backgroundSyncRunning.current = false;
       }
     };
 
-    void syncInBackground();
+    // Delay first auto-sync so the UI is interactive before the network round-trip
+    const initialTimer = window.setTimeout(() => void syncInBackground(), COINBASE_SYNC_INITIAL_DELAY_MS);
     const intervalId = window.setInterval(() => void syncInBackground(), COINBASE_SYNC_REFRESH_MS);
     return () => {
       cancelled = true;
+      window.clearTimeout(initialTimer);
       window.clearInterval(intervalId);
     };
   }, [connected, queryClient]);
@@ -308,11 +309,31 @@ export function Portfolio() {
     return map;
   }, [localPositionsRes]);
 
-  if (loadingStatus || (connected && loadingPortfolios) || (selectedPortfolioId && loadingBreakdown)) {
+  // Block only on first-load (no data in cache yet). While revalidating, show
+  // the last valid state with a subtle "Actualizando…" indicator instead of a
+  // full spinner. loadingBreakdown is true only when there is no cached data.
+  if (loadingStatus) {
     return (
       <section className="page-stack">
-        <PageToolbar title="Cartera" meta="Preparando datos de Coinbase" />
-        <LoadingState message="Cargando cartera..." />
+        <PageToolbar title="Cartera" meta="Iniciando…" />
+        <LoadingState message="Comprobando conexión…" />
+      </section>
+    );
+  }
+  if (connected && loadingPortfolios) {
+    return (
+      <section className="page-stack">
+        <PageToolbar title="Cartera" meta="Obteniendo portfolios" />
+        <LoadingState message="Cargando portfolios…" />
+      </section>
+    );
+  }
+  // Only full-block on breakdown when there's no cached data at all
+  if (selectedPortfolioId && loadingBreakdown) {
+    return (
+      <section className="page-stack">
+        <PageToolbar title="Cartera" meta="Cargando datos" />
+        <LoadingState message="Cargando cartera…" />
       </section>
     );
   }
@@ -428,7 +449,7 @@ export function Portfolio() {
         meta={
           <span className="toolbar-status">
             <DataStatus state={breakdown.state === "unavailable" ? "unavailable" : "live"} reason={breakdown.reason} />
-            <span>Actualizado {formatDateTime(breakdown.capturedAt)}</span>
+            <span>{fetchingBreakdown ? "Actualizando…" : `Actualizado ${formatDateTime(breakdown.capturedAt)}`}</span>
           </span>
         }
       />
