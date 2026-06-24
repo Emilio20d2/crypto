@@ -191,12 +191,14 @@ function initState(input: SimInput): MonthlyState {
 // ─── Obtener el ciclo activo para una fecha ───────────────────────────────────
 
 function getActiveCycle(cycles: SimCycle[], date: number): SimCycle | null {
-  // Sort by priority (lowest number = highest priority), then pick ones whose date range covers `date`
+  // Find all cycles whose date range covers `date`
   const active = cycles.filter(c =>
     c.startDate <= date && (c.endDate == null || c.endDate > date)
   );
   if (active.length === 0) return null;
-  return active[0]; // first active (already ordered by priority from input)
+  // When multiple cycles overlap (e.g. new cycle starts mid-year while old one hasn't ended),
+  // pick the one with the latest startDate — the most recently started cycle takes priority.
+  return active.reduce((best, c) => c.startDate > best.startDate ? c : best);
 }
 
 function getActiveCycleAssets(cycle: SimCycle, date: number): SimCycleAsset[] {

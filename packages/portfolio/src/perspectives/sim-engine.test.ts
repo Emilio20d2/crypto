@@ -1107,3 +1107,206 @@ describe("price-model: bear phase is always downward (regression)", () => {
     expect(result.diagnostics.realisticCycleValidation).toBe("passed");
   });
 });
+
+// ─── Transición de etapas dentro del mismo año ───────────────────────────────
+
+describe("getActiveCycle: mid-year stage transitions", () => {
+  // Helpers for this suite
+  const D = (iso: string) => new Date(`${iso}T00:00:00`).getTime(); // local midnight
+
+  function makeCycleAt(
+    id: string,
+    startDate: number,
+    endDate: number | null,
+    monthly: number,
+  ): SimCycle {
+    return {
+      id,
+      planId: "plan1",
+      name: `Cycle ${id}`,
+      startDate,
+      endDate,
+      monthlyAmountEur: monthly,
+      assets: [
+        {
+          id: `${id}-btc`,
+          assetId: "bitcoin",
+          allocationType: "percentage",
+          allocationValue: 100,
+          allocationPercentage: 100,
+          fixedAmountEur: null,
+          targetAmount: null,
+          targetValueEur: null,
+          startDate,
+          endDate,
+          status: "active",
+        },
+      ],
+      saleRules: [],
+      rebuyTiers: [],
+      substitutions: [],
+      revisions: [],
+    };
+  }
+
+  it("mid-year transition: later-startDate cycle takes priority when both active", () => {
+    // Old cycle: Jan 2024 → open (endDate null = active forever)
+    // New cycle: Apr 2024 → open (startDate = April 1)
+    // Expected: months Jan-Mar use old (€200), Apr onwards use new (€500)
+    const simNow = D("2024-01-01");
+    const oldCycle = makeCycleAt("old", D("2023-01-01"), null, 200);
+    const newCycle = makeCycleAt("new", D("2024-04-01"), null, 500);
+
+    const input: SimInput = {
+      now: simNow,
+      horizonDate: D("2025-01-01"),
+      currentPositions: [{ assetId: "bitcoin", balance: 0.01, avgCostEur: 40000, currentPriceEur: 60000 }],
+      currentLots: [{ id: "l1", assetId: "bitcoin", date: D("2023-01-01"), remainingAmount: 0.01, unitAcquisitionPriceEur: 40000 }],
+      eurcFree: 0,
+      eurcFiscalReserve: 0,
+      eurCash: 0,
+      historicalCapitalEur: 400,
+      cycles: [oldCycle, newCycle],
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base" },
+    };
+
+    const result = runPerspectivesSimulation(input);
+    const base = result.scenarios.find(s => s.scenario === "base")!;
+    const snap2024 = base.annualSnapshots.find(s => s.year === 2024)!;
+
+    // 2024: Feb-Mar (2 months at €200) + Apr-Dec (9 months at €500) = 400 + 4500 = 4900
+    // (simulation starts from next month after simNow = Feb 2024)
+    const expectedMin = 2 * 200 + 9 * 500 - 1; // -1 for rounding tolerance
+    expect(snap2024.contributionsEur).toBeGreaterThan(expectedMin);
+    // Must NOT be just 11 * 200 = 2200 (wrong: old cycle for all months)
+    expect(snap2024.contributionsEur).toBeGreaterThan(2200);
+  });
+
+  it("mid-year transition: no overlap — sequential cycles with endDate", () => {
+    // Old cycle: Jan 2024 → Mar 31, 2024 (endDate = Apr 1 exclusive)
+    // New cycle: Apr 1, 2024 → open
+    // Expected: no month is missed, no month gets double contributions
+    const simNow = D("2024-01-01");
+    const oldCycle = makeCycleAt("old", D("2023-01-01"), D("2024-04-01"), 200);
+    const newCycle = makeCycleAt("new", D("2024-04-01"), null, 500);
+
+    const input: SimInput = {
+      now: simNow,
+      horizonDate: D("2025-01-01"),
+      currentPositions: [{ assetId: "bitcoin", balance: 0.01, avgCostEur: 40000, currentPriceEur: 60000 }],
+      currentLots: [{ id: "l1", assetId: "bitcoin", date: D("2023-01-01"), remainingAmount: 0.01, unitAcquisitionPriceEur: 40000 }],
+      eurcFree: 0,
+      eurcFiscalReserve: 0,
+      eurCash: 0,
+      historicalCapitalEur: 400,
+      cycles: [oldCycle, newCycle],
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base" },
+    };
+
+    const result = runPerspectivesSimulation(input);
+    const base = result.scenarios.find(s => s.scenario === "base")!;
+    const snap2024 = base.annualSnapshots.find(s => s.year === 2024)!;
+
+    // Feb-Mar: 2 × €200 = 400; Apr-Dec: 9 × €500 = 4500; total = 4900
+    expect(snap2024.contributionsEur).toBeCloseTo(2 * 200 + 9 * 500, -1);
+  });
+
+  it("year-boundary transition: sequential cycles at Dec 31 / Jan 1", () => {
+    // Old cycle: Jan 2024 → Dec 31, 2024 (endDate stored as Dec 31 00:00 local)
+    // New cycle: Jan 1, 2025 → open
+    // Expected: all of 2024 at €200, all of 2025 at €500
+    const simNow = D("2024-01-01");
+    const endOf2024 = D("2024-12-31"); // Dec 31 00:00 local — exclusive for Jan 1 month check
+    const oldCycle = makeCycleAt("old", D("2023-01-01"), endOf2024, 200);
+    const newCycle = makeCycleAt("new", D("2025-01-01"), null, 500);
+
+    const input: SimInput = {
+      now: simNow,
+      horizonDate: D("2026-01-01"),
+      currentPositions: [{ assetId: "bitcoin", balance: 0.01, avgCostEur: 40000, currentPriceEur: 60000 }],
+      currentLots: [{ id: "l1", assetId: "bitcoin", date: D("2023-01-01"), remainingAmount: 0.01, unitAcquisitionPriceEur: 40000 }],
+      eurcFree: 0,
+      eurcFiscalReserve: 0,
+      eurCash: 0,
+      historicalCapitalEur: 400,
+      cycles: [oldCycle, newCycle],
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base" },
+    };
+
+    const result = runPerspectivesSimulation(input);
+    const base = result.scenarios.find(s => s.scenario === "base")!;
+    const snap2024 = base.annualSnapshots.find(s => s.year === 2024)!;
+    const snap2025 = base.annualSnapshots.find(s => s.year === 2025);
+
+    // 2024: 11 months (Feb-Dec) × €200 = 2200
+    expect(snap2024.contributionsEur).toBeCloseTo(11 * 200, -1);
+    // 2025: 12 months × €500 = 6000
+    if (snap2025) {
+      expect(snap2025.contributionsEur).toBeCloseTo(12 * 500, -1);
+    }
+  });
+
+  it("overlapping cycles: old endDate in 2046, new starts Jan 2036 — new takes priority for all of 2036", () => {
+    // Mirrors the real bug in the user's old DB:
+    // Etapa 2030-2036: endDate=March 2046, €200
+    // Etapa 2036-2044: startDate=Jan 2036, endDate=null, €500
+    // With the fix, Etapa 2036-2044 wins from Jan 2036 onward
+    const simNow = D("2035-01-01");
+    const oldCycle = makeCycleAt("old", D("2030-01-01"), D("2046-03-31"), 200);
+    const newCycle = makeCycleAt("new", D("2036-01-01"), null, 500);
+
+    const input: SimInput = {
+      now: simNow,
+      horizonDate: D("2037-01-01"),
+      currentPositions: [{ assetId: "bitcoin", balance: 0.01, avgCostEur: 40000, currentPriceEur: 60000 }],
+      currentLots: [{ id: "l1", assetId: "bitcoin", date: D("2030-01-01"), remainingAmount: 0.01, unitAcquisitionPriceEur: 40000 }],
+      eurcFree: 0,
+      eurcFiscalReserve: 0,
+      eurCash: 0,
+      historicalCapitalEur: 400,
+      cycles: [oldCycle, newCycle],
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base" },
+    };
+
+    const result = runPerspectivesSimulation(input);
+    const base = result.scenarios.find(s => s.scenario === "base")!;
+
+    // 2035: Feb-Dec = 11 months × €200 (only old cycle active)
+    const snap2035 = base.annualSnapshots.find(s => s.year === 2035)!;
+    expect(snap2035.contributionsEur).toBeCloseTo(11 * 200, -1);
+
+    // 2036: 12 months × €500 (new cycle wins because latest startDate)
+    const snap2036 = base.annualSnapshots.find(s => s.year === 2036)!;
+    expect(snap2036.contributionsEur).toBeCloseTo(12 * 500, -1);
+    // Must NOT be 12 × 200 = 2400 (the old buggy behavior)
+    expect(snap2036.contributionsEur).toBeGreaterThan(2400);
+  });
+
+  it("annual total equals sum of monthly contributions across all scenarios", () => {
+    // Conciliation: sum of annual snapshot contributions = summary.totalContributionsEur
+    const simNow = D("2024-01-01");
+    const oldCycle = makeCycleAt("old", D("2023-01-01"), D("2026-04-01"), 200);
+    const newCycle = makeCycleAt("new", D("2026-04-01"), null, 500);
+
+    const input: SimInput = {
+      now: simNow,
+      horizonDate: D("2028-01-01"),
+      currentPositions: [{ assetId: "bitcoin", balance: 0.01, avgCostEur: 40000, currentPriceEur: 60000 }],
+      currentLots: [{ id: "l1", assetId: "bitcoin", date: D("2023-01-01"), remainingAmount: 0.01, unitAcquisitionPriceEur: 40000 }],
+      eurcFree: 0,
+      eurcFiscalReserve: 0,
+      eurCash: 0,
+      historicalCapitalEur: 400,
+      cycles: [oldCycle, newCycle],
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base" },
+    };
+
+    const result = runPerspectivesSimulation(input);
+    for (const scenarioResult of result.scenarios) {
+      const sumFromAnnual = scenarioResult.annualSnapshots.reduce(
+        (s, a) => s + a.contributionsEur, 0,
+      );
+      expect(sumFromAnnual).toBeCloseTo(scenarioResult.summary.totalContributionsEur, 0);
+    }
+  });
+});
