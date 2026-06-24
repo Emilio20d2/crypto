@@ -73,19 +73,33 @@ cd "$REPO_ROOT/apps/web"
 npm run build 2>&1 | tail -5
 cd "$REPO_ROOT"
 
-WEB_BUNDLE=$(ls "$REPO_ROOT/apps/web/dist/assets/"*.js 2>/dev/null | head -1)
-if [ -z "$WEB_BUNDLE" ]; then
-  echo "❌ ERROR: no se encontró bundle web en apps/web/dist/assets/"
-  exit 1
-fi
-echo "  Bundle: $(basename "$WEB_BUNDLE")"
-echo "  Tamaño: $(wc -c < "$WEB_BUNDLE") bytes"
+# BUILD_INFO is injected in the main index bundle (contains App.tsx).
+# With lazy loading there are many chunks — search all of them for the commit.
+WEB_ASSETS_DIR="$REPO_ROOT/apps/web/dist/assets"
 
-# Verificar BUILD_INFO en el bundle
-if grep -qF "$COMMIT_SHORT" "$WEB_BUNDLE"; then
-  echo "  ✅ Commit $COMMIT_SHORT encontrado en bundle web"
+COMMIT_FOUND_IN=""
+while IFS= read -r -d '' jsfile; do
+  if grep -qF "$COMMIT_SHORT" "$jsfile" 2>/dev/null; then
+    COMMIT_FOUND_IN="$jsfile"
+    break
+  fi
+done < <(find "$WEB_ASSETS_DIR" -name "*.js" -print0 2>/dev/null)
+
+CHUNK_COUNT=$(find "$WEB_ASSETS_DIR" -name "*.js" 2>/dev/null | wc -l | tr -d ' ')
+MAIN_BUNDLE=$(find "$WEB_ASSETS_DIR" -name "index-*.js" 2>/dev/null | head -1)
+if [ -z "$MAIN_BUNDLE" ]; then
+  # Fallback: largest JS
+  MAIN_BUNDLE=$(find "$WEB_ASSETS_DIR" -name "*.js" -print0 2>/dev/null | xargs -0 ls -S 2>/dev/null | head -1)
+fi
+MAIN_BUNDLE_SIZE=$(wc -c < "$MAIN_BUNDLE" 2>/dev/null || echo "?")
+
+echo "  Bundle principal: $(basename "$MAIN_BUNDLE") ($MAIN_BUNDLE_SIZE bytes)"
+echo "  Chunks lazy: $CHUNK_COUNT archivos JS en total"
+
+if [ -n "$COMMIT_FOUND_IN" ]; then
+  echo "  ✅ Commit $COMMIT_SHORT encontrado en $(basename "$COMMIT_FOUND_IN")"
 else
-  echo "  ❌ ABORT: commit $COMMIT_SHORT NO encontrado en bundle web"
+  echo "  ❌ ABORT: commit $COMMIT_SHORT NO encontrado en ningún bundle web"
   echo "     (¿Hay cambios sin commitear que afectan a buildInfo?)"
   exit 1
 fi
@@ -164,14 +178,22 @@ trap "rm -rf $TMP_EXTRACT" EXIT
 
 npx asar extract "$ASAR_PATH" "$TMP_EXTRACT" 2>/dev/null
 
-WEB_BUNDLE_ASAR=$(ls "$TMP_EXTRACT/apps/web/dist/assets/"*.js 2>/dev/null | head -1)
-if [ -z "$WEB_BUNDLE_ASAR" ]; then
+ASAR_JS_COUNT=$(find "$TMP_EXTRACT/apps/web/dist/assets" -name "*.js" 2>/dev/null | wc -l | tr -d ' ')
+if [ "$ASAR_JS_COUNT" -eq 0 ]; then
   echo "❌ ERROR: bundle web no encontrado dentro de app.asar"
   exit 1
 fi
 
-if grep -qF "$COMMIT_SHORT" "$WEB_BUNDLE_ASAR"; then
-  echo "  ✅ Commit $COMMIT_SHORT encontrado en app.asar/web bundle"
+ASAR_COMMIT_FOUND=""
+while IFS= read -r -d '' jsf; do
+  if grep -qF "$COMMIT_SHORT" "$jsf" 2>/dev/null; then
+    ASAR_COMMIT_FOUND="$jsf"
+    break
+  fi
+done < <(find "$TMP_EXTRACT/apps/web/dist/assets" -name "*.js" -print0 2>/dev/null)
+
+if [ -n "$ASAR_COMMIT_FOUND" ]; then
+  echo "  ✅ Commit $COMMIT_SHORT encontrado en app.asar ($ASAR_JS_COUNT chunks)"
 else
   echo "  ❌ ABORT: commit $COMMIT_SHORT NO encontrado dentro de app.asar"
   exit 1
