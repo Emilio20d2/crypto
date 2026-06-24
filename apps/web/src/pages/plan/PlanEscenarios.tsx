@@ -49,6 +49,16 @@ async function unwrap<T>(p: Promise<{ ok: boolean; data?: T; error?: { message: 
   return r.data as T;
 }
 
+function KpiRow({ label, value, color }: { label: string; value: string; color?: "pos" | "neg" | "warn" | "muted" }) {
+  const valueClass = color === "pos" ? "text-gain" : color === "neg" ? "text-loss" : color === "warn" ? "text-warning" : "";
+  return (
+    <div className="flex items-center justify-between py-1.5 border-b border-border/40 last:border-0">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className={`text-xs font-semibold font-mono ${valueClass}`}>{value}</span>
+    </div>
+  );
+}
+
 export function PlanEscenarios() {
   const [horizonYears, setHorizonYears] = useState(10);
   const [selectedScenario, setSelectedScenario] = useState<SimScenario>("base");
@@ -70,32 +80,22 @@ export function PlanEscenarios() {
   const sum = activeScenario?.summary;
 
   return (
-    <div className="space-y-4">
-      {/* Nota informativa */}
-      <Card>
-        <CardContent className="pt-4">
-          <p className="text-sm text-muted-foreground">
-            Simulación con el <strong>mismo motor que Perspectivas</strong> usando las reglas de venta, tiers de recompra y activos del plan vigente.
-            Las señales futuras son proyecciones — no generan alertas reales hasta que las condiciones ocurran.
-            Cambia el horizonte y el escenario para explorar distintas trayectorias.
-          </p>
-        </CardContent>
-      </Card>
+    <div className="space-y-3">
 
-      {/* Controles */}
+      {/* Controles + nota */}
       <Card>
-        <CardContent className="pt-4 flex flex-col gap-3">
+        <CardContent className="pt-3 pb-3 space-y-3">
           <div className="flex flex-col gap-1">
-            <span className="text-xs text-muted-foreground">Horizonte</span>
-            <div className="flex gap-2 flex-wrap">
+            <span className="text-xs text-muted-foreground">Horizonte temporal</span>
+            <div className="flex gap-1.5 flex-wrap">
               {HORIZON_OPTIONS.map(y => (
                 <button
                   key={y}
                   type="button"
                   onClick={() => setHorizonYears(y)}
-                  className={`px-3 py-1 rounded text-sm border transition-colors ${horizonYears === y ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:border-foreground"}`}
+                  className={`px-2.5 py-0.5 rounded text-xs border transition-colors ${horizonYears === y ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:border-foreground"}`}
                 >
-                  {y} años
+                  {y}a
                 </button>
               ))}
             </div>
@@ -109,83 +109,118 @@ export function PlanEscenarios() {
               label="Escenario"
             />
           </div>
+          <p className="text-xs text-muted-foreground">
+            Mismo motor que Perspectivas, con las reglas y activos del plan vigente. Las señales son proyecciones — no generan alertas reales.
+          </p>
         </CardContent>
       </Card>
 
-      {/* KPIs del escenario seleccionado */}
-      {sum && (
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              Escenario {SCENARIO_LABELS[selectedScenario]} — {horizonYears} años
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="persp-kpi-grid">
-              <div className="persp-kpi">
-                <span className="persp-kpi-label">Patrimonio inicial</span>
-                <span className="persp-kpi-value">{fmt(sum.initialWealthEur)}</span>
-              </div>
-              <div className={`persp-kpi ${sum.finalNetWealthEur >= sum.initialWealthEur ? "kpi-pos" : "kpi-neg"}`}>
-                <span className="persp-kpi-label">Patrimonio final neto</span>
-                <span className="persp-kpi-value">{fmt(sum.finalNetWealthEur)}</span>
-              </div>
-              <div className="persp-kpi">
-                <span className="persp-kpi-label">Capital aportado</span>
-                <span className="persp-kpi-value">{fmt(sum.totalContributionsEur)}</span>
-              </div>
-              <div className={`persp-kpi ${sum.totalMarketGainEur >= 0 ? "kpi-pos" : "kpi-neg"}`}>
-                <span className="persp-kpi-label">Ganancia mercado</span>
-                <span className="persp-kpi-value">{fmtSign(sum.totalMarketGainEur)}</span>
-              </div>
+      {/* KPIs + comparación en fila */}
+      <div className="grid grid-cols-1 gap-3">
+
+        {sum && (
+          <Card>
+            <CardHeader className="pb-1 pt-3">
+              <CardTitle className="text-sm">
+                {SCENARIO_LABELS[selectedScenario]} — {horizonYears} años
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pb-3">
+              <KpiRow label="Patrimonio inicial" value={fmt(sum.initialWealthEur)} />
+              <KpiRow
+                label="Patrimonio final neto"
+                value={fmt(sum.finalNetWealthEur)}
+                color={sum.finalNetWealthEur >= sum.initialWealthEur ? "pos" : "neg"}
+              />
+              <KpiRow label="Capital aportado" value={fmt(sum.totalContributionsEur)} />
+              <KpiRow
+                label="Ganancia de mercado"
+                value={fmtSign(sum.totalMarketGainEur)}
+                color={sum.totalMarketGainEur >= 0 ? "pos" : "neg"}
+              />
               {sum.twr != null && (
-                <div className={`persp-kpi ${sum.twr >= 0 ? "kpi-pos" : "kpi-neg"}`}>
-                  <span className="persp-kpi-label">TWR acumulado</span>
-                  <span className="persp-kpi-value">{fmtPct(sum.twr * 100)}</span>
-                </div>
+                <KpiRow
+                  label="TWR acumulado"
+                  value={fmtPct(sum.twr * 100)}
+                  color={sum.twr >= 0 ? "pos" : "neg"}
+                />
               )}
               {sum.xirr != null && (
-                <div className={`persp-kpi ${sum.xirr >= 0 ? "kpi-pos" : "kpi-neg"}`}>
-                  <span className="persp-kpi-label">XIRR</span>
-                  <span className="persp-kpi-value">{fmtPct(sum.xirr * 100)}</span>
-                </div>
+                <KpiRow
+                  label="XIRR anualizado"
+                  value={fmtPct(sum.xirr * 100)}
+                  color={sum.xirr >= 0 ? "pos" : "neg"}
+                />
               )}
               {sum.maxDrawdownPct != null && (
-                <div className="persp-kpi kpi-neg">
-                  <span className="persp-kpi-label">Drawdown máx.</span>
-                  <span className="persp-kpi-value">{fmtPct(sum.maxDrawdownPct)}</span>
-                </div>
+                <KpiRow label="Drawdown máximo" value={fmtPct(sum.maxDrawdownPct)} color="neg" />
               )}
               {sum.totalSalesEur > 0 && (
-                <div className="persp-kpi kpi-warn">
-                  <span className="persp-kpi-label">Ventas simuladas</span>
-                  <span className="persp-kpi-value">{fmt(sum.totalSalesEur)}</span>
-                </div>
+                <KpiRow label="Ventas simuladas" value={fmt(sum.totalSalesEur)} color="warn" />
               )}
               {sum.totalRebuysEur > 0 && (
-                <div className="persp-kpi kpi-pos">
-                  <span className="persp-kpi-label">Recompras simuladas</span>
-                  <span className="persp-kpi-value">{fmt(sum.totalRebuysEur)}</span>
-                </div>
+                <KpiRow label="Recompras simuladas" value={fmt(sum.totalRebuysEur)} color="pos" />
               )}
               {sum.totalEurcReinvestedEur > 0 && (
-                <div className="persp-kpi">
-                  <span className="persp-kpi-label">Reinv. residual EURC</span>
-                  <span className="persp-kpi-value">{fmt(sum.totalEurcReinvestedEur)}</span>
-                </div>
+                <KpiRow label="Reinv. residual EURC" value={fmt(sum.totalEurcReinvestedEur)} />
               )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Comparación de escenarios */}
+        {simData.scenarios?.length > 0 && (
+          <Card>
+            <CardHeader className="pb-1 pt-3">
+              <CardTitle className="text-sm">Comparación a {horizonYears} años</CardTitle>
+            </CardHeader>
+            <CardContent className="pb-3">
+              <div className="responsive-table persp-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Escenario</th>
+                      <th className="num">Patrimonio</th>
+                      <th className="num">XIRR</th>
+                      <th className="num">Drawdown</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {simData.scenarios.map((s: any) => (
+                      <tr
+                        key={s.scenario}
+                        className={s.scenario === selectedScenario ? "bg-muted/30" : ""}
+                        style={{ cursor: "pointer" }}
+                        onClick={() => setSelectedScenario(s.scenario as SimScenario)}
+                      >
+                        <td className="font-medium text-xs">{SCENARIO_LABELS[s.scenario as SimScenario]}</td>
+                        <td className={`num text-xs ${s.summary.finalNetWealthEur >= s.summary.initialWealthEur ? "text-gain" : "text-loss"}`}>
+                          {fmt(s.summary.finalNetWealthEur)}
+                        </td>
+                        <td className="num text-xs">
+                          {s.summary.xirr != null ? fmtPct(s.summary.xirr * 100) : "—"}
+                        </td>
+                        <td className="num text-xs text-loss">
+                          {s.summary.maxDrawdownPct != null ? fmtPct(s.summary.maxDrawdownPct) : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+      </div>
 
       {/* Tabla anual */}
       {activeScenario?.annualSnapshots?.length > 0 && (
         <Card>
-          <CardHeader>
-            <CardTitle>Evolución anual</CardTitle>
+          <CardHeader className="pb-1 pt-3">
+            <CardTitle className="text-sm">Evolución anual — {SCENARIO_LABELS[selectedScenario]}</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pb-3">
             <div className="responsive-table persp-table">
               <table>
                 <thead>
@@ -195,86 +230,32 @@ export function PlanEscenarios() {
                     <th className="num">Ganancia</th>
                     <th className="num">TWR</th>
                     <th className="num">Ventas</th>
-                    <th className="num">Recompras</th>
                     <th className="num">Impuesto</th>
                   </tr>
                 </thead>
                 <tbody>
                   {activeScenario.annualSnapshots.map((snap: any) => (
                     <tr key={snap.year}>
-                      <td>
+                      <td className="text-xs">
                         {snap.year}
                         {snap.scope === "extrapol" && (
                           <Badge variant="neutral">ext</Badge>
                         )}
                       </td>
-                      <td className="num font-semibold">{fmt(snap.closingWealthEur)}</td>
-                      <td className={`num ${snap.marketGainEur >= 0 ? "text-gain" : "text-loss"}`}>
+                      <td className="num text-xs font-semibold">{fmt(snap.closingWealthEur)}</td>
+                      <td className={`num text-xs ${snap.marketGainEur >= 0 ? "text-gain" : "text-loss"}`}>
                         {fmtSign(snap.marketGainEur)}
                       </td>
-                      <td className={`num ${(snap.annualReturnPct ?? 0) >= 0 ? "text-gain" : "text-loss"}`}>
+                      <td className={`num text-xs ${(snap.annualReturnPct ?? 0) >= 0 ? "text-gain" : "text-loss"}`}>
                         {snap.annualReturnPct != null ? fmtPct(snap.annualReturnPct) : "—"}
                       </td>
-                      <td className="num">{snap.salesEur > 0.01 ? fmt(snap.salesEur) : "—"}</td>
-                      <td className="num">{snap.rebuysEur > 0.01 ? fmt(snap.rebuysEur) : "—"}</td>
-                      <td className="num text-muted-foreground">{snap.taxEur > 0.01 ? fmt(snap.taxEur) : "—"}</td>
+                      <td className="num text-xs">{snap.salesEur > 0.01 ? fmt(snap.salesEur) : "—"}</td>
+                      <td className="num text-xs text-muted-foreground">{snap.taxEur > 0.01 ? fmt(snap.taxEur) : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Comparación de escenarios */}
-      {simData.scenarios?.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Comparación de escenarios a {horizonYears} años</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="responsive-table persp-table">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Escenario</th>
-                    <th className="num">Patrimonio final</th>
-                    <th className="num">Ganancia total</th>
-                    <th className="num">XIRR</th>
-                    <th className="num">Drawdown máx.</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {simData.scenarios.map((s: any) => (
-                    <tr
-                      key={s.scenario}
-                      className={s.scenario === selectedScenario ? "bg-muted/30" : ""}
-                      style={{ cursor: "pointer" }}
-                      onClick={() => setSelectedScenario(s.scenario as SimScenario)}
-                    >
-                      <td className="font-medium">{SCENARIO_LABELS[s.scenario as SimScenario]}</td>
-                      <td className={`num ${s.summary.finalNetWealthEur >= s.summary.initialWealthEur ? "text-gain" : "text-loss"}`}>
-                        {fmt(s.summary.finalNetWealthEur)}
-                      </td>
-                      <td className={`num ${s.summary.totalMarketGainEur >= 0 ? "text-gain" : "text-loss"}`}>
-                        {fmtSign(s.summary.totalMarketGainEur)}
-                      </td>
-                      <td className="num">
-                        {s.summary.xirr != null ? fmtPct(s.summary.xirr * 100) : "—"}
-                      </td>
-                      <td className="num text-loss">
-                        {s.summary.maxDrawdownPct != null ? fmtPct(s.summary.maxDrawdownPct) : "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p className="text-xs text-muted-foreground mt-2">
-              Las ventas y recompras simuladas usan exactamente las mismas reglas configuradas en el Plan.
-              Si no hay reglas, se aplican umbrales automáticos (±50% / −15%) como fallback.
-            </p>
           </CardContent>
         </Card>
       )}
