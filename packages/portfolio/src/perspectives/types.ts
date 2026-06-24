@@ -71,6 +71,7 @@ export interface MonthlyState {
   monthCommissionsEur: number;
   monthTaxEur: number;
   monthEurcReinvestedEur: number;
+  monthNetEurcInflowEur: number;
   // acumulados del escenario hasta este mes
   cumulativeContributionsEur: number;
   cumulativeSalesEur: number;
@@ -98,6 +99,7 @@ export interface AnnualSnapshot {
   commissionsEur: number;
   taxEur: number;
   eurcReinvestedEur: number;
+  netEurcInflowEur: number;
 
   // Stock a fin de año
   fiscalReserveEur: number;
@@ -199,6 +201,9 @@ export interface ScenarioSummary {
   totalCommissionsEur: number;
   totalTaxEur: number;
   totalEurcReinvestedEur: number;
+  totalNetEurcInflowEur: number;
+  initialEurcFreeEur: number;
+  initialEurcFiscalReserveEur: number;
   finalEurcFreeEur: number;
   finalFiscalReserveEur: number;
   xirr: number | null;

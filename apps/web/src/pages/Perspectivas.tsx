@@ -53,6 +53,7 @@ interface AnnualSnapshot {
   commissionsEur: number;
   taxEur: number;
   eurcReinvestedEur: number;
+  netEurcInflowEur: number;
   fiscalReserveEur: number;
   eurcFreeEur: number;
   eurCashEur: number;
@@ -73,6 +74,9 @@ interface ScenarioSummary {
   totalCommissionsEur: number;
   totalTaxEur: number;
   totalEurcReinvestedEur: number;
+  totalNetEurcInflowEur: number;
+  initialEurcFreeEur: number;
+  initialEurcFiscalReserveEur: number;
   finalEurcFreeEur: number;
   finalFiscalReserveEur: number;
   xirr: number | null;
@@ -481,8 +485,9 @@ interface AnalystForecast {
 }
 
 const SCENARIO_MAP: Record<string, string> = {
-  conservador: "Conservador", medio: "Medio",
-  optimista: "Optimista", muy_alcista: "Muy alcista",
+  conservador: "Conservador", moderado: "Moderado",
+  base: "Base", favorable: "Favorable", optimista: "Optimista",
+  medio: "Medio", muy_alcista: "Muy alcista",
 };
 
 function AnalystForecastSection({ years, activeAssets }: { years: number[]; activeAssets: string[] }) {
@@ -548,7 +553,7 @@ function AnalystForecastSection({ years, activeAssets }: { years: number[]; acti
                   </thead>
                   <tbody>
                     {assetYears.flatMap(year =>
-                      ["conservador", "medio", "optimista", "muy_alcista"].map(sc => {
+                      ["conservador", "moderado", "base", "favorable", "optimista", "medio", "muy_alcista"].map(sc => {
                         const f = assetForecasts.find(x => x.targetYear === year && x.scenario === sc);
                         if (!f) return null;
                         return (
@@ -588,6 +593,70 @@ function AnalystForecastSection({ years, activeAssets }: { years: number[]; acti
             Años sin cobertura externa: {years.filter(y => !coveredYears.includes(y)).join(", ")}. No se muestran proyecciones para estos años — solo el modelo interno de ciclos.
           </p>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── EURC Reconciliation Section ─────────────────────────────────────────────
+
+function EurcReconciliationSection({ sum }: { sum: ScenarioSummary }) {
+  const fmtE = (n: number) => n.toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
+  const eurcFreeInitial  = sum.initialEurcFreeEur ?? 0;
+  const eurcFiscalInit   = sum.initialEurcFiscalReserveEur ?? 0;
+  const eurcInflow       = sum.totalNetEurcInflowEur ?? 0;
+  const rebuys           = sum.totalRebuysEur;
+  const reinvested       = sum.totalEurcReinvestedEur;
+  const eurcFreeFinal    = sum.finalEurcFreeEur;
+  const fiscalGenerated  = sum.totalTaxEur;
+  const fiscalFinal      = sum.finalFiscalReserveEur;
+
+  const computedFree = eurcFreeInitial + eurcInflow - rebuys - reinvested;
+  const diffFree     = eurcFreeFinal - computedFree;
+  const computedFiscal = eurcFiscalInit + fiscalGenerated;
+  const diffFiscal     = fiscalFinal - computedFiscal;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Conciliación EURC</CardTitle>
+        <p className="text-xs text-muted-foreground mt-1">
+          Verificación de saldo EURC libre y reserva fiscal durante toda la simulación. La diferencia debe ser ≤ 0,01 € (redondeo).
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div>
+          <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">EURC libre</p>
+          <table className="w-full text-xs">
+            <tbody>
+              <tr><td className="py-0.5">EURC libre inicial</td><td className="text-right font-mono">{fmtE(eurcFreeInitial)}</td></tr>
+              <tr className="text-gain"><td className="py-0.5">+ EURC neto de ventas</td><td className="text-right font-mono">+{fmtE(eurcInflow)}</td></tr>
+              <tr className="text-loss"><td className="py-0.5">− Recompras (comisión incl.)</td><td className="text-right font-mono">−{fmtE(rebuys)}</td></tr>
+              <tr className="text-loss"><td className="py-0.5">− Reinversión residual (comisión incl.)</td><td className="text-right font-mono">−{fmtE(reinvested)}</td></tr>
+              <tr className="border-t border-border/40"><td className="py-0.5 font-semibold">= EURC libre calculado</td><td className="text-right font-mono font-semibold">{fmtE(computedFree)}</td></tr>
+              <tr><td className="py-0.5">EURC libre final (motor)</td><td className="text-right font-mono">{fmtE(eurcFreeFinal)}</td></tr>
+              <tr className={`font-semibold ${Math.abs(diffFree) < 0.02 ? "text-gain" : "text-loss"}`}>
+                <td className="py-0.5">Diferencia</td>
+                <td className="text-right font-mono">{fmtE(diffFree)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Reserva fiscal</p>
+          <table className="w-full text-xs">
+            <tbody>
+              <tr><td className="py-0.5">Reserva fiscal inicial</td><td className="text-right font-mono">{fmtE(eurcFiscalInit)}</td></tr>
+              <tr className="text-gain"><td className="py-0.5">+ Reserva generada por ventas</td><td className="text-right font-mono">+{fmtE(fiscalGenerated)}</td></tr>
+              <tr className="border-t border-border/40"><td className="py-0.5 font-semibold">= Reserva calculada</td><td className="text-right font-mono font-semibold">{fmtE(computedFiscal)}</td></tr>
+              <tr><td className="py-0.5">Reserva final (motor)</td><td className="text-right font-mono">{fmtE(fiscalFinal)}</td></tr>
+              <tr className={`font-semibold ${Math.abs(diffFiscal) < 0.02 ? "text-gain" : "text-loss"}`}>
+                <td className="py-0.5">Diferencia</td>
+                <td className="text-right font-mono">{fmtE(diffFiscal)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </CardContent>
     </Card>
   );
@@ -813,6 +882,18 @@ export function Perspectivas() {
             <EvolutionChart simData={simData} />
           </CardContent>
         </Card>
+
+        {/* Previsiones externas de analistas */}
+        <AnalystForecastSection
+          years={years}
+          activeAssets={[...new Set([
+            ...Object.keys(activeScenario.assetPriceInfo ?? {}),
+            ...activeScenario.annualSnapshots.flatMap(s => Object.keys(s.positions ?? {})),
+          ]).values()].filter(a => a !== "EURC" && a !== "EUR")}
+        />
+
+        {/* Conciliación EURC */}
+        <EurcReconciliationSection sum={sum} />
 
       </div>
     </div>

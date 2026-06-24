@@ -180,6 +180,7 @@ function initState(input: SimInput): MonthlyState {
     monthCommissionsEur: 0,
     monthTaxEur: 0,
     monthEurcReinvestedEur: 0,
+    monthNetEurcInflowEur: 0,
     cumulativeContributionsEur: 0,
     cumulativeSalesEur: 0,
     cumulativeRebuysEur: 0,
@@ -344,6 +345,7 @@ function evaluateSales(
     state.monthSalesEur += grossEur;
     state.monthCommissionsEur += commissionEur;
     state.monthTaxEur += taxEur;
+    state.monthNetEurcInflowEur += eurcEur;
 
     state.events.push({
       date,
@@ -418,6 +420,7 @@ function evaluateSales(
       state.monthSalesEur += grossEur;
       state.monthCommissionsEur += commissionEur;
       state.monthTaxEur += taxEur;
+      state.monthNetEurcInflowEur += eurcEur;
 
       state.events.push({
         date,
@@ -723,6 +726,7 @@ function simulateMonth(
     monthCommissionsEur: 0,
     monthTaxEur: 0,
     monthEurcReinvestedEur: 0,
+    monthNetEurcInflowEur: 0,
     assetStates: {},
   };
 
@@ -1048,6 +1052,7 @@ function buildAnnualSnapshot(
   const commissionsEur = monthsOfYear.reduce((s, m) => s + m.monthCommissionsEur, 0);
   const taxEur = monthsOfYear.reduce((s, m) => s + m.monthTaxEur, 0);
   const eurcReinvestedEur = monthsOfYear.reduce((s, m) => s + m.monthEurcReinvestedEur, 0);
+  const netEurcInflowEur = monthsOfYear.reduce((s, m) => s + m.monthNetEurcInflowEur, 0);
 
   const marketGainEur = closingWealthEur - openingWealthEur - contributionsEur;
 
@@ -1137,6 +1142,7 @@ function buildAnnualSnapshot(
     commissionsEur,
     taxEur,
     eurcReinvestedEur,
+    netEurcInflowEur,
     fiscalReserveEur: lastMonth.eurcFiscalReserve,
     eurcFreeEur: lastMonth.eurcFree,
     eurCashEur: lastMonth.eurCash,
@@ -1420,6 +1426,9 @@ function runScenario(
     totalCommissionsEur: annualSnapshots.reduce((s, a) => s + a.commissionsEur, 0),
     totalTaxEur: annualSnapshots.reduce((s, a) => s + a.taxEur, 0),
     totalEurcReinvestedEur: annualSnapshots.reduce((s, a) => s + a.eurcReinvestedEur, 0),
+    totalNetEurcInflowEur: annualSnapshots.reduce((s, a) => s + a.netEurcInflowEur, 0),
+    initialEurcFreeEur: input.eurcFree,
+    initialEurcFiscalReserveEur: input.eurcFiscalReserve,
     finalEurcFreeEur: lastSnap?.eurcFreeEur ?? 0,
     finalFiscalReserveEur: lastSnap?.fiscalReserveEur ?? 0,
     xirr,
