@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { ChartNoAxesCombined } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/Card";
 import { Badge } from "../components/Badge";
-import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorState } from "../components/ErrorState";
 import { LoadingState } from "../components/LoadingState";
@@ -143,8 +142,8 @@ const SCENARIO_LABELS: Record<SimScenario, string> = {
   optimista:   "Optimista",
 };
 const CURRENT_YEAR = new Date().getFullYear();
-// Opciones de año final: desde el año siguiente hasta 25 años vista
-const END_YEAR_OPTIONS: number[] = Array.from({ length: 25 }, (_, i) => CURRENT_YEAR + 1 + i);
+// Opciones de año final: desde el año siguiente hasta 20 años vista
+const END_YEAR_OPTIONS: number[] = Array.from({ length: 20 }, (_, i) => CURRENT_YEAR + 1 + i);
 const DEFAULT_END_YEAR = CURRENT_YEAR + 10;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -215,101 +214,6 @@ function YearSelector({
           {y}
         </button>
       ))}
-    </div>
-  );
-}
-
-// ─── Asset price table (year by year) ────────────────────────────────────────
-
-interface AssetPriceTableProps {
-  scenarios: PerspectivesSimulation["scenarios"];
-  selectedScenario: SimScenario;
-}
-
-function AssetPriceTable({ scenarios, selectedScenario }: AssetPriceTableProps) {
-  const activeScenario = scenarios.find(s => s.scenario === selectedScenario);
-  if (!activeScenario || activeScenario.annualSnapshots.length === 0) return null;
-
-  // Collect all asset IDs that appear in any snapshot with a price
-  const assetIds = Array.from(new Set(
-    activeScenario.annualSnapshots.flatMap(s =>
-      Object.values(s.positions)
-        .filter(p => p.priceEur != null)
-        .map(p => p.assetId)
-    )
-  )).sort();
-
-  if (assetIds.length === 0) return null;
-
-  const snapshots = activeScenario.annualSnapshots;
-
-  // Format price compactly: €1.234 / €12.345 / €1,23M
-  function fmtPrice(v: number | null): string {
-    if (v == null) return "—";
-    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2).replace(".", ",")} M€`;
-    if (v >= 1_000) return `${Math.round(v).toLocaleString("es-ES")} €`;
-    return `${v.toFixed(2).replace(".", ",")} €`;
-  }
-
-  // Determine year direction vs previous year's price for the same asset
-  function direction(snap: AnnualSnapshot, prev: AnnualSnapshot | undefined, assetId: string): "up" | "down" | "flat" | null {
-    const cur = snap.positions[assetId]?.priceEur;
-    const prv = prev?.positions[assetId]?.priceEur;
-    if (cur == null || prv == null) return null;
-    const delta = (cur - prv) / prv;
-    if (delta > 0.02) return "up";
-    if (delta < -0.02) return "down";
-    return "flat";
-  }
-
-  return (
-    <div className="space-y-2">
-      <div className="responsive-table persp-table">
-        <table>
-          <thead>
-            <tr>
-              <th>Año</th>
-              {assetIds.map(id => (
-                <th key={id} className="num">{id.toUpperCase()}</th>
-              ))}
-              <th className="num text-muted-foreground" style={{ fontSize: "0.75rem" }}>Resultado año</th>
-            </tr>
-          </thead>
-          <tbody>
-            {snapshots.map((snap, i) => {
-              const prev = snapshots[i - 1];
-              const marketDelta = snap.marketGainEur;
-              const phase = marketDelta > 0 ? "alcista" : marketDelta < -50 ? "bajista" : "lateral";
-              return (
-                <tr key={snap.year} className={snap.scope === "extrapol" ? "opacity-70" : ""}>
-                  <td>
-                    <span style={{ fontWeight: 600 }}>{snap.year}</span>
-                    {snap.scope === "extrapol" && <span className="ml-1 text-xs text-muted-foreground">*</span>}
-                  </td>
-                  {assetIds.map(id => {
-                    const price = snap.positions[id]?.priceEur ?? null;
-                    const dir = direction(snap, prev, id);
-                    const cls = dir === "up" ? "text-gain" : dir === "down" ? "text-loss" : "";
-                    const arrow = dir === "up" ? " ↑" : dir === "down" ? " ↓" : "";
-                    return (
-                      <td key={id} className={`num ${cls}`}>
-                        {fmtPrice(price)}{arrow}
-                      </td>
-                    );
-                  })}
-                  <td className={`num text-xs ${marketDelta >= 0 ? "text-gain" : "text-loss"}`}>
-                    {phase}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        Precios proyectados por el modelo interno de ciclos de mercado. ↑ sube / ↓ baja respecto al año anterior (umbral ±2%).
-        {snapshots.some(s => s.scope === "extrapol") && " * Años extrapolados fuera del plan explícito."}
-      </p>
     </div>
   );
 }
@@ -438,56 +342,6 @@ function YearDetail({ snap }: { snap: AnnualSnapshot }) {
         )}
       </div>
 
-      {/* Tesorería */}
-      {(snap.eurcFreeEur > 0.01 || snap.fiscalReserveEur > 0.01 || snap.eurCashEur > 0.01 || snap.eurcReinvestedEur > 0.01) && (
-        <div className="persp-kpi-grid">
-          {snap.eurcFreeEur > 0.01 && (
-            <div className="persp-kpi">
-              <span className="persp-kpi-label">EURC libre</span>
-              <span className="persp-kpi-value">{fmt(snap.eurcFreeEur)}</span>
-            </div>
-          )}
-          {snap.fiscalReserveEur > 0.01 && (
-            <div className="persp-kpi kpi-warn">
-              <span className="persp-kpi-label">Reserva fiscal</span>
-              <span className="persp-kpi-value">{fmt(snap.fiscalReserveEur)}</span>
-            </div>
-          )}
-          {snap.eurcReinvestedEur > 0.01 && (
-            <div className="persp-kpi">
-              <span className="persp-kpi-label">Reinversión residual</span>
-              <span className="persp-kpi-value">{fmt(snap.eurcReinvestedEur)}</span>
-            </div>
-          )}
-          {snap.eurCashEur > 0.01 && (
-            <div className="persp-kpi">
-              <span className="persp-kpi-label">Cash EUR</span>
-              <span className="persp-kpi-value">{fmt(snap.eurCashEur)}</span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Conciliación EURC — solo cuando hay ventas */}
-      {snap.salesEur > 0.01 && (
-        <div className="text-xs border border-border/40 rounded p-2 space-y-1">
-          <p className="font-medium">Trazabilidad EURC del año</p>
-          <div className="grid grid-cols-2 gap-x-4 text-muted-foreground">
-            <span>Ventas</span>
-            <span className="text-right font-mono text-foreground">{fmt(snap.salesEur)}</span>
-            <span>− Reserva fiscal</span>
-            <span className="text-right font-mono">−{fmt(snap.taxEur)}</span>
-            <span>− Recompras</span>
-            <span className="text-right font-mono">−{fmt(snap.rebuysEur)}</span>
-            <span>− Reinv. residual</span>
-            <span className="text-right font-mono">−{fmt(snap.eurcReinvestedEur)}</span>
-            <span>= EURC libre (cierre)</span>
-            <span className="text-right font-mono text-foreground">{fmt(snap.eurcFreeEur)}</span>
-          </div>
-          <p className="text-[10px] text-muted-foreground/70">La diferencia corresponde a comisiones y saldo EURC del inicio del año.</p>
-        </div>
-      )}
-
       {/* Posiciones compactas */}
       {positions.length > 0 && (
         <div className="responsive-table persp-table">
@@ -557,63 +411,6 @@ function YearDetail({ snap }: { snap: AnnualSnapshot }) {
   );
 }
 
-// ─── Scenario comparison table ────────────────────────────────────────────────
-
-function ScenarioComparison({ simData }: { simData: PerspectivesSimulation }) {
-  return (
-    <div className="space-y-2">
-      <div className="responsive-table persp-table">
-        <table>
-          <thead>
-            <tr>
-              <th>Escenario</th>
-              <th className="num">Patrimonio final</th>
-              <th className="num">Resultado mercado</th>
-              <th className="num">Capital aportado</th>
-              <th className="num">Ventas ⓘ</th>
-              <th className="num">Recompras ⓘ</th>
-              <th className="num">Impuesto</th>
-              <th className="num">XIRR</th>
-              <th className="num">Drawdown máx.</th>
-            </tr>
-          </thead>
-          <tbody>
-            {simData.scenarios.map(s => (
-              <tr key={s.scenario}>
-                <td>
-                  <Badge variant={
-                    s.scenario === "optimista" ? "success" :
-                    s.scenario === "favorable" ? "info" :
-                    s.scenario === "base" ? "neutral" :
-                    s.scenario === "moderado" ? "warning" : "danger"
-                  }>
-                    {s.label}
-                  </Badge>
-                </td>
-                <td className="num" style={{ fontWeight: 600 }}>{fmt(s.summary.finalNetWealthEur)}</td>
-                <td className={`num ${(s.summary.totalMarketGainEur ?? 0) >= 0 ? "text-gain" : "text-loss"}`}>
-                  {fmtSign(s.summary.totalMarketGainEur)}
-                </td>
-                <td className="num">{fmt(s.summary.totalContributionsEur)}</td>
-                <td className="num text-muted-foreground">{s.summary.totalSalesEur > 0 ? fmt(s.summary.totalSalesEur) : "—"}</td>
-                <td className="num text-muted-foreground">{s.summary.totalRebuysEur > 0 ? fmt(s.summary.totalRebuysEur) : "—"}</td>
-                <td className="num">{s.summary.totalTaxEur > 0 ? fmt(s.summary.totalTaxEur) : "—"}</td>
-                <td className={`num ${(s.summary.xirr ?? 0) >= 0 ? "text-gain" : "text-loss"}`}>
-                  {fmtPct(s.summary.xirr)}
-                </td>
-                <td className="num text-loss">
-                  {s.summary.maxDrawdownPct != null ? `${(s.summary.maxDrawdownPct * 100).toFixed(1)}%` : "—"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <p className="text-xs text-muted-foreground">ⓘ Ventas y Recompras son movimientos internos — no afectan el patrimonio neto de forma directa.</p>
-    </div>
-  );
-}
-
 // ─── Evolution chart (SVG) ────────────────────────────────────────────────────
 
 const SCENARIO_CSS_COLORS: Record<SimScenario, string> = {
@@ -670,23 +467,6 @@ function EvolutionChart({ simData }: { simData: PerspectivesSimulation }) {
           </g>
         ))}
       </svg>
-    </div>
-  );
-}
-
-// ─── Validations ──────────────────────────────────────────────────────────────
-
-function Validations({ items }: { items: ValidationResult[] }) {
-  const failed = items.filter(v => !v.passed);
-  if (failed.length === 0) return null;
-  return (
-    <div className="fiscal-tax-note">
-      <p className="text-sm font-medium mb-2">Advertencias de validación</p>
-      <ul className="space-y-1">
-        {failed.map((v, i) => (
-          <li key={i} className="text-xs">{v.rule}: {v.detail}</li>
-        ))}
-      </ul>
     </div>
   );
 }
@@ -822,8 +602,6 @@ export function Perspectivas() {
   const horizonYears = endYear - CURRENT_YEAR;
   const [selectedScenario, setSelectedScenario] = useState<SimScenario>("base");
   const [selectedYear, setSelectedYear] = useState<number | null>(null);
-  const [showComparison, setShowComparison] = useState(false);
-  const [showChart, setShowChart] = useState(true);
 
   const { data: simData, isLoading, error, isFetching } = useQuery<PerspectivesSimulation>({
     queryKey: ["persp2:getSimulation", endYear],
@@ -904,7 +682,6 @@ export function Perspectivas() {
 
   const sum = activeScenario.summary;
   const beneficioNetoEur = sum.finalNetWealthEur - sum.initialWealthEur - sum.totalContributionsEur;
-  const lastSnap = activeScenario.annualSnapshots.at(-1);
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -956,9 +733,6 @@ export function Perspectivas() {
           </CardContent>
         </Card>
 
-        {/* Validations */}
-        <Validations items={simData.validations} />
-
         {/* KPI summary */}
         <div className="persp-kpi-grid">
           <div className="persp-kpi">
@@ -983,46 +757,16 @@ export function Perspectivas() {
               <span className="persp-kpi-value">{fmtAnnualPct(sum.twr * 100)}</span>
             </div>
           )}
-          {sum.totalSalesEur > 0 && (
-            <div className="persp-kpi kpi-warn">
-              <span className="persp-kpi-label">Ventas parciales ⓘ</span>
-              <span className="persp-kpi-value">{fmt(sum.totalSalesEur)}</span>
-            </div>
-          )}
-          {sum.totalRebuysEur > 0 && (
-            <div className="persp-kpi kpi-pos">
-              <span className="persp-kpi-label">Recompras ⓘ</span>
-              <span className="persp-kpi-value">{fmt(sum.totalRebuysEur)}</span>
-            </div>
-          )}
-          {sum.totalEurcReinvestedEur > 0 && (
-            <div className="persp-kpi">
-              <span className="persp-kpi-label">Reinversión residual ⓘ</span>
-              <span className="persp-kpi-value">{fmt(sum.totalEurcReinvestedEur)}</span>
-            </div>
-          )}
+          <div className={`persp-kpi ${(sum.xirr ?? 0) >= 0 ? "kpi-pos" : "kpi-neg"}`}>
+            <span className="persp-kpi-label">XIRR anual</span>
+            <span className="persp-kpi-value">{fmtPct(sum.xirr)}</span>
+          </div>
           {sum.totalTaxEur > 0 && (
             <div className="persp-kpi kpi-warn">
               <span className="persp-kpi-label">Impuesto estimado</span>
               <span className="persp-kpi-value">{fmt(sum.totalTaxEur)}</span>
             </div>
           )}
-          {(lastSnap?.fiscalReserveEur ?? 0) > 0 && (
-            <div className="persp-kpi kpi-warn">
-              <span className="persp-kpi-label">Reserva fiscal</span>
-              <span className="persp-kpi-value">{fmt(lastSnap?.fiscalReserveEur)}</span>
-            </div>
-          )}
-          {(lastSnap?.eurcFreeEur ?? 0) > 1 && (
-            <div className="persp-kpi">
-              <span className="persp-kpi-label">EURC pendiente</span>
-              <span className="persp-kpi-value">{fmt(lastSnap?.eurcFreeEur)}</span>
-            </div>
-          )}
-          <div className={`persp-kpi ${(sum.xirr ?? 0) >= 0 ? "kpi-pos" : "kpi-neg"}`}>
-            <span className="persp-kpi-label">XIRR anual</span>
-            <span className="persp-kpi-value">{fmtPct(sum.xirr)}</span>
-          </div>
           {sum.maxDrawdownPct != null && (
             <div className="persp-kpi kpi-neg">
               <span className="persp-kpi-label">Drawdown máx.</span>
@@ -1031,7 +775,7 @@ export function Perspectivas() {
           )}
         </div>
 
-        {/* Year selector + detail */}
+        {/* Detalle por año */}
         <Card>
           <CardHeader>
             <CardTitle>Detalle por año</CardTitle>
@@ -1050,17 +794,7 @@ export function Perspectivas() {
           </CardContent>
         </Card>
 
-        {/* Asset price table year by year */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Precios por activo y año — {SCENARIO_LABELS[selectedScenario]}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <AssetPriceTable scenarios={simData.scenarios} selectedScenario={selectedScenario} />
-          </CardContent>
-        </Card>
-
-        {/* Annual table */}
+        {/* Tabla anual */}
         <Card>
           <CardHeader>
             <CardTitle>Tabla anual — {SCENARIO_LABELS[selectedScenario]}</CardTitle>
@@ -1070,102 +804,15 @@ export function Perspectivas() {
           </CardContent>
         </Card>
 
-        {/* Evolution chart */}
+        {/* Evolución del patrimonio */}
         <Card>
           <CardHeader>
-            <div className="flex items-center justify-between gap-2">
-              <CardTitle>Evolución del patrimonio (5 escenarios)</CardTitle>
-              <Button variant="ghost" size="sm" onClick={() => setShowChart(!showChart)}>
-                {showChart ? "Ocultar" : "Mostrar"}
-              </Button>
-            </div>
+            <CardTitle>Evolución del patrimonio (5 escenarios)</CardTitle>
           </CardHeader>
-          {showChart && (
-            <CardContent>
-              <EvolutionChart simData={simData} />
-            </CardContent>
-          )}
+          <CardContent>
+            <EvolutionChart simData={simData} />
+          </CardContent>
         </Card>
-
-        {/* Scenario comparison */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between gap-2">
-              <CardTitle>Comparación de escenarios</CardTitle>
-              <Button variant="ghost" size="sm" onClick={() => setShowComparison(!showComparison)}>
-                {showComparison ? "Ocultar" : "Mostrar"}
-              </Button>
-            </div>
-          </CardHeader>
-          {showComparison && (
-            <CardContent>
-              <ScenarioComparison simData={simData} />
-            </CardContent>
-          )}
-        </Card>
-
-        {/* Previsiones externas de analistas */}
-        <AnalystForecastSection
-          years={years}
-          activeAssets={[...new Set([
-            ...Object.keys(activeScenario.assetPriceInfo ?? {}),
-            ...activeScenario.annualSnapshots.flatMap(s => Object.keys(s.positions ?? {})),
-          ]).values()].filter(a => a !== "EURC" && a !== "EUR")}
-        />
-
-        {/* Trazabilidad de previsiones por activo */}
-        {activeScenario && Object.keys(activeScenario.assetPriceInfo ?? {}).length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Previsiones por activo</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="responsive-table persp-table">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Activo</th>
-                      <th>Tier</th>
-                      <th className="num">Precio actual</th>
-                      <th className="num">Precio horizonte</th>
-                      <th className="num">Múltiplo</th>
-                      <th className="num">Cap. impl. (B€)</th>
-                      <th>Fuente</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Object.values(activeScenario.assetPriceInfo).map(info => (
-                      <tr key={info.assetId} className={info.impliedMarketCapWarning ? "opacity-60" : ""}>
-                        <td><span className="font-mono font-semibold text-xs">{info.assetId.toUpperCase()}</span></td>
-                        <td className="text-xs text-muted-foreground">{info.tier}</td>
-                        <td className="num">{fmt(info.currentPriceEur)}</td>
-                        <td className="num" style={{ fontWeight: 600 }}>{fmt(info.horizonPriceEur)}</td>
-                        <td className={`num ${(info.priceMultiple ?? 0) >= 1 ? "text-gain" : "text-loss"}`}>
-                          {info.priceMultiple != null ? `×${info.priceMultiple.toFixed(1)}` : "—"}
-                        </td>
-                        <td className={`num ${info.impliedMarketCapWarning ? "text-yellow-500" : ""}`}>
-                          {info.impliedMarketCapBnEur != null ? info.impliedMarketCapBnEur.toFixed(0) : "—"}
-                          {info.impliedMarketCapWarning && " ⚠"}
-                        </td>
-                        <td className="text-xs">
-                          {info.modelType === "analyst_consensus_adjusted"
-                            ? `Consenso (${info.consensusSourceCount} fuentes${info.peakMultAdjustment != null ? `, adj. ${info.peakMultAdjustment >= 0 ? "+" : ""}${(info.peakMultAdjustment * 100).toFixed(0)}%` : ""})`
-                            : "Modelo ciclos"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                <strong>Modelo ciclos:</strong> trayectoria basada en ciclos históricos BTC (acumulación → euforia → distribución → fondo), determinista por escenario.{" "}
-                <strong>Consenso:</strong> previsiones públicas de analistas (ARK, StanChart, VanEck, Pantera…) ajustan el múltiplo de pico ±30%.{" "}
-                <strong>Cap. impl.</strong> = precio proyectado × suministro circulante aprox. (2025). ⚠ &gt;5.000B€ requiere validación adicional.{" "}
-                Suministro y previsiones pueden variar; las cifras son orientativas.
-              </p>
-            </CardContent>
-          </Card>
-        )}
 
       </div>
     </div>

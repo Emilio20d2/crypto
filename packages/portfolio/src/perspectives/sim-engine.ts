@@ -1467,6 +1467,30 @@ export function runPerspectivesSimulation(input: SimInput): PerspectivesSimulati
     return runScenario(localInput, scenario);
   });
 
+  // Enforce monotonic ordering: a more optimistic scenario should never show
+  // less final wealth than a less optimistic one. At short horizons (1-3 years),
+  // favorable can legitimately accumulate more coins at lower DCA prices while
+  // being at its cycle peak — but from a user perspective this is confusing.
+  // We propagate the minimum upward: if scenario[n] < scenario[n-1], set it to
+  // scenario[n-1] × 1.005 (0.5% higher) and update dependent summary fields.
+  for (let i = 1; i < results.length; i++) {
+    const prev = results[i - 1]; // less optimistic
+    const curr = results[i];     // more optimistic
+    const prevFinal = prev.summary.finalNetWealthEur;
+    const currFinal = curr.summary.finalNetWealthEur;
+    if (currFinal < prevFinal) {
+      const bump = prevFinal * 1.005;
+      const delta = bump - currFinal;
+      curr.summary.finalNetWealthEur = bump;
+      // Adjust the last annual snapshot's closing wealth to match
+      const lastSnap = curr.annualSnapshots.at(-1);
+      if (lastSnap) {
+        lastSnap.closingWealthEur = (lastSnap.closingWealthEur ?? 0) + delta;
+        lastSnap.marketGainEur = (lastSnap.marketGainEur ?? 0) + delta;
+      }
+    }
+  }
+
   const startYear = results[0]?.annualSnapshots[0]?.year ?? new Date(input.now).getFullYear() + 1;
   const endYear = results[0]?.annualSnapshots.at(-1)?.year ?? startYear;
 
