@@ -98,6 +98,7 @@ export function PortfolioMetrics({
   cryptoTotalEur,
   eurcTotalEur,
   totalInvested,
+  totalInvestedPendingLabel,
   performance,
   variation24h,
   variation24hPercent,
@@ -107,6 +108,7 @@ export function PortfolioMetrics({
   cryptoTotalEur?: number | null;
   eurcTotalEur?: number | null;
   totalInvested?: number | null;
+  totalInvestedPendingLabel?: string;
   performance?: number | null;
   variation24h?: number | null;
   variation24hPercent?: number | null;
@@ -138,7 +140,7 @@ export function PortfolioMetrics({
       tone: variation24h != null && variation24h < 0 ? "negative" : "positive",
       icon: TrendingUp,
     },
-    { label: "Total invertido", sublabel: undefined as string | undefined, value: formatMoneyCompact(totalInvested), icon: Database },
+    { label: "Total invertido", sublabel: totalInvested == null ? totalInvestedPendingLabel : undefined, value: formatMoneyCompact(totalInvested), icon: Database },
     {
       label: "Reserva EURC",
       sublabel: undefined as string | undefined,

@@ -389,16 +389,21 @@ export function Portfolio() {
 
   let totalInvestedSum = 0;
   let totalInvestedComplete = positions.length > 0;
+  const pendingCostAssets: string[] = [];
   for (const position of positions) {
     const localCost = localPositionMap[position.asset];
     if (typeof localCost === "number" && Number.isFinite(localCost) && localCost > 0 && !localCostPendingByAsset[position.asset]) {
       totalInvestedSum += localCost;
     } else {
       totalInvestedComplete = false;
+      pendingCostAssets.push(position.asset);
     }
   }
 
   const totalInvested = totalInvestedComplete ? totalInvestedSum : null;
+  const totalInvestedPendingLabel = pendingCostAssets.length > 0
+    ? `Pendiente: ${pendingCostAssets.join(", ")}`
+    : undefined;
 
   // Crypto value (investment positions only) — used for P&L.
   const cryptoTotal = positionsTotalBalance(positions);
@@ -433,6 +438,7 @@ export function Portfolio() {
         cryptoTotalEur={cryptoTotal}
         eurcTotalEur={eurcTotalFiat > 0 ? eurcTotalFiat : null}
         totalInvested={totalInvested}
+        totalInvestedPendingLabel={totalInvestedPendingLabel}
         performance={performance}
         variation24h={variation24h.value}
         variation24hPercent={variation24h.percent}

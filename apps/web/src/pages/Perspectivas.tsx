@@ -796,6 +796,12 @@ export function Perspectivas() {
             <span className="persp-kpi-label">Patrimonio final neto</span>
             <span className="persp-kpi-value">{fmt(sum.finalNetWealthEur)}</span>
           </div>
+          {sum.finalFiscalReserveEur > 0 && (
+            <div className="persp-kpi">
+              <span className="persp-kpi-label">Patrimonio final bruto</span>
+              <span className="persp-kpi-value">{fmt(sum.finalNetWealthEur + sum.finalFiscalReserveEur)}</span>
+            </div>
+          )}
           <div className="persp-kpi">
             <span className="persp-kpi-label">Capital aportado</span>
             <span className="persp-kpi-value">{fmt(sum.totalContributionsEur)}</span>
@@ -814,16 +820,46 @@ export function Perspectivas() {
             <span className="persp-kpi-label">XIRR anual</span>
             <span className="persp-kpi-value">{fmtPct(sum.xirr)}</span>
           </div>
+          {sum.maxDrawdownPct != null && (
+            <div className="persp-kpi kpi-neg">
+              <span className="persp-kpi-label">Drawdown máx.</span>
+              <span className="persp-kpi-value">−{(sum.maxDrawdownPct * 100).toFixed(1)}%</span>
+            </div>
+          )}
+          {sum.totalSalesEur > 0 && (
+            <div className="persp-kpi kpi-warn">
+              <span className="persp-kpi-label">Ventas simuladas</span>
+              <span className="persp-kpi-value">{fmt(sum.totalSalesEur)}</span>
+            </div>
+          )}
+          {sum.totalRebuysEur > 0 && (
+            <div className="persp-kpi kpi-pos">
+              <span className="persp-kpi-label">Recompras simuladas</span>
+              <span className="persp-kpi-value">{fmt(sum.totalRebuysEur)}</span>
+            </div>
+          )}
+          {sum.totalEurcReinvestedEur > 0 && (
+            <div className="persp-kpi">
+              <span className="persp-kpi-label">Reinversión EURC</span>
+              <span className="persp-kpi-value">{fmt(sum.totalEurcReinvestedEur)}</span>
+            </div>
+          )}
           {sum.totalTaxEur > 0 && (
             <div className="persp-kpi kpi-warn">
               <span className="persp-kpi-label">Impuesto estimado</span>
               <span className="persp-kpi-value">{fmt(sum.totalTaxEur)}</span>
             </div>
           )}
-          {sum.maxDrawdownPct != null && (
-            <div className="persp-kpi kpi-neg">
-              <span className="persp-kpi-label">Drawdown máx.</span>
-              <span className="persp-kpi-value">−{(sum.maxDrawdownPct * 100).toFixed(1)}%</span>
+          {sum.finalFiscalReserveEur > 0 && (
+            <div className="persp-kpi kpi-warn">
+              <span className="persp-kpi-label">Reserva fiscal final</span>
+              <span className="persp-kpi-value">{fmt(sum.finalFiscalReserveEur)}</span>
+            </div>
+          )}
+          {sum.finalEurcFreeEur > 0 && (
+            <div className="persp-kpi">
+              <span className="persp-kpi-label">EURC libre final</span>
+              <span className="persp-kpi-value">{fmt(sum.finalEurcFreeEur)}</span>
             </div>
           )}
         </div>
