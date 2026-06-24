@@ -613,6 +613,7 @@ function PlanSetupWizard() {
       );
 
       // Éxito: invalidar todas las queries del módulo
+      queryClient.removeQueries({ queryKey: ["persp2:getSimulation"] });
       await queryClient.invalidateQueries({ queryKey: ["investment-plan"] });
       await queryClient.invalidateQueries({ queryKey: ["investment-cycles"] });
       await queryClient.invalidateQueries({ queryKey: ["investment-assets"] });

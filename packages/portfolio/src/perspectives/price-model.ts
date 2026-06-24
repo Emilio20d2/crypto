@@ -211,8 +211,17 @@ function priceForPhase(
     case "bull":         return lerp(peak * 0.40,       peak * 0.85,        t);
     case "euphoria":     return lerp(peak * 0.85,       peak,               t);
     case "distribution": return lerp(peak,              peak * 0.85,        t);
-    case "bear":         return lerp(peak * 0.85,       valley * 1.50,      t);
-    case "capitulation": return lerp(valley * 1.50,     valley,             t);
+    case "bear": {
+      // Cap bearEnd below distribution start so this phase is ALWAYS downward.
+      // Without the cap, low-drawdown scenarios (favorable/optimista) produce
+      // valley×1.5 > peak×0.85, making "bear" go upward — a clear bug.
+      const bearEnd = Math.min(valley * 1.50, peak * 0.75);
+      return lerp(peak * 0.85, bearEnd, t);
+    }
+    case "capitulation": {
+      const bearEnd = Math.min(valley * 1.50, peak * 0.75);
+      return lerp(bearEnd, valley, t);
+    }
     case "bottom":       return lerp(valley,            nextCycleStart,     t);
   }
 }

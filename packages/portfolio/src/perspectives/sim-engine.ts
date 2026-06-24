@@ -359,9 +359,13 @@ function evaluateSales(
 
     const gainMultiple = priceEur / avgCost;
 
-    // Already have explicit rules? Skip proposals for this asset
-    const hasRule = cycle.saleRules.some(r => r.assetId === assetId && r.status === "active");
-    if (hasRule) continue;
+    // Skip proposals only if there's an active rule that hasn't been triggered yet.
+    // A triggered rule (triggeredAt != null) has already fired and won't fire again,
+    // so proposals should still be allowed to run.
+    const hasActiveUnusedRule = cycle.saleRules.some(
+      r => r.assetId === assetId && r.status === "active" && r.triggeredAt == null,
+    );
+    if (hasActiveUnusedRule) continue;
 
     // Proposal: sell 10% at 3×, 15% at 5×, 20% at 10× gain over avgCost
     // Min 5% of balance must remain after sale. Rearmed on each new ATH.
@@ -1431,7 +1435,23 @@ declare module "./types" {
 // ─── Punto de entrada principal ───────────────────────────────────────────────
 
 export function runPerspectivesSimulation(input: SimInput): PerspectivesSimulation {
-  const results = SIM_SCENARIOS.map(scenario => runScenario(input, scenario));
+  // Each scenario must get its own copy of the cycle objects because evaluateSales
+  // mutates rule.triggeredAt on the rule object in-place. Without cloning, the first
+  // scenario that triggers a sale marks the rule as used for ALL subsequent scenarios.
+  const results = SIM_SCENARIOS.map(scenario => {
+    const localInput: SimInput = {
+      ...input,
+      cycles: input.cycles.map(c => ({
+        ...c,
+        saleRules:     c.saleRules.map(r => ({ ...r })),
+        rebuyTiers:    c.rebuyTiers.map(t => ({ ...t })),
+        assets:        c.assets.map(a => ({ ...a })),
+        substitutions: c.substitutions.map(s => ({ ...s })),
+        revisions:     c.revisions.map(r => ({ ...r })),
+      })),
+    };
+    return runScenario(localInput, scenario);
+  });
 
   const startYear = results[0]?.annualSnapshots[0]?.year ?? new Date(input.now).getFullYear() + 1;
   const endYear = results[0]?.annualSnapshots.at(-1)?.year ?? startYear;
@@ -1481,16 +1501,38 @@ export function runPerspectivesSimulation(input: SimInput): PerspectivesSimulati
     acc + r.annualSnapshots.filter(s => s.marketGainEur < 0).length, 0);
   const maxDrawdownPct = baseResult?.summary.maxDrawdownPct ?? null;
 
+  // Per-scenario diagnostics for validation
+  const perScenario = results.map(r => ({
+    scenario: r.scenario,
+    negativeYears: r.annualSnapshots.filter(s => (s.annualReturnPct ?? 0) < -0.5).length,
+    positiveYears: r.annualSnapshots.filter(s => (s.annualReturnPct ?? 0) > 0.5).length,
+    lateralYears:  r.annualSnapshots.filter(s => Math.abs(s.annualReturnPct ?? 0) <= 0.5).length,
+    maxDrawdownPct: r.summary.maxDrawdownPct ?? 0,
+    isStrictlyMonotonic: r.annualSnapshots.every((s, i, a) => i === 0 || s.closingWealthEur >= a[i-1].closingWealthEur),
+    totalSalesEur: r.summary.totalSalesEur,
+    totalRebuysEur: r.summary.totalRebuysEur,
+    totalReinvestedEur: r.summary.totalEurcReinvestedEur,
+  }));
+
+  const basePerSc = perScenario.find(p => p.scenario === "base");
+  const realisticCycleValidation = (
+    (basePerSc?.negativeYears ?? 0) > 0 &&
+    (basePerSc?.maxDrawdownPct ?? 0) > 0.05 &&
+    !basePerSc?.isStrictlyMonotonic
+  ) ? "passed" : "failed";
+
   const diagnostics: SimDiagnostics = {
     engineIsNew: true,
     source: "perspectives-v2-cycle-model",
-    engineVersion: "perspectives-v2.1",
-    engineBuildHash: "6025cd3",
+    engineVersion: "perspectives-v2.2",
+    engineBuildHash: "a774336",
     engineGeneratedAt: Date.now(),
     negativeMonthCount,
     negativeYearCount,
     maxDrawdownPct,
     hasBearPeriods: negativeYearCount > 0 || (maxDrawdownPct !== null && maxDrawdownPct > 0.05),
+    realisticCycleValidation,
+    perScenario,
   };
 
   return {

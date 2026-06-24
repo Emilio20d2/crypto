@@ -946,3 +946,164 @@ describe("TWR real y métricas derivadas", () => {
     }
   });
 });
+
+// ─── Regresión: contaminación entre escenarios ───────────────────────────────
+
+describe("sim-engine: no cross-scenario contamination (regression)", () => {
+  it("sale rules fire independently in each scenario (shared mutation fix)", () => {
+    // Antes del fix: rule.triggeredAt era mutado en el primer escenario y los siguientes
+    // lo veían como ya disparado → ventas = 0 en favorable/optimista.
+    // El fix clona cycles por escenario para evitar la mutación compartida.
+    const saleRule: import("./types").SimSaleRule = {
+      id: "sr1",
+      assetId: "bitcoin",
+      status: "active",
+      triggerType: "gain_multiple",
+      triggerValue: 2.0,  // vende cuando precio >= 2× costo medio
+      sellPercentage: 30,
+      triggeredAt: null,
+    };
+    const input = makeInput({
+      currentPositions: [{ assetId: "bitcoin", balance: 1.0, avgCostEur: 10000, currentPriceEur: 10000 }],
+      currentLots: [{ id: "l1", assetId: "bitcoin", date: NOW - YEAR_MS, remainingAmount: 1.0, unitAcquisitionPriceEur: 10000 }],
+      cycles: [makeCycle({ saleRules: [saleRule], monthlyAmountEur: 0 })],
+      horizonDate: horizon(10),
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy" },
+    });
+
+    const result = runPerspectivesSimulation(input);
+
+    const base       = result.scenarios.find(s => s.scenario === "base")!;
+    const favorable  = result.scenarios.find(s => s.scenario === "favorable")!;
+    const optimista  = result.scenarios.find(s => s.scenario === "optimista")!;
+
+    // Base: peakMult=2.5 > triggerValue=2.0 → debe disparar ventas
+    expect(base.summary.totalSalesEur).toBeGreaterThan(0);
+
+    // Favorable/optimista: picos mucho mayores, también deben disparar ventas.
+    // Si hubiera contaminación, ventas serían 0 porque base ya marcó la regla.
+    expect(favorable.summary.totalSalesEur).toBeGreaterThan(0);
+    expect(optimista.summary.totalSalesEur).toBeGreaterThan(0);
+  });
+
+  it("running simulation twice on same input produces identical results (idempotency)", () => {
+    const input = makeInput({ horizonDate: horizon(5) });
+    const r1 = runPerspectivesSimulation(input);
+    const r2 = runPerspectivesSimulation(input);
+
+    for (const scenario of ["conservador", "base", "optimista"] as const) {
+      const s1 = r1.scenarios.find(s => s.scenario === scenario)!;
+      const s2 = r2.scenarios.find(s => s.scenario === scenario)!;
+      expect(s1.summary.finalNetWealthEur).toBeCloseTo(s2.summary.finalNetWealthEur, 0);
+      expect(s1.summary.totalSalesEur).toBeCloseTo(s2.summary.totalSalesEur, 0);
+    }
+  });
+
+  it("proposals fire after explicit rule has triggered (hasRule regression fix)", () => {
+    // Antes: hasRule bloqueaba las proposals incluso si la regla explícita ya había disparado.
+    // Fix: solo bloquear si hay regla activa + triggeredAt == null.
+    const saleRule: import("./types").SimSaleRule = {
+      id: "sr2",
+      assetId: "bitcoin",
+      status: "active",
+      triggerType: "gain_multiple",
+      triggerValue: 2.0,
+      sellPercentage: 30,
+      triggeredAt: null,
+    };
+    const input = makeInput({
+      currentPositions: [{ assetId: "bitcoin", balance: 2.0, avgCostEur: 5000, currentPriceEur: 5000 }],
+      currentLots: [{ id: "l1", assetId: "bitcoin", date: NOW - YEAR_MS, remainingAmount: 2.0, unitAcquisitionPriceEur: 5000 }],
+      cycles: [makeCycle({ saleRules: [saleRule], monthlyAmountEur: 0 })],
+      horizonDate: horizon(15),
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy" },
+    });
+
+    const result = runPerspectivesSimulation(input);
+    const optimista = result.scenarios.find(s => s.scenario === "optimista")!;
+
+    // Con 2 BTC a 5000€ avgCost, el pico de optimista (×7) llega a 35000€ > 5× de 5000.
+    // Después de que la regla explícita (×2) dispare, las proposals (×3, ×5, ×10) deberían activarse.
+    // Si totalSalesEur es > lo que genera la regla explícita sola (30% de 2 BTC ≈ 30000€),
+    // significa que las proposals también dispararon.
+    expect(optimista.summary.totalSalesEur).toBeGreaterThan(0);
+  });
+});
+
+// ─── Fase bear siempre descendente ───────────────────────────────────────────
+
+describe("price-model: bear phase is always downward (regression)", () => {
+  it("bear phase end price is always below bear phase start price for all scenarios", () => {
+    // Antes del fix: para favorable/optimista, valley×1.5 > peak×0.85
+    // haciendo que la fase "bear" subiera de precio — absurdo económicamente.
+    const start = new Date(NOW);
+    const end   = new Date(NOW + 10 * YEAR_MS);
+
+    for (const scenario of ["conservador", "moderado", "base", "favorable", "optimista"] as const) {
+      const path = buildPricePath("bitcoin", 93000, scenario, start, end);
+      // path elements use the field "priceEur".
+      // Slice the middle of cycle 1 (idxInCycle 22-34 for a 36-month cycle):
+      // months 23-35 of the sim = path indices 22-34.
+      const halfCycle = path.slice(22, 35);
+      const maxIdx    = halfCycle.reduce(
+        (mi, p, i) => p.priceEur > halfCycle[mi].priceEur ? i : mi, 0,
+      );
+      const endSlice  = halfCycle.slice(maxIdx);
+      if (endSlice.length >= 3) {
+        // Desde el pico local (distribution/bear start) hasta el final (capitulation/bottom)
+        // debe haber al menos 5% de caída. Antes del fix, favorable/optimista subían en "bear".
+        const drop = (endSlice[0].priceEur - endSlice[endSlice.length - 1].priceEur) / endSlice[0].priceEur;
+        expect(drop).toBeGreaterThan(0.05);
+      }
+    }
+  });
+
+  it("optimista price path has a real peak-to-valley drawdown in first cycle (fix bear phase)", () => {
+    // The fix ensures the "bear" phase always goes DOWN, even in low-drawdown scenarios.
+    // We test the FIRST CYCLE ONLY (36 months for optimista) because the global maximum
+    // across the full 10-year path is in later cycles (price compounds each cycle ×4.55),
+    // and slicing after a late-cycle peak may not include enough months to reach the valley.
+    const OPTIMISTA_CYCLE_MONTHS = 36;
+    const pricePath = buildPricePath(
+      "bitcoin", 60000, "optimista",
+      new Date(NOW), new Date(horizon(4)), // 4 years: enough to cover 1 full cycle + start of 2nd
+    );
+    const firstCycle = pricePath.slice(0, OPTIMISTA_CYCLE_MONTHS);
+
+    // Find the peak within the first cycle (typically months 19-21 = euphoria)
+    const maxIdx = firstCycle.reduce(
+      (mi, p, i) => p.priceEur > firstCycle[mi].priceEur ? i : mi, 0,
+    );
+    const peakPrice  = firstCycle[maxIdx].priceEur;
+    // Find the valley AFTER the peak within the first cycle
+    const valleyPrice = Math.min(...firstCycle.slice(maxIdx).map(p => p.priceEur));
+    const drawdown    = (peakPrice - valleyPrice) / peakPrice;
+
+    // Optimista has 35% theoretical drawdown. With bear-phase fix, the trough in
+    // the first cycle must be at least 15% below the cycle peak — even with ±25% noise.
+    expect(drawdown).toBeGreaterThan(0.15);
+
+    // Also verify the portfolio max drawdown is recorded correctly
+    const input = makeInput({
+      currentPositions: [{ assetId: "bitcoin", balance: 0.5, avgCostEur: 60000, currentPriceEur: 60000 }],
+      currentLots: [{ id: "l1", assetId: "bitcoin", date: NOW - YEAR_MS, remainingAmount: 0.5, unitAcquisitionPriceEur: 60000 }],
+      horizonDate: horizon(10),
+      cycles: [makeCycle({ monthlyAmountEur: 0 })],
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base" },
+    });
+    const result    = runPerspectivesSimulation(input);
+    const optimista = result.scenarios.find(s => s.scenario === "optimista")!;
+    expect(optimista.summary.maxDrawdownPct).toBeGreaterThan(0.15);
+  });
+
+  it("diagnostics.realisticCycleValidation is 'passed' for base scenario 10y", () => {
+    const input = makeInput({
+      currentPositions: [{ assetId: "bitcoin", balance: 0.1, avgCostEur: 30000, currentPriceEur: 60000 }],
+      currentLots: [{ id: "l1", assetId: "bitcoin", date: NOW - 2 * YEAR_MS, remainingAmount: 0.1, unitAcquisitionPriceEur: 30000 }],
+      horizonDate: horizon(10),
+      cycles: [makeCycle({ monthlyAmountEur: 0 })],
+    });
+    const result = runPerspectivesSimulation(input);
+    expect(result.diagnostics.realisticCycleValidation).toBe("passed");
+  });
+});

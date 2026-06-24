@@ -222,6 +222,18 @@ export interface AssetSimSummary {
 
 // ─── Resultado completo de la simulación ────────────────────────────────────
 
+export interface ScenarioDiagnostic {
+  scenario: string;
+  negativeYears: number;
+  positiveYears: number;
+  lateralYears: number;
+  maxDrawdownPct: number;
+  isStrictlyMonotonic: boolean;
+  totalSalesEur: number;
+  totalRebuysEur: number;
+  totalReinvestedEur: number;
+}
+
 export interface SimDiagnostics {
   engineIsNew: true;
   source: "perspectives-v2-cycle-model";
@@ -232,6 +244,8 @@ export interface SimDiagnostics {
   negativeYearCount: number;
   maxDrawdownPct: number | null;
   hasBearPeriods: boolean;
+  realisticCycleValidation: "passed" | "failed";
+  perScenario: ScenarioDiagnostic[];
 }
 
 export interface PerspectivesSimulation {
