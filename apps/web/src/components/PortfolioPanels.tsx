@@ -37,9 +37,18 @@ function positionRoi(position: any, localCostByAsset: Record<string, number> = {
 }
 
 function positionAverageCost(position: any, localCostByAsset: Record<string, number> = {}, pendingCostByAsset: Record<string, boolean> = {}) {
-  const invested = positionInvested(position, localCostByAsset, pendingCostByAsset);
   const quantity = finiteNumber(position.totalBalanceCrypto);
-  return invested !== null && quantity !== null && quantity > 0 ? invested / quantity : null;
+  if (!quantity || quantity <= 0) return null;
+  // Primary: Coinbase's breakdown cost_basis ÷ live quantity — matches what Coinbase app shows.
+  // Accept EUR (explicit) or null/undefined currency (assumed EUR for EUR portfolios).
+  const cbCurrency = position.costBasis?.currency;
+  const cbValue = finiteNumber(position.costBasis?.value);
+  if (cbValue !== null && cbValue > 0 && (cbCurrency === "EUR" || cbCurrency == null)) {
+    return cbValue / quantity;
+  }
+  // Fallback: local FIFO cost basis ÷ live quantity.
+  const invested = positionInvested(position, localCostByAsset, pendingCostByAsset);
+  return invested !== null ? invested / quantity : null;
 }
 
 function formatMoneyCompact(value: number | null | undefined, fallback = "En cálculo") {

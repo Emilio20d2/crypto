@@ -3455,135 +3455,148 @@ function setupIpcHandlers() {
   }));
 
   // Overlap protection: a single active live-sync request at a time.
-  // If the previous Coinbase call hasn't resolved yet, return the last known snapshot.
+  // liveSyncStartedAt enables automatic recovery when a previous request crashed before
+  // resetting the flag (10 s safety window — real requests resolve in < 5 s).
   let liveSyncInProgress = false;
+  let liveSyncStartedAt = 0;
+  const LIVE_SYNC_STUCK_MS = 10_000;
   let lastLiveSnapshotData: Record<string, unknown> | null = null;
 
   ipcMain.handle("portfolio:get-live-snapshot", withResult(async (_, portfolioUuid: string) => {
-    if (liveSyncInProgress) {
+    const callAt = Date.now();
+    if (liveSyncInProgress && (callAt - liveSyncStartedAt) < LIVE_SYNC_STUCK_MS) {
       console.log("[CoinbaseLiveSync] skippedBecauseInProgress=true returning=cached");
       return lastLiveSnapshotData;
     }
+
     liveSyncInProgress = true;
-    const requestedAt = Date.now();
+    liveSyncStartedAt = callAt;
+    const requestedAt = callAt;
     console.log("[CoinbaseLiveSync] start");
 
-    // Attempt to get FRESH balances from Coinbase accounts API (lightweight call).
-    // Falls back to cached breakdown if credentials are missing or the call times out.
-    type RawAccount = { currency: string; available: number; hold: number };
-    let rawAccounts: RawAccount[] = [];
-    let usingFallback = false;
-    let fallbackReason: string | null = null;
-
+    // finally block guarantees liveSyncInProgress is always reset — even on early return or throw.
     try {
-      const creds = credsMgr.getCredentials();
-      if (!creds) throw new Error("No credentials");
-      const client = new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem);
-      const accountsRes = await Promise.race([
-        client.getAccounts(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Accounts API timeout (4s)")), 4000)
-        ),
-      ]);
-      rawAccounts = (accountsRes.accounts ?? [])
-        .map((a: any) => ({
-          currency: (a.currency ?? "") as string,
-          available: parseFloat(a.available_balance?.value ?? "0") || 0,
-          hold: parseFloat(a.hold?.value ?? "0") || 0,
-        }))
-        .filter((a: RawAccount) => a.currency && a.available + a.hold > 1e-10);
-    } catch (err) {
-      usingFallback = true;
-      fallbackReason = err instanceof Error ? err.message : String(err);
-      // Fall back to the cached portfolio breakdown (from last 30-s refresh)
-      const service = getPortfolioServiceInst();
-      const cached = await service.getCachedPortfolioBreakdownNoError(portfolioUuid, "EUR");
-      if (!cached || !cached.positions.length) return null;
-      rawAccounts = (cached.positions as any[]).map((p: any) => ({
-        currency: p.asset as string,
-        available: typeof p.totalBalanceCrypto === "number" ? p.totalBalanceCrypto : 0,
-        hold: 0,
-      })).filter((a: RawAccount) => a.currency && a.available > 1e-10);
-    }
+      // Attempt to get FRESH balances from Coinbase accounts API (lightweight call).
+      // Falls back to cached breakdown if credentials are missing or the call times out.
+      type RawAccount = { currency: string; available: number; hold: number };
+      let rawAccounts: RawAccount[] = [];
+      let usingFallback = false;
+      let fallbackReason: string | null = null;
 
-    const eurAccount  = rawAccounts.find(a => a.currency === "EUR");
-    const eurcAccount = rawAccounts.find(a => a.currency === "EURC");
-    const cryptoAccounts = rawAccounts.filter(a => a.currency !== "EUR" && a.currency !== "EURC");
+      try {
+        const creds = credsMgr.getCredentials();
+        if (!creds) throw new Error("No credentials");
+        const client = new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem);
+        const accountsRes = await Promise.race([
+          client.getAccounts(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Accounts API timeout (4s)")), 4000)
+          ),
+        ]);
+        rawAccounts = (accountsRes.accounts ?? [])
+          .map((a: any) => ({
+            currency: (a.currency ?? "") as string,
+            available: parseFloat(a.available_balance?.value ?? "0") || 0,
+            hold: parseFloat(a.hold?.value ?? "0") || 0,
+          }))
+          .filter((a: RawAccount) => a.currency && a.available + a.hold > 1e-10);
+      } catch (err) {
+        usingFallback = true;
+        fallbackReason = err instanceof Error ? err.message : String(err);
+        // Fall back to the cached portfolio breakdown (from last 30-s refresh)
+        const service = getPortfolioServiceInst();
+        const cached = await service.getCachedPortfolioBreakdownNoError(portfolioUuid, "EUR");
+        if (!cached || !cached.positions.length) {
+          console.log(`[CoinbaseLiveSync] aborted reason=noCache fallback=${fallbackReason}`);
+          return null;
+        }
+        rawAccounts = (cached.positions as any[]).map((p: any) => ({
+          currency: p.asset as string,
+          available: typeof p.totalBalanceCrypto === "number" ? p.totalBalanceCrypto : 0,
+          hold: 0,
+        })).filter((a: RawAccount) => a.currency && a.available > 1e-10);
+      }
 
-    const eurBalance  = eurAccount  ? eurAccount.available  + eurAccount.hold  : 0;
-    const eurcBalance = eurcAccount ? eurcAccount.available + eurcAccount.hold : 0;
+      const eurAccount  = rawAccounts.find(a => a.currency === "EUR");
+      const eurcAccount = rawAccounts.find(a => a.currency === "EURC");
+      const cryptoAccounts = rawAccounts.filter(a => a.currency !== "EUR" && a.currency !== "EURC");
 
-    // Fetch current prices in parallel (MarketService caches internally for ~5 s)
-    const priceResults = await Promise.all(
-      cryptoAccounts.map(async (a: RawAccount) => {
-        const r = await marketService.getCurrentPrice(a.currency);
-        const qty = a.available + a.hold;
-        const currentValueEur = r.price !== null ? qty * r.price : null;
-        return {
+      const eurBalance  = eurAccount  ? eurAccount.available  + eurAccount.hold  : 0;
+      const eurcBalance = eurcAccount ? eurcAccount.available + eurcAccount.hold : 0;
+
+      // Fetch current prices in parallel (MarketService caches internally for ~5 s)
+      const priceResults = await Promise.all(
+        cryptoAccounts.map(async (a: RawAccount) => {
+          const r = await marketService.getCurrentPrice(a.currency);
+          const qty = a.available + a.hold;
+          const currentValueEur = r.price !== null ? qty * r.price : null;
+          return {
+            assetId: a.currency,
+            quantity: qty,
+            availableBalance: a.available,
+            holdBalance: a.hold,
+            currentPriceEur: r.price as number | null,
+            priceSource: r.provider as string,
+            priceStatus: r.state as "complete" | "fallback" | "cached" | "partial" | "unavailable",
+            currentValueEur,
+          };
+        })
+      );
+
+      const cryptoValueEur = priceResults.reduce((s, p) => s + (p.currentValueEur ?? 0), 0);
+      const receivedAt = Date.now();
+
+      // Balance version: stable hash of (currency, balance) pairs for change detection
+      const snapshotVersion = rawAccounts
+        .map(a => `${a.currency}:${(a.available + a.hold).toFixed(8)}`)
+        .sort()
+        .join("|");
+
+      const warnings: string[] = [];
+      if (usingFallback && fallbackReason) warnings.push(`Balances from cache: ${fallbackReason}`);
+      const missingPrices = priceResults.filter(p => p.currentValueEur === null).map(p => p.assetId);
+      if (missingPrices.length) warnings.push(`Missing prices: ${missingPrices.join(", ")}`);
+
+      const snapshot = {
+        requestedAt,
+        receivedAt,
+        snapshotVersion,
+        usingFallback,
+        accounts: rawAccounts.map(a => ({
           assetId: a.currency,
-          quantity: qty,
           availableBalance: a.available,
           holdBalance: a.hold,
-          currentPriceEur: r.price as number | null,
-          priceSource: r.provider as string,
-          priceStatus: r.state as "complete" | "fallback" | "cached" | "partial" | "unavailable",
-          currentValueEur,
-        };
-      })
-    );
+          totalBalance: a.available + a.hold,
+        })),
+        positions: priceResults,
+        eurBalance,
+        eurcBalance,
+        eurcValueEur: eurcBalance,
+        cryptoValueEur,
+        totalAssetValueEur: cryptoValueEur + eurcBalance + eurBalance,
+        isComplete: missingPrices.length === 0,
+        missingPrices,
+        warnings,
+        // Legacy fields for backwards compat with existing consumers
+        timestamp: receivedAt,
+        fiat: "EUR" as const,
+        priceVersion: String(receivedAt),
+        portfolioVersion: snapshotVersion,
+      };
 
-    const cryptoValueEur = priceResults.reduce((s, p) => s + (p.currentValueEur ?? 0), 0);
-    const receivedAt = Date.now();
+      lastLiveSnapshotData = snapshot as unknown as Record<string, unknown>;
 
-    // Balance version: stable hash of (currency, balance) pairs for change detection
-    const snapshotVersion = rawAccounts
-      .map(a => `${a.currency}:${(a.available + a.hold).toFixed(8)}`)
-      .sort()
-      .join("|");
+      const durationMs = receivedAt - requestedAt;
+      const assetsWithBalance = cryptoAccounts.length;
+      const portfolioValueEur = (cryptoValueEur + eurcBalance + eurBalance).toFixed(2);
+      console.log(
+        `[CoinbaseLiveSync] completed durationMs=${durationMs} snapshotVersion=${snapshotVersion.slice(0, 40)} accountsCount=${rawAccounts.length} assetsWithBalance=${assetsWithBalance} eurBalance=${eurBalance.toFixed(2)} eurcBalance=${eurcBalance.toFixed(2)} portfolioValueEur=${portfolioValueEur} usingFallback=${usingFallback}`
+      );
 
-    const warnings: string[] = [];
-    if (usingFallback && fallbackReason) warnings.push(`Balances from cache: ${fallbackReason}`);
-    const missingPrices = priceResults.filter(p => p.currentValueEur === null).map(p => p.assetId);
-    if (missingPrices.length) warnings.push(`Missing prices: ${missingPrices.join(", ")}`);
-
-    const snapshot = {
-      requestedAt,
-      receivedAt,
-      snapshotVersion,
-      usingFallback,
-      accounts: rawAccounts.map(a => ({
-        assetId: a.currency,
-        availableBalance: a.available,
-        holdBalance: a.hold,
-        totalBalance: a.available + a.hold,
-      })),
-      positions: priceResults,
-      eurBalance,
-      eurcBalance,
-      eurcValueEur: eurcBalance,
-      cryptoValueEur,
-      totalAssetValueEur: cryptoValueEur + eurcBalance + eurBalance,
-      isComplete: missingPrices.length === 0,
-      missingPrices,
-      warnings,
-      // Legacy fields for backwards compat with existing consumers
-      timestamp: receivedAt,
-      fiat: "EUR" as const,
-      priceVersion: String(receivedAt),
-      portfolioVersion: snapshotVersion,
-    };
-
-    lastLiveSnapshotData = snapshot as unknown as Record<string, unknown>;
-    liveSyncInProgress = false;
-
-    const durationMs = receivedAt - requestedAt;
-    const assetsWithBalance = cryptoAccounts.length;
-    const portfolioValueEur = (cryptoValueEur + eurcBalance + eurBalance).toFixed(2);
-    console.log(
-      `[CoinbaseLiveSync] completed durationMs=${durationMs} snapshotVersion=${snapshotVersion.slice(0, 40)} accountsCount=${rawAccounts.length} assetsWithBalance=${assetsWithBalance} eurBalance=${eurBalance.toFixed(2)} eurcBalance=${eurcBalance.toFixed(2)} portfolioValueEur=${portfolioValueEur} usingFallback=${usingFallback}`
-    );
-
-    return snapshot;
+      return snapshot;
+    } finally {
+      liveSyncInProgress = false;
+    }
   }));
 
   // ── contributionSchedule ────────────────────────────────────────────────────
