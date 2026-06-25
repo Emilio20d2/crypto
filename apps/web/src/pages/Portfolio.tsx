@@ -352,11 +352,11 @@ export function Portfolio() {
     if (period !== "1h" && period !== "24h") return reconstructed;
 
     // Preferir liveSnapshot (más fresco, actualizado cada 5 s) sobre breakdown
-    const liveTotal = typeof liveSnapshot?.totalAssetValueEur === "number" && liveSnapshot.totalAssetValueEur > 0
+    const liveTotal = liveSnapshot && typeof liveSnapshot.totalAssetValueEur === "number" && liveSnapshot.totalAssetValueEur > 0
       ? liveSnapshot.totalAssetValueEur
       : null;
 
-    if (liveTotal !== null) {
+    if (liveTotal !== null && liveSnapshot) {
       const nowSeconds = Math.floor(liveSnapshot.timestamp / 1000) as import("lightweight-charts").Time;
       const last = reconstructed[reconstructed.length - 1];
       if ((nowSeconds as number) > (last.time as number)) {
