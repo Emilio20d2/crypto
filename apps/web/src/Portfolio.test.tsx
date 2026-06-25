@@ -588,7 +588,7 @@ describe("Cartera — live snapshot 5 s", () => {
         { assetId: "EUR",  availableBalance: eurBalance,  holdBalance: 0, totalBalance: eurBalance },
       ],
       positions: [
-        { assetId: "BTC", quantity: btcBalance, availableBalance: btcBalance, holdBalance: 0, currentPriceEur: btcPrice, priceSource: "coinbase", priceStatus: "complete", currentValueEur: btcValue },
+        { assetId: "BTC", quantity: btcBalance, availableBalance: btcBalance, holdBalance: 0, currentPriceEur: btcPrice, priceSource: "coinbase", priceStatus: "live" as const, currentValueEur: btcValue },
       ],
       eurBalance,
       eurcBalance,
@@ -693,8 +693,8 @@ describe("Cartera — live snapshot 5 s", () => {
         { assetId: "SUI", availableBalance: 200, holdBalance: 0, totalBalance: 200 },
       ],
       positions: [
-        { assetId: "ADA", quantity: 100, availableBalance: 100, holdBalance: 0, currentPriceEur: 0.5, priceSource: "coinbase", priceStatus: "complete", currentValueEur: 50 },
-        { assetId: "SUI", quantity: 200, availableBalance: 200, holdBalance: 0, currentPriceEur: 2.5, priceSource: "coinbase", priceStatus: "complete", currentValueEur: 500 },
+        { assetId: "ADA", quantity: 100, availableBalance: 100, holdBalance: 0, currentPriceEur: 0.5, priceSource: "coinbase", priceStatus: "live" as const, currentValueEur: 50 },
+        { assetId: "SUI", quantity: 200, availableBalance: 200, holdBalance: 0, currentPriceEur: 2.5, priceSource: "coinbase", priceStatus: "live" as const, currentValueEur: 500 },
       ],
       eurBalance: 0, eurcBalance: 0, eurcValueEur: 0,
       cryptoValueEur: 550, totalAssetValueEur: 550,

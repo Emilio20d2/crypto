@@ -209,19 +209,37 @@ export interface CryptoControlAPI {
       byAsset: Record<string, { checked: number; backfilled: number }>;
     }>>;
     getLiveSnapshot(portfolioUuid: string): Promise<Result<{
-      timestamp: number;
-      fiat: "EUR";
+      requestedAt: number;
+      receivedAt: number;
+      snapshotVersion: string;
+      usingFallback: boolean;
+      accounts: Array<{
+        assetId: string;
+        availableBalance: number;
+        holdBalance: number;
+        totalBalance: number;
+      }>;
       positions: Array<{
         assetId: string;
         quantity: number;
+        availableBalance: number;
+        holdBalance: number;
         currentPriceEur: number | null;
         priceSource: string;
-        priceStatus: "live" | "cached" | "unavailable";
+        priceStatus: "complete" | "live" | "cached" | "partial" | "fallback" | "unavailable";
         currentValueEur: number | null;
       }>;
-      cryptoValueEur: number;
+      eurBalance: number;
+      eurcBalance: number;
       eurcValueEur: number;
+      cryptoValueEur: number;
       totalAssetValueEur: number;
+      isComplete: boolean;
+      missingPrices: string[];
+      warnings: string[];
+      // Legacy compat fields
+      timestamp: number;
+      fiat: "EUR";
       priceVersion: string;
       portfolioVersion: string;
     } | null>>;
