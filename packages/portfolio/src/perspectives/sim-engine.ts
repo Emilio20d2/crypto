@@ -1198,12 +1198,8 @@ function runScenario(
       prices[assetId] = {};
       continue;
     }
-    // Fuente primaria: previsiones de la BD. Fallback: KNOWN_FORECASTS estático.
-    const forecastsToUse = (input.externalForecasts && input.externalForecasts.length > 0)
-      ? input.externalForecasts
-      : KNOWN_FORECASTS;
     const result = buildExternalPriceMap(
-      assetId, currentPrice, scenario, input.now, input.horizonDate, forecastsToUse,
+      assetId, currentPrice, scenario, input.now, input.horizonDate, KNOWN_FORECASTS,
     );
     externalResultsByAsset[assetId] = result;
     prices[assetId] = result.pricesByMonth;

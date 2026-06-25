@@ -35,5 +35,11 @@ export {
   observationToForecastSources, computeCoverageMatrix, computeFinalWeight,
   MIN_SOURCES_FOR_QUANTILE, ingestSource, ingestRssSource, ingestHttpSource, verifyUrl,
   SEED_FORECAST_SOURCES, SEED_FORECAST_OBSERVATIONS,
+  validateStagingObservations, validateMonotonicity, runRegressionTest,
+  ForecastCandidateRepository, ForecastActiveRepository, PERSPECTIVES_EXTERNAL_FORECASTS_ENABLED,
 } from "./perspectives";
-export type { ForecastSource, ForecastDirection, ForecastSourceType } from "./perspectives";
+export type {
+  ForecastSource, ForecastDirection, ForecastSourceType,
+  ValidationReport, ValidationError, RegressionReport, StagingRow,
+  CandidateVersion, CandidateRow, SqliteDb, ActiveVersion,
+} from "./perspectives";

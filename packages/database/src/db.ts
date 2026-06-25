@@ -444,6 +444,71 @@ export function ensureEssentialTables(): void {
       error_message TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_forecast_log_source ON forecast_ingestion_log (source_id, checked_at);
+
+    -- Perspectivas v3: arquitectura staging→candidate→active
+    -- Capa 1: staging — datos externos entran aquí primero, nunca leídos por el motor
+    CREATE TABLE IF NOT EXISTS forecast_observations_staging (
+      id TEXT PRIMARY KEY NOT NULL,
+      source_id TEXT NOT NULL,
+      asset_id TEXT NOT NULL,
+      ticker TEXT NOT NULL,
+      publisher TEXT NOT NULL,
+      author TEXT,
+      report_title TEXT NOT NULL,
+      original_url TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      published_at INTEGER NOT NULL,
+      retrieved_at INTEGER NOT NULL,
+      verified_at INTEGER,
+      expires_at INTEGER,
+      target_year INTEGER NOT NULL,
+      target_type TEXT NOT NULL DEFAULT 'point',
+      original_currency TEXT NOT NULL DEFAULT 'USD',
+      target_low_original REAL,
+      target_base_original REAL,
+      target_high_original REAL,
+      fx_rate REAL,
+      fx_rate_at INTEGER,
+      fx_source TEXT,
+      methodology TEXT,
+      quality_score REAL NOT NULL DEFAULT 0.5,
+      freshness_score REAL NOT NULL DEFAULT 0.5,
+      horizon_score REAL NOT NULL DEFAULT 0.5,
+      methodology_score REAL NOT NULL DEFAULT 0.5,
+      independence_score REAL NOT NULL DEFAULT 0.5,
+      final_weight REAL NOT NULL DEFAULT 0.5,
+      verified INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      validation_errors_json TEXT,
+      staged_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
+    );
+    CREATE INDEX IF NOT EXISTS idx_staging_asset ON forecast_observations_staging (asset_id, target_year, status);
+
+    -- Capa 2: candidate — versiones validadas esperando aprobación
+    CREATE TABLE IF NOT EXISTS forecast_versions_candidate (
+      id TEXT PRIMARY KEY NOT NULL,
+      created_at INTEGER NOT NULL,
+      snapshot_json TEXT NOT NULL,
+      observation_ids_json TEXT NOT NULL,
+      validation_passed INTEGER NOT NULL DEFAULT 0,
+      validation_report_json TEXT,
+      regression_passed INTEGER NOT NULL DEFAULT 0,
+      regression_report_json TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      approved_at INTEGER,
+      rejected_at INTEGER,
+      rejected_reason TEXT
+    );
+
+    -- Capa 3: active — única versión activa, leída por el motor cuando el flag está habilitado
+    CREATE TABLE IF NOT EXISTS forecast_versions_active (
+      id TEXT NOT NULL DEFAULT 'current',
+      candidate_id TEXT NOT NULL,
+      activated_at INTEGER NOT NULL,
+      snapshot_json TEXT NOT NULL,
+      previous_candidate_id TEXT,
+      PRIMARY KEY (id)
+    );
   `);
 
   // Migrate data from old analyst_targets (PK: ticker+scenario, only 2030 data) if needed

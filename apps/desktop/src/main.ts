@@ -4913,24 +4913,9 @@ function setupIpcHandlers() {
     const eurcFiscalReserve = treasurySummary?.fiscalReserveBalance ?? 0;
     const eurCash = treasurySummary?.cashBalance ?? 0;
 
-    // Cargar previsiones verificadas de la BD (fuente primaria del motor)
-    const { observationToForecastSources } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
-    const sqlite = (require("@crypto-control/database") as typeof import("@crypto-control/database")).getSqlite();
-    let externalForecastPoints: import("@crypto-control/portfolio").ForecastSource[] = [];
-    if (sqlite) {
-      const rows = sqlite.prepare(
-        `SELECT id, source_id, asset_id, ticker, publisher, report_title, original_url,
-                source_type, published_at, expires_at, target_year, target_type, original_currency,
-                target_low_original, target_base_original, target_high_original, fx_rate,
-                final_weight, verified, active
-         FROM forecast_observations
-         WHERE active = 1 AND (expires_at IS NULL OR expires_at > ?)
-         ORDER BY published_at DESC`
-      ).all(now) as import("@crypto-control/portfolio").ObservationRow[];
-      externalForecastPoints = rows.flatMap(r => observationToForecastSources(r));
-      console.log(`[ForecastEngine] observaciones_activas=${rows.length} puntos_generados=${externalForecastPoints.length}`);
-    }
-
+    // PERSPECTIVES_EXTERNAL_FORECASTS_ENABLED = false
+    // El motor usa KNOWN_FORECASTS exclusivamente hasta que la arquitectura
+    // staging→candidate→active esté completamente validada y aprobada.
     const simInput = {
       now,
       horizonDate,
@@ -4946,7 +4931,6 @@ function setupIpcHandlers() {
         commissionRate: 0.004,
         taxBands: DEFAULT_SPANISH_TAX_BANDS,
       },
-      externalForecasts: externalForecastPoints.length > 0 ? externalForecastPoints : undefined,
     };
 
     return runPerspectivesSimulation(simInput);
