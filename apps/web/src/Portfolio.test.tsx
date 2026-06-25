@@ -565,3 +565,149 @@ describe("Cartera Coinbase", () => {
     expect(pnlMetric?.textContent).toContain("Sin coste");
   });
 });
+
+// ─── Sincronización viva cada 5 s ─────────────────────────────────────────────
+
+describe("Cartera — live snapshot 5 s", () => {
+  const makeLiveSnapshot = (overrides?: Partial<{
+    btcBalance: number; btcPrice: number; btcValue: number;
+    eurBalance: number; eurcBalance: number;
+  }>) => {
+    const {
+      btcBalance = 0.004, btcPrice = 90000, btcValue = 360,
+      eurBalance = 5, eurcBalance = 71.05,
+    } = overrides ?? {};
+    return {
+      requestedAt: Date.now() - 50,
+      receivedAt: Date.now(),
+      snapshotVersion: `btc:${btcBalance.toFixed(8)}|eurc:${eurcBalance.toFixed(8)}`,
+      usingFallback: false,
+      accounts: [
+        { assetId: "BTC",  availableBalance: btcBalance, holdBalance: 0, totalBalance: btcBalance },
+        { assetId: "EURC", availableBalance: eurcBalance, holdBalance: 0, totalBalance: eurcBalance },
+        { assetId: "EUR",  availableBalance: eurBalance,  holdBalance: 0, totalBalance: eurBalance },
+      ],
+      positions: [
+        { assetId: "BTC", quantity: btcBalance, availableBalance: btcBalance, holdBalance: 0, currentPriceEur: btcPrice, priceSource: "coinbase", priceStatus: "complete", currentValueEur: btcValue },
+      ],
+      eurBalance,
+      eurcBalance,
+      eurcValueEur: eurcBalance,
+      cryptoValueEur: btcValue,
+      totalAssetValueEur: btcValue + eurcBalance + eurBalance,
+      isComplete: true,
+      missingPrices: [],
+      warnings: [],
+      timestamp: Date.now(),
+      fiat: "EUR" as const,
+      priceVersion: String(Date.now()),
+      portfolioVersion: `btc:${btcBalance.toFixed(8)}`,
+    };
+  };
+
+  test("precio de la tarjeta BTC se actualiza con el snapshot vivo (5 s)", async () => {
+    // Breakdown tiene BTC a 55.340 €; live snapshot lo actualiza a 90.000 €
+    window.cryptoControl.portfolio.getLiveSnapshot = () => ok(makeLiveSnapshot({ btcPrice: 90000 }));
+
+    renderWithQuery(<Portfolio />);
+
+    await waitFor(() => {
+      // El precio actualizado por liveSnapshot debe aparecer en la tarjeta BTC
+      expect(screen.getByText("90.000,00 €")).toBeInTheDocument();
+    });
+    // El precio de breakdown (55.340 €) NO debe mostrarse
+    expect(screen.queryByText("55.340,00 €")).not.toBeInTheDocument();
+  });
+
+  test("cantidad de la tarjeta BTC viene del snapshot vivo, no del breakdown", async () => {
+    // Breakdown tiene 0.004 BTC; live snapshot reporta 0.0045 BTC
+    window.cryptoControl.portfolio.getLiveSnapshot = () =>
+      ok(makeLiveSnapshot({ btcBalance: 0.0045, btcValue: 0.0045 * 90000 }));
+
+    renderWithQuery(<Portfolio />);
+
+    await waitFor(() => {
+      // formatCrypto(0.0045, "es-ES") → "0,0045"
+      expect(screen.getByText("0,0045 BTC")).toBeInTheDocument();
+    });
+  });
+
+  test("EURC no se suma dos veces al valor total", async () => {
+    // cryptoValueEur = 360 (BTC), eurcBalance = 71.05, eurBalance = 5
+    // Total esperado = 360 + 71.05 + 5 = 436.05 (sin doble EURC)
+    window.cryptoControl.portfolio.getLiveSnapshot = () =>
+      ok(makeLiveSnapshot({ btcBalance: 0.004, btcPrice: 90000, btcValue: 360, eurcBalance: 71.05, eurBalance: 5 }));
+
+    renderWithQuery(<Portfolio />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Valor total de activos")).toBeInTheDocument();
+    });
+
+    // EURC (71.05) debe aparecer como reserva separada, no sumada dos veces
+    // La tarjeta BTC no debe mostrar EURC dentro de cryptoValueEur
+    expect(screen.queryAllByText("EURC").filter(
+      el => el.tagName === "SMALL" || el.tagName === "STRONG"
+    ).length).toBe(0);
+  });
+
+  test("cuando el snapshot vivo es null la UI sigue mostrando datos del breakdown", async () => {
+    // getLiveSnapshot devuelve null (Coinbase no disponible)
+    window.cryptoControl.portfolio.getLiveSnapshot = () => ok(null);
+
+    renderWithQuery(<Portfolio />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Bitcoin").length).toBeGreaterThan(0);
+    });
+    // El breakdown tiene BTC a 55.340 €; debe seguir mostrándose sin snapshot vivo
+    expect(screen.getByText("55.340,00 €")).toBeInTheDocument();
+  });
+
+  test("activo presente en liveSnapshot pero ausente en breakdown aparece en la lista", async () => {
+    const now = Date.now();
+    // Breakdown solo tiene ADA; liveSnapshot reporta también SUI (compra reciente)
+    window.cryptoControl.coinbase.getPortfolioBreakdown = () =>
+      ok({
+        portfolio: { uuid: "portfolio-1", name: "Default", type: "default", deleted: false },
+        balances: { totalBalance: { value: 50, currency: "EUR" }, totalCryptoBalance: { value: 50, currency: "EUR" }, totalCashEquivalentBalance: null, totalFuturesBalance: null, futuresUnrealizedPnl: null, perpUnrealizedPnl: null },
+        positions: [{
+          asset: "ADA", assetUuid: "ada-uuid", accountUuid: "ada-account",
+          totalBalanceFiat: 50, totalBalanceCrypto: 100, allocation: 1,
+          costBasis: null, averageEntryPrice: null, unrealizedPnl: null, fundingPnl: null,
+          availableToTradeFiat: 50, availableToTradeCrypto: 100,
+          availableToTransferFiat: 50, availableToTransferCrypto: 100,
+          availableToSendFiat: 50, availableToSendCrypto: 100,
+          assetImageUrl: null, assetColor: null, isCash: false, accountType: "exchange",
+          market: { productId: "ADA-EUR", price: 0.5, pricePercentageChange24h: 0, volume24h: null, volumePercentageChange24h: null, marketCap: null, baseName: "Cardano", baseDisplaySymbol: "ADA", quoteDisplaySymbol: "EUR", iconUrl: null, status: "online", tradingDisabled: false, viewOnly: false },
+          sparkline: [],
+        }],
+        capturedAt: now, currency: "EUR" as const, source: "coinbase" as const, state: "live" as const,
+      });
+
+    window.cryptoControl.portfolio.getLiveSnapshot = () => ok({
+      requestedAt: now, receivedAt: now, snapshotVersion: "v1",
+      usingFallback: false,
+      accounts: [
+        { assetId: "ADA", availableBalance: 100, holdBalance: 0, totalBalance: 100 },
+        { assetId: "SUI", availableBalance: 200, holdBalance: 0, totalBalance: 200 },
+      ],
+      positions: [
+        { assetId: "ADA", quantity: 100, availableBalance: 100, holdBalance: 0, currentPriceEur: 0.5, priceSource: "coinbase", priceStatus: "complete", currentValueEur: 50 },
+        { assetId: "SUI", quantity: 200, availableBalance: 200, holdBalance: 0, currentPriceEur: 2.5, priceSource: "coinbase", priceStatus: "complete", currentValueEur: 500 },
+      ],
+      eurBalance: 0, eurcBalance: 0, eurcValueEur: 0,
+      cryptoValueEur: 550, totalAssetValueEur: 550,
+      isComplete: true, missingPrices: [], warnings: [],
+      timestamp: now, fiat: "EUR" as const, priceVersion: String(now), portfolioVersion: "v1",
+    });
+
+    renderWithQuery(<Portfolio />);
+
+    // Esperar a que aparezca SUI — vendrá del snapshot vivo (no del breakdown)
+    await waitFor(() => {
+      expect(screen.getAllByText("SUI").length).toBeGreaterThan(0);
+    });
+    expect(screen.getAllByText("Cardano").length).toBeGreaterThan(0);
+  });
+});

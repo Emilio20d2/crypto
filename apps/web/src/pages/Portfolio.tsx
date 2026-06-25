@@ -18,11 +18,11 @@ import type { ChartPoint } from "../components/MarketChart";
 import type { Period } from "../components/PeriodSelector";
 import { formatDateTime } from "../lib/format";
 
-// Snapshot ligero de precios cada 5 s — solo precio + valor, sin sparklines ni FIFO
-const PRICE_REFRESH_MS = 5_000;
-// Breakdown completo (posiciones + sparklines + coste Coinbase) cada 30 s
+// Snapshot ligero en vivo: cuentas + balances + precios cada 5 s
+const LIVE_COINBASE_REFRESH_MS = 5_000;
+// Breakdown completo (sparklines + metadatos de mercado) cada 30 s
 const BREAKDOWN_REFRESH_MS = 30_000;
-// Auto-sync completo de Coinbase cada 5 min — operación pesada
+// Auto-sync completo de Coinbase cada 5 min — operación pesada (histórico + FIFO)
 const COINBASE_SYNC_REFRESH_MS = 5 * 60_000;
 const COINBASE_SYNC_INITIAL_DELAY_MS = 8_000;
 // Series históricas: 60 s para periodos cortos, 120 s para largos
@@ -205,7 +205,7 @@ export function Portfolio() {
     },
     enabled: !!selectedPortfolioId && !!breakdown,
     staleTime: 4_000,
-    refetchInterval: PRICE_REFRESH_MS,
+    refetchInterval: LIVE_COINBASE_REFRESH_MS,
     refetchIntervalInBackground: true,
   });
 
@@ -285,6 +285,25 @@ export function Portfolio() {
     }
     return res ?? null;
   }, [liveSnapshotRes]);
+
+  // Mapa rápido de activos del snapshot vivo: assetId → datos en vivo
+  // Actualizado cada 5 s para que los campos de cantidad/precio/valor sean siempre frescos.
+  const livePositionMap = useMemo(() => {
+    const map = new Map<string, { quantity: number; availableBalance: number; holdBalance: number; currentPriceEur: number | null; currentValueEur: number | null }>();
+    if (!Array.isArray(liveSnapshot?.positions)) return map;
+    for (const p of liveSnapshot.positions as any[]) {
+      if (p?.assetId) {
+        map.set(p.assetId, {
+          quantity:         typeof p.quantity         === "number" ? p.quantity         : 0,
+          availableBalance: typeof p.availableBalance === "number" ? p.availableBalance : 0,
+          holdBalance:      typeof p.holdBalance      === "number" ? p.holdBalance      : 0,
+          currentPriceEur:  typeof p.currentPriceEur  === "number" && Number.isFinite(p.currentPriceEur)  ? p.currentPriceEur  : null,
+          currentValueEur:  typeof p.currentValueEur  === "number" && Number.isFinite(p.currentValueEur)  ? p.currentValueEur  : null,
+        });
+      }
+    }
+    return map;
+  }, [liveSnapshot]);
 
   useEffect(() => {
     if (!liveSnapshot?.receivedAt) return;
@@ -484,11 +503,52 @@ export function Portfolio() {
       ? eurcPosition.totalBalanceFiat
       : 0;
 
-  // Investment positions: crypto only (no EURC, no EUR fiat).
-  const positions = allAggregated
+  // Investment positions from breakdown (estructura base: sparklines, metadatos 24h).
+  const breakdownPositions = allAggregated
     .filter((position) => position.asset !== "EURC" && !position.isCash)
     .sort((a, b) => (b.totalBalanceFiat ?? -1) - (a.totalBalanceFiat ?? -1));
 
+  // Merge live snapshot (5 s) into breakdown cards:
+  // – quantity, price, value override comes from liveSnapshot;
+  // – sparkline, 24h change, market metadata stays from breakdown.
+  // This makes individual position cards reflect Coinbase at 5 s resolution.
+  const mergedPositions = breakdownPositions.map((pos) => {
+    const live = livePositionMap.get(pos.asset);
+    if (!live) return pos;
+    return {
+      ...pos,
+      totalBalanceCrypto: live.quantity,
+      totalBalanceFiat:   live.currentValueEur ?? pos.totalBalanceFiat,
+      market: pos.market
+        ? { ...pos.market, price: live.currentPriceEur ?? pos.market.price }
+        : (live.currentPriceEur != null ? { price: live.currentPriceEur } : pos.market),
+    };
+  });
+
+  // Assets that appeared in the live snapshot but not in the last breakdown
+  // (e.g. a very recent purchase before the next 30-s breakdown tick).
+  // Show them with pending cost so the user never sees a missing asset.
+  const extraLivePositions = Array.from(livePositionMap.entries())
+    .filter(([assetId]) =>
+      assetId !== "EUR" && assetId !== "EURC" &&
+      !breakdownPositions.some((p) => p.asset === assetId)
+    )
+    .map(([assetId, live]) => ({
+      asset:              assetId,
+      totalBalanceCrypto: live.quantity,
+      totalBalanceFiat:   live.currentValueEur,
+      market:             live.currentPriceEur != null ? { price: live.currentPriceEur } : null,
+      allocation:         null,
+      isCash:             false,
+      accountType:        "exchange" as const,
+      sparkline:          [] as number[],
+    }));
+
+  // Final list: merged breakdown (live-updated) + any extra assets from live snapshot
+  const positions = [...mergedPositions, ...extraLivePositions]
+    .sort((a, b) => ((b.totalBalanceFiat ?? -1) as number) - ((a.totalBalanceFiat ?? -1) as number));
+
+  // Cost basis — from local FIFO DB (30 s, changes only after transactions)
   let totalInvestedSum = 0;
   let totalInvestedComplete = positions.length > 0;
   const pendingCostAssets: string[] = [];
@@ -503,32 +563,32 @@ export function Portfolio() {
   }
 
   // Mostrar suma parcial incluso cuando no todos los activos tienen coste completo.
-  // Nunca bloquear toda la página por un activo con coste pendiente.
   const totalInvested = totalInvestedSum > 0 ? totalInvestedSum : null;
   const totalInvestedIsPartial = !totalInvestedComplete && totalInvestedSum > 0;
   const totalInvestedPendingLabel = pendingCostAssets.length > 0
     ? `Pendiente: ${pendingCostAssets.join(", ")}`
     : undefined;
 
-  // Valor cripto: preferir liveSnapshot (precios frescos cada 5 s) sobre breakdown
+  // Valor cripto: preferir liveSnapshot (precios frescos cada 5 s) sobre breakdown.
+  // cryptoValueEur del liveSnapshot excluye explícitamente EURC y EUR.
   const snapshotCryptoTotal = typeof liveSnapshot?.cryptoValueEur === "number" && liveSnapshot.cryptoValueEur > 0
     ? liveSnapshot.cryptoValueEur : null;
   const snapshotEurcValue = typeof liveSnapshot?.eurcValueEur === "number"
     ? liveSnapshot.eurcValueEur : eurcTotalFiat;
   const snapshotEurBalance = typeof liveSnapshot?.eurBalance === "number" ? liveSnapshot.eurBalance : 0;
-  const cryptoTotal = snapshotCryptoTotal ?? positionsTotalBalance(positions);
+  const cryptoTotal = snapshotCryptoTotal ?? positionsTotalBalance(mergedPositions);
 
-  // Total patrimonial = cripto + EURC + EUR (all Coinbase balances at current prices)
+  // Total patrimonial = cripto + EURC + EUR.
+  // EURC se suma una sola vez (snapshotEurcValue); no aparece en cryptoValueEur.
   const totalBalance = cryptoTotal !== null || snapshotEurcValue > 0
     ? (cryptoTotal ?? 0) + snapshotEurcValue + snapshotEurBalance
     : null;
 
   // P&L is crypto-only: EURC is a stablecoin reserve, not a speculative asset.
-  // Calculado incluso con coste parcial: mostramos lo que sabemos.
   const performance = totalInvested !== null && cryptoTotal !== null ? cryptoTotal - totalInvested : null;
   const performanceIsPartial = totalInvestedIsPartial;
 
-  const variationFromPositions = portfolio24hVariation(positions, snapshotEurcValue);
+  const variationFromPositions = portfolio24hVariation(mergedPositions, snapshotEurcValue);
   const reconstructed24h = toChartPoints(series24h);
   const variationFromChart = chartVariation(reconstructed24h);
   const variation24h = variationFromPositions.value !== null ? variationFromPositions : variationFromChart;

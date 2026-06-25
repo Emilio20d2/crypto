@@ -3454,8 +3454,19 @@ function setupIpcHandlers() {
     return await getPortfolioServiceInst().getPortfolioSnapshots(portfolioUuid);
   }));
 
+  // Overlap protection: a single active live-sync request at a time.
+  // If the previous Coinbase call hasn't resolved yet, return the last known snapshot.
+  let liveSyncInProgress = false;
+  let lastLiveSnapshotData: Record<string, unknown> | null = null;
+
   ipcMain.handle("portfolio:get-live-snapshot", withResult(async (_, portfolioUuid: string) => {
+    if (liveSyncInProgress) {
+      console.log("[CoinbaseLiveSync] skippedBecauseInProgress=true returning=cached");
+      return lastLiveSnapshotData;
+    }
+    liveSyncInProgress = true;
     const requestedAt = Date.now();
+    console.log("[CoinbaseLiveSync] start");
 
     // Attempt to get FRESH balances from Coinbase accounts API (lightweight call).
     // Falls back to cached breakdown if credentials are missing or the call times out.
@@ -3535,7 +3546,7 @@ function setupIpcHandlers() {
     const missingPrices = priceResults.filter(p => p.currentValueEur === null).map(p => p.assetId);
     if (missingPrices.length) warnings.push(`Missing prices: ${missingPrices.join(", ")}`);
 
-    return {
+    const snapshot = {
       requestedAt,
       receivedAt,
       snapshotVersion,
@@ -3561,6 +3572,18 @@ function setupIpcHandlers() {
       priceVersion: String(receivedAt),
       portfolioVersion: snapshotVersion,
     };
+
+    lastLiveSnapshotData = snapshot as unknown as Record<string, unknown>;
+    liveSyncInProgress = false;
+
+    const durationMs = receivedAt - requestedAt;
+    const assetsWithBalance = cryptoAccounts.length;
+    const portfolioValueEur = (cryptoValueEur + eurcBalance + eurBalance).toFixed(2);
+    console.log(
+      `[CoinbaseLiveSync] completed durationMs=${durationMs} snapshotVersion=${snapshotVersion.slice(0, 40)} accountsCount=${rawAccounts.length} assetsWithBalance=${assetsWithBalance} eurBalance=${eurBalance.toFixed(2)} eurcBalance=${eurcBalance.toFixed(2)} portfolioValueEur=${portfolioValueEur} usingFallback=${usingFallback}`
+    );
+
+    return snapshot;
   }));
 
   // ── contributionSchedule ────────────────────────────────────────────────────
