@@ -826,7 +826,7 @@ describe("Detección de cambio de balance", () => {
     syncCount = 0;
     window.cryptoControl.coinbase.sync = () => {
       syncCount++;
-      return Promise.resolve({ ok: true as const, data: { ok: true } });
+      return ok({ itemsProcessed: 0, newTransactions: 0, skippedDuplicates: 0 });
     };
   });
 
