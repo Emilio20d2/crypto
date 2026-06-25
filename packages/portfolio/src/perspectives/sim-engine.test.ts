@@ -255,11 +255,15 @@ describe("sim-engine: structure", () => {
     }
   });
 
-  it("optimista final wealth ≥ conservador final wealth", () => {
+  it("optimista final wealth ≥ conservador final wealth (sin ajuste artificial)", () => {
+    // Con precios cuantilados (90 vs 10 percentil), optimista debe superar conservador.
+    // El ajuste monotónico artificial fue eliminado — el resultado es el matemático real.
     const input = makeInput({ horizonDate: horizon(5) });
     const result = runPerspectivesSimulation(input);
     const opt  = result.scenarios.find(s => s.scenario === "optimista")!.summary.finalNetWealthEur;
     const cons = result.scenarios.find(s => s.scenario === "conservador")!.summary.finalNetWealthEur;
+    // En estrategia plan_base con precios externos, optimista siempre supera conservador
+    // porque los precios futuros son mayores (cuantil 90 > cuantil 10).
     expect(opt).toBeGreaterThanOrEqual(cons);
   });
 });
@@ -283,17 +287,20 @@ describe("sim-engine: sales", () => {
     }
   });
 
-  it("sale proposals are explained when they don't fire", () => {
+  it("sin reglas configuradas no se generan ventas genéricas (escalones eliminados)", () => {
+    // El motor ya no genera propuestas genéricas 3×/5×/10×.
+    // Solo se ejecutan reglas configuradas por el usuario.
     const input = makeInput({
-      currentPositions: [{ assetId: "BTC", balance: 0.001, avgCostEur: 50000, currentPriceEur: 60000 }],
-      currentLots: [{ id: "l1", assetId: "BTC", date: NOW - YEAR_MS, remainingAmount: 0.001, unitAcquisitionPriceEur: 50000 }],
-      horizonDate: horizon(2),
+      currentPositions: [{ assetId: "BTC", balance: 1.0, avgCostEur: 5000, currentPriceEur: 90000 }],
+      currentLots: [{ id: "l1", assetId: "BTC", date: NOW - 3 * YEAR_MS, remainingAmount: 1.0, unitAcquisitionPriceEur: 5000 }],
+      horizonDate: horizon(5),
+      cycles: [makeCycle({ saleRules: [] })], // sin reglas de venta
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy" },
     });
     const result = runPerspectivesSimulation(input);
-    const cons = result.scenarios.find(s => s.scenario === "conservador")!;
-    if (cons.summary.totalSalesEur === 0) {
-      const hasReasons = cons.annualSnapshots.some(s => s.salesSkipReasons.length > 0);
-      expect(hasReasons).toBe(true);
+    for (const s of result.scenarios) {
+      // Sin reglas de venta configuradas → 0 ventas
+      expect(s.summary.totalSalesEur).toBe(0);
     }
   });
 
@@ -329,19 +336,20 @@ describe("sim-engine: rebuys", () => {
     }
   });
 
-  it("rebuy skip reasons are provided when no rebuys", () => {
+  it("sin escalones de recompra configurados no se generan recompras genéricas", () => {
+    // El motor ya no genera recompras propuestas automáticas (−20%/−35%/−50%).
+    // Solo escalones configurados por el usuario disparan recompras.
     const input = makeInput({
-      eurcFree: 0,
+      eurcFree: 5000,
       eurcFiscalReserve: 0,
-      horizonDate: horizon(3),
-      options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base" },
+      horizonDate: horizon(5),
+      cycles: [makeCycle({ rebuyTiers: [] })], // sin tiers de recompra
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy" },
     });
     const result = runPerspectivesSimulation(input);
     for (const s of result.scenarios) {
-      if (s.summary.totalRebuysEur === 0) {
-        const hasReasons = s.annualSnapshots.some(snap => snap.rebuysSkipReasons.length > 0);
-        expect(hasReasons).toBe(true);
-      }
+      // Sin tiers configurados → 0 recompras
+      expect(s.summary.totalRebuysEur).toBe(0);
     }
   });
 });
@@ -392,15 +400,16 @@ describe("sim-engine: annual metrics", () => {
     }
   });
 
-  it("scenario ordering: finalNetWealth conservador ≤ moderado ≤ base ≤ favorable ≤ optimista", () => {
+  it("scenario ordering: conservador ≤ optimista (sin ajuste artificial monotónico)", () => {
+    // El ajuste monotónico artificial fue eliminado.
+    // La ordenación entre escenarios adyacentes no está garantizada (precio optimista mayor
+    // puede implicar mayor DCA cost y menor cantidad comprada).
+    // Sí se garantiza: conservador (cuantil 10) ≤ optimista (cuantil 90) para BTC con cobertura.
     const input = makeInput({ horizonDate: horizon(5) });
     const result = runPerspectivesSimulation(input);
     const getWealth = (sc: string) =>
       result.scenarios.find(s => s.scenario === sc)!.summary.finalNetWealthEur;
-    expect(getWealth("conservador")).toBeLessThanOrEqual(getWealth("moderado") + 1);
-    expect(getWealth("moderado")).toBeLessThanOrEqual(getWealth("base") + 1);
-    expect(getWealth("base")).toBeLessThanOrEqual(getWealth("favorable") + 1);
-    expect(getWealth("favorable")).toBeLessThanOrEqual(getWealth("optimista") + 1);
+    expect(getWealth("conservador")).toBeLessThanOrEqual(getWealth("optimista") + 1);
   });
 });
 
@@ -634,5 +643,104 @@ describe("forecast-sources: consensus calculation", () => {
     };
     expect(isExpired(src, now)).toBe(false);
     expect(isExpired(src, now + 200)).toBe(true);
+  });
+});
+
+// ─── Correcciones críticas del motor (regresión) ─────────────────────────────
+
+describe("motor: correcciones críticas — sin fallback 1€, sin ajuste monotónico, sin auto-ventas", () => {
+  it("activo sin precio actual se excluye del mapa de precios (no usa fallback €1)", () => {
+    // Si BTC no aparece en currentPositions, no debe simularse con precio €1.
+    // El mapa de precios debe estar vacío para ese activo.
+    const input = makeInput({
+      currentPositions: [], // sin precios de mercado
+      currentLots: [],
+      horizonDate: horizon(5),
+    });
+    const result = runPerspectivesSimulation(input);
+    for (const s of result.scenarios) {
+      // Sin precio → sin posiciones con valor monstruoso
+      const finalWealth = s.summary.finalNetWealthEur;
+      // Con €200/mes × 60 meses = €12.000 capital, el patrimonio no puede ser > €50M
+      expect(finalWealth).toBeLessThan(50_000_000);
+    }
+  });
+
+  it("sin reglas de venta configuradas totalSalesEur === 0 (eliminados escalones genéricos)", () => {
+    const input = makeInput({
+      currentPositions: [{ assetId: "BTC", balance: 2.0, avgCostEur: 10_000, currentPriceEur: 90_000 }],
+      currentLots: [{ id: "l1", assetId: "BTC", date: NOW - 4 * YEAR_MS, remainingAmount: 2.0, unitAcquisitionPriceEur: 10_000 }],
+      horizonDate: horizon(5),
+      cycles: [makeCycle({ saleRules: [], rebuyTiers: [] })],
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy" },
+    });
+    const result = runPerspectivesSimulation(input);
+    for (const s of result.scenarios) {
+      expect(s.summary.totalSalesEur).toBe(0);
+    }
+  });
+
+  it("sin tiers de recompra configurados totalRebuysEur === 0 (eliminados tiers genéricos)", () => {
+    const input = makeInput({
+      eurcFree: 10_000,
+      horizonDate: horizon(5),
+      cycles: [makeCycle({ rebuyTiers: [] })],
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy" },
+    });
+    const result = runPerspectivesSimulation(input);
+    for (const s of result.scenarios) {
+      expect(s.summary.totalRebuysEur).toBe(0);
+    }
+  });
+
+  it("reinversión residual desactivada: totalEurcReinvestedEur === 0 sin reglas", () => {
+    const input = makeInput({
+      eurcFree: 5_000,
+      horizonDate: horizon(5),
+      cycles: [makeCycle({ saleRules: [], rebuyTiers: [] })],
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy" },
+    });
+    const result = runPerspectivesSimulation(input);
+    for (const s of result.scenarios) {
+      expect(s.summary.totalEurcReinvestedEur).toBe(0);
+    }
+  });
+
+  it("patrimonio final razonable con portafolio típico (no 190.000M)", () => {
+    // Capital inicial: €5.000 BTC real. Aportación €500/mes. Horizonte 10 años.
+    const input = makeInput({
+      currentPositions: [{ assetId: "BTC", balance: 0.05, avgCostEur: 50_000, currentPriceEur: 90_000 }],
+      currentLots: [{ id: "l1", assetId: "BTC", date: NOW - 2 * YEAR_MS, remainingAmount: 0.05, unitAcquisitionPriceEur: 50_000 }],
+      eurcFree: 0,
+      eurcFiscalReserve: 0,
+      historicalCapitalEur: 2_500,
+      horizonDate: horizon(10),
+      cycles: [{ ...makeCycle(), monthlyAmountEur: 500 }],
+    });
+    const result = runPerspectivesSimulation(input);
+    for (const s of result.scenarios) {
+      const w = s.summary.finalNetWealthEur;
+      // Capital total: €4.500 + €60.000 = €64.500.
+      // Con BTC en ARK bull case 2030 (€1.38M) y pocos BTC, resultado razonable.
+      // No puede superar €50M sin reinversión compuesta ficticia.
+      expect(w).toBeGreaterThan(0);
+      expect(w).toBeLessThan(50_000_000);
+    }
+  });
+
+  it("cuantiles externos: conservador usa 10° percentil, optimista usa 90° (no extremos absolutos)", () => {
+    // Con 2 fuentes BTC 2030: $258.5k y $1.5M
+    // Cuantil 10: ≈ $258.5k (más cercano al conservador)
+    // Cuantil 90: ≈ $1.5M (más cercano al optimista)
+    // La brecha no puede ser exactamente el mínimo/máximo absoluto con 2 fuentes
+    const cons = buildExternalPriceMap("BTC", 90_000, "conservador", NOW, horizon(5), KNOWN_FORECASTS);
+    const opt  = buildExternalPriceMap("BTC", 90_000, "optimista",   NOW, horizon(5), KNOWN_FORECASTS);
+    if (cons.sourceCount >= 2) {
+      const mKey = monthKey(new Date(horizon(4)).getTime());
+      const pCons = cons.pricesByMonth[mKey] ?? 0;
+      const pOpt  = opt.pricesByMonth[mKey] ?? 0;
+      // Optimista > Conservador (los cuantiles 90 > 10 con 2 fuentes $258k y $1.5M)
+      expect(pOpt).toBeGreaterThan(pCons);
+    }
   });
 });

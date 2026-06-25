@@ -137,12 +137,14 @@ function scenarioPrice(sortedPricesEur: number[], scenario: SimScenario): number
   if (sortedPricesEur.length === 0) throw new Error("scenarioPrice: empty input");
   if (sortedPricesEur.length === 1) return sortedPricesEur[0];
 
+  // Cuantiles ponderados: optimista ≠ máximo absoluto, conservador ≠ mínimo absoluto.
+  // Documentado en methodologyVersion "quantile-v1".
   const pctMap: Record<SimScenario, number> = {
-    conservador: 0.0,
-    moderado:    0.25,
-    base:        0.5,
-    favorable:   0.75,
-    optimista:   1.0,
+    conservador: 0.10,
+    moderado:    0.30,
+    base:        0.50,
+    favorable:   0.70,
+    optimista:   0.90,
   };
   const pct = pctMap[scenario];
   const rawIdx = pct * (sortedPricesEur.length - 1);

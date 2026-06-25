@@ -361,84 +361,7 @@ function evaluateSales(
       description: `Venta parcial ${(sellPct * 100).toFixed(0)}% ${assetId} por regla (×${rule.triggerValue})`,
     });
   }
-
-  // Default sale proposals when no explicit rules (full_strategy)
-  const assetIds = Object.keys(state.assetStates);
-  for (const assetId of assetIds) {
-    const st = state.assetStates[assetId];
-    if (!st || st.balance <= 0 || st.failed || st.deteriorated) continue;
-
-    const priceEur = prices[assetId]?.[mKey];
-    if (!priceEur || priceEur <= 0) continue;
-
-    const avgCost = st.avgCostEur;
-    if (avgCost == null || avgCost <= 0) continue;
-
-    const gainMultiple = priceEur / avgCost;
-
-    // Skip proposals only if there's an active rule that hasn't been triggered yet.
-    // A triggered rule (triggeredAt != null) has already fired and won't fire again,
-    // so proposals should still be allowed to run.
-    const hasActiveUnusedRule = cycle.saleRules.some(
-      r => r.assetId === assetId && r.status === "active" && r.triggeredAt == null,
-    );
-    if (hasActiveUnusedRule) continue;
-
-    // Proposal: sell 10% at 3×, 15% at 5×, 20% at 10× gain over avgCost
-    // Min 5% of balance must remain after sale. Rearmed on each new ATH.
-    const proposals: Array<{ threshold: number; pct: number }> = [
-      { threshold: 3,  pct: 0.10 },
-      { threshold: 5,  pct: 0.15 },
-      { threshold: 10, pct: 0.20 },
-    ];
-
-    for (const p of proposals) {
-      if (gainMultiple < p.threshold) continue;
-
-      const saleKey = `${assetId}-${p.threshold}x`;
-      if (st.usedSaleProposalIds.has(saleKey)) continue;
-
-      // Keep at least 5% of balance
-      const maxSellPct = Math.min(p.pct, Math.max(0, 1 - 0.05));
-      const quantityToSell = st.balance * maxSellPct;
-      if (quantityToSell < 0.000001) continue;
-
-      const { totalCostEur } = consumeFifo(st.lots, quantityToSell);
-      const grossEur = quantityToSell * priceEur;
-      const commissionEur = grossEur * options.commissionRate;
-      const netEur = grossEur - commissionEur;
-      const gainEur = netEur - totalCostEur;
-      const taxEur = calcTax(Math.max(0, gainEur), options);
-      const eurcEur = Math.max(0, netEur - taxEur);
-
-      st.balance -= quantityToSell;
-      st.totalSold += quantityToSell;
-      st.lastSalePriceEur = priceEur;
-      st.avgCostEur = calcAvgCost(st.lots);
-      st.usedSaleProposalIds.add(saleKey);
-
-      state.eurcFree += eurcEur;
-      state.eurcFiscalReserve += taxEur;
-      state.monthSalesEur += grossEur;
-      state.monthCommissionsEur += commissionEur;
-      state.monthTaxEur += taxEur;
-      state.monthNetEurcInflowEur += eurcEur;
-
-      state.events.push({
-        date,
-        type: "sale",
-        assetId,
-        amountEur: grossEur,
-        quantity: quantityToSell,
-        priceEur,
-        gainEur,
-        taxEur,
-        description: `Propuesta: venta ${(maxSellPct * 100).toFixed(0)}% ${assetId} a ×${p.threshold} coste`,
-      });
-
-      break; // one proposal at a time per asset
-    }
-  }
+  // Solo se ejecutan reglas configuradas por el usuario. Sin escalones genéricos.
 }
 
 // ─── Formato moneda (para descripciones de eventos) ─────────────────────────
@@ -847,14 +770,12 @@ function simulateMonth(
     const priceEur = prices[assetId]?.[mKey];
     if (!priceEur || priceEur <= 0) continue;
     if (st.peakPriceEur == null || priceEur > st.peakPriceEur) {
-      // Nueva ATH: limpiar escalones propuestos del pico anterior para rearme
+      // Nueva ATH: limpiar escalones propuestos del pico anterior para rearme de recompras
       if (st.peakPriceEur != null) {
         const rebuyPrefix = `proposed-rebuy-${assetId}-`;
         for (const key of [...st.usedRebuyTierIds]) {
           if (key.startsWith(rebuyPrefix)) st.usedRebuyTierIds.delete(key);
         }
-        // Rearmar propuestas de venta: nuevo ciclo puede vender de nuevo
-        st.usedSaleProposalIds.clear();
       }
       st.peakPriceEur = priceEur;
     }
@@ -956,22 +877,12 @@ function simulateMonth(
     }
   }
 
-  // 7. Evaluate rebuys (configured tiers)
+  // 7. Evaluate rebuys (configured tiers only — no generic tiers)
   if (activeCycle) {
     evaluateRebuys(activeCycle, next, prices, mKey, options, date);
   }
 
-  // 7b. Proposed rebuys (when no configured tiers or as supplement, full_strategy only)
-  if (activeCycle && cycleAssets.length > 0) {
-    evaluateProposedRebuys(activeCycle, next, prices, mKey, options, date, cycleAssets);
-  }
-
-  // 8. Reinvest residual EURC (after rebuys)
-  if (activeCycle && cycleAssets.length > 0) {
-    reinvestResidual(next, prices, mKey, options, date, cycleAssets);
-  }
-
-  // 9. Accumulators
+  // 8. Accumulators
   next.cumulativeContributionsEur = state.cumulativeContributionsEur + next.monthContributionsEur;
   next.cumulativeSalesEur = state.cumulativeSalesEur + next.monthSalesEur;
   next.cumulativeRebuysEur = state.cumulativeRebuysEur + next.monthRebuysEur;
@@ -1272,7 +1183,21 @@ function runScenario(
   const externalResultsByAsset: Record<string, ReturnType<typeof buildExternalPriceMap>> = {};
   const prices: Record<string, Record<string, number>> = {};
   for (const assetId of allAssetIds) {
-    const currentPrice = currentPriceMap[assetId] ?? 1.0;
+    const currentPrice = currentPriceMap[assetId];
+    if (currentPrice == null || currentPrice <= 0) {
+      // Sin precio actual verificado: excluir del mapa de precios.
+      // Las compras asignadas a este activo irán a eurcFree en el motor.
+      externalResultsByAsset[assetId] = {
+        pricesByMonth: {},
+        coverageByYear: {},
+        directYears: [],
+        interpolatedYears: [],
+        lastCoveredYear: null,
+        sourceCount: 0,
+      };
+      prices[assetId] = {};
+      continue;
+    }
     const result = buildExternalPriceMap(
       assetId, currentPrice, scenario, input.now, input.horizonDate, KNOWN_FORECASTS,
     );
@@ -1490,29 +1415,10 @@ export function runPerspectivesSimulation(input: SimInput): PerspectivesSimulati
     return runScenario(localInput, scenario);
   });
 
-  // Enforce monotonic ordering: a more optimistic scenario should never show
-  // less final wealth than a less optimistic one. At short horizons (1-3 years),
-  // favorable can legitimately accumulate more coins at lower DCA prices while
-  // being at its cycle peak — but from a user perspective this is confusing.
-  // We propagate the minimum upward: if scenario[n] < scenario[n-1], set it to
-  // scenario[n-1] × 1.005 (0.5% higher) and update dependent summary fields.
-  for (let i = 1; i < results.length; i++) {
-    const prev = results[i - 1]; // less optimistic
-    const curr = results[i];     // more optimistic
-    const prevFinal = prev.summary.finalNetWealthEur;
-    const currFinal = curr.summary.finalNetWealthEur;
-    if (currFinal < prevFinal) {
-      const bump = prevFinal * 1.005;
-      const delta = bump - currFinal;
-      curr.summary.finalNetWealthEur = bump;
-      // Adjust the last annual snapshot's closing wealth to match
-      const lastSnap = curr.annualSnapshots.at(-1);
-      if (lastSnap) {
-        lastSnap.closingWealthEur = (lastSnap.closingWealthEur ?? 0) + delta;
-        lastSnap.marketGainEur = (lastSnap.marketGainEur ?? 0) + delta;
-      }
-    }
-  }
+  // El ajuste monotónico artificial ha sido eliminado.
+  // Los escenarios producen sus propios resultados sin corrección posterior.
+  // Si un escenario optimista muestra menos patrimonio que uno moderado (p. ej. por
+  // comprar a precios más altos), ese resultado se conserva y se explica en la UI.
 
   const startYear = results[0]?.annualSnapshots[0]?.year ?? new Date(input.now).getFullYear() + 1;
   const endYear = results[0]?.annualSnapshots.at(-1)?.year ?? startYear;

@@ -541,63 +541,86 @@ function YearDetail({ snap }: { snap: AnnualSnapshot }) {
   );
 }
 
-// ─── Evolution chart (SVG) ────────────────────────────────────────────────────
+// ─── Scenario comparison table (replaces the removed evolution chart) ─────────
 
-const SCENARIO_CSS_COLORS: Record<SimScenario, string> = {
-  conservador: "var(--color-danger)",
-  moderado:    "var(--color-warning)",
-  base:        "var(--color-primary)",
-  favorable:   "var(--color-success)",
-  optimista:   "var(--color-sage)",
-};
+function ScenarioComparisonTable({
+  simData,
+  year,
+  activeScenario,
+  initialWealthEur,
+  totalContributionsEur,
+}: {
+  simData: PerspectivesSimulation;
+  year: number | null;
+  activeScenario: SimScenario;
+  initialWealthEur: number;
+  totalContributionsEur: number;
+}) {
+  if (!year) return null;
 
-function EvolutionChart({ simData }: { simData: PerspectivesSimulation }) {
-  const years = simData.scenarios[0]?.annualSnapshots.map(s => s.year) ?? [];
-  if (years.length === 0) return null;
+  const baseSnap = simData.scenarios.find(s => s.scenario === "base")
+    ?.annualSnapshots.find(a => a.year === year);
 
-  const allValues = simData.scenarios.flatMap(sc => sc.annualSnapshots.map(s => s.closingWealthEur));
-  const maxVal = Math.max(...allValues, 1);
-
-  const W = 600; const H = 200;
-  const PAD = { top: 10, right: 10, bottom: 30, left: 65 };
-  const chartW = W - PAD.left - PAD.right;
-  const chartH = H - PAD.top - PAD.bottom;
-  const xStep = chartW / Math.max(years.length - 1, 1);
+  const rows = SCENARIOS.map(sc => {
+    const result = simData.scenarios.find(s => s.scenario === sc);
+    const snap = result?.annualSnapshots.find(a => a.year === year);
+    const closing = snap?.closingWealthEur ?? null;
+    const capitalIn = initialWealthEur + totalContributionsEur;
+    const beneficio = closing != null ? closing - capitalIn : null;
+    const vsBas = closing != null && baseSnap ? closing - baseSnap.closingWealthEur : null;
+    const coverage = snap?.forecastCoverage ?? "uncovered";
+    return { sc, closing, beneficio, vsBas, coverage };
+  });
 
   return (
-    <div className="w-full overflow-x-auto">
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ minWidth: 320, maxWidth: 700 }}>
-        {[0, 0.25, 0.5, 0.75, 1].map(t => {
-          const y = PAD.top + chartH * (1 - t);
-          const label = maxVal >= 1000 ? `${(maxVal * t / 1000).toFixed(0)}k` : (maxVal * t).toFixed(0);
-          return (
-            <g key={t}>
-              <line x1={PAD.left} x2={PAD.left + chartW} y1={y} y2={y} stroke="var(--border-color)" strokeWidth={0.5} />
-              <text x={PAD.left - 4} y={y + 4} textAnchor="end" fontSize={8} fill="var(--text-muted)">{label}</text>
-            </g>
-          );
-        })}
-        {years.map((yr, i) => (
-          <text key={yr} x={PAD.left + i * xStep} y={H - 6} textAnchor="middle" fontSize={8} fill="var(--text-muted)">{yr}</text>
-        ))}
-        {simData.scenarios.map(sc => {
-          const pts = sc.annualSnapshots.map((s, i) => [
-            PAD.left + i * xStep,
-            PAD.top + chartH * (1 - s.closingWealthEur / maxVal),
-          ]);
-          const d = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
-          return (
-            <path key={sc.scenario} d={d} fill="none" stroke={SCENARIO_CSS_COLORS[sc.scenario]} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
-          );
-        })}
-        {SCENARIOS.map((sc, i) => (
-          <g key={sc}>
-            <rect x={PAD.left + i * 84} y={H - 14} width={6} height={6} fill={SCENARIO_CSS_COLORS[sc]} rx={1} />
-            <text x={PAD.left + i * 84 + 9} y={H - 8} fontSize={7} fill="var(--text-muted)">{SCENARIO_LABELS[sc]}</text>
-          </g>
-        ))}
-      </svg>
-    </div>
+    <Card>
+      <CardHeader>
+        <CardTitle>Comparación de escenarios — {year}</CardTitle>
+        <p className="text-xs text-muted-foreground mt-1">
+          Patrimonio neto estimado en {year} bajo cada escenario. Diferencia calculada respecto al escenario Base.
+        </p>
+      </CardHeader>
+      <CardContent>
+        <div className="responsive-table persp-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Escenario</th>
+                <th className="num">Patrimonio neto</th>
+                <th className="num">Beneficio estimado</th>
+                <th className="num">vs Base</th>
+                <th>Cobertura</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(({ sc, closing, beneficio, vsBas, coverage }) => {
+                const isActive = sc === activeScenario;
+                return (
+                  <tr key={sc} style={isActive ? { background: "var(--surface-2, rgba(128,128,128,0.08))", fontWeight: 600 } : {}}>
+                    <td>
+                      <span style={isActive ? { fontWeight: 700 } : {}}>{SCENARIO_LABELS[sc]}</span>
+                      {isActive && <span className="ml-1 text-xs text-muted-foreground">← activo</span>}
+                    </td>
+                    <td className="num font-mono">{closing != null ? fmt(closing) : "—"}</td>
+                    <td className={`num font-mono ${beneficio != null ? (beneficio >= 0 ? "text-gain" : "text-loss") : ""}`}>
+                      {beneficio != null ? fmtSign(beneficio) : "—"}
+                    </td>
+                    <td className={`num font-mono ${vsBas != null && vsBas !== 0 ? (vsBas > 0 ? "text-gain" : "text-loss") : "text-muted-foreground"}`}>
+                      {vsBas != null ? (vsBas === 0 ? "Base" : fmtSign(vsBas)) : "—"}
+                    </td>
+                    <td className="text-xs">
+                      {coverage === "covered"
+                        ? <span style={{ color: "var(--color-success-text, #2d8a4e)" }}>✓ Cubierto</span>
+                        : <span className="text-muted-foreground">⚠ Sin cobertura</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -610,13 +633,12 @@ interface AnalystForecast {
   publishedAt: string; reviewedAt: string; nextReviewAt: string;
 }
 
-const SCENARIO_MAP: Record<string, string> = {
-  conservador: "Conservador", moderado: "Moderado",
-  base: "Base", favorable: "Favorable", optimista: "Optimista",
-  medio: "Medio", muy_alcista: "Muy alcista",
-};
-
-function AnalystForecastSection({ years, activeAssets }: { years: number[]; activeAssets: string[] }) {
+function AnalystForecastSection({ years, activeAssets, assetPriceInfo }: {
+  years: number[];
+  activeAssets: string[];
+  assetPriceInfo: Record<string, AssetPriceInfo>;
+}) {
+  const [expandedAssets, setExpandedAssets] = useState<Set<string>>(new Set());
   const { data: forecasts, isLoading } = useQuery<AnalystForecast[]>({
     queryKey: ["perspectives:getAnalystForecasts"],
     queryFn: async () => {
@@ -630,16 +652,21 @@ function AnalystForecastSection({ years, activeAssets }: { years: number[]; acti
   if (isLoading) return null;
 
   const coveredAssets = activeAssets.filter(a => forecasts?.some(f => f.ticker === a));
+  const uncoveredAssets = activeAssets.filter(a => !coveredAssets.includes(a));
   const coveredYears = years.filter(y => forecasts?.some(f => f.targetYear === y));
-
-  if (coveredAssets.length === 0) return null;
 
   const lastReviewed = forecasts?.reduce((best, f) =>
     !best || f.reviewedAt > best ? f.reviewedAt : best, null as string | null);
   const nextReview = forecasts?.reduce((earliest, f) =>
     !earliest || f.nextReviewAt < earliest ? f.nextReviewAt : earliest, null as string | null);
 
-  const fmtDate = (d: string) => new Date(d).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "numeric" });
+  const fmtDate = (d: string) => {
+    try { return new Date(d).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "numeric" }); }
+    catch { return d; }
+  };
+
+  const toggleAsset = (ticker: string) =>
+    setExpandedAssets(prev => { const n = new Set(prev); n.has(ticker) ? n.delete(ticker) : n.add(ticker); return n; });
 
   return (
     <Card>
@@ -652,71 +679,150 @@ function AnalystForecastSection({ years, activeAssets }: { years: number[]; acti
           </div>
         </div>
         <p className="text-xs text-muted-foreground mt-1">
-          Precios objetivo publicados en informes públicos de analistas institucionales. Solo se muestran años con cobertura real documentada.
+          Precios objetivo publicados en informes públicos de analistas institucionales.
+          Fuentes originales: {new Set(forecasts?.map(f => f.source) ?? []).size} ·
+          Activos con cobertura: {coveredAssets.length} ·
+          Años con cobertura: {coveredYears.join(", ") || "—"}
         </p>
       </CardHeader>
       <CardContent className="space-y-4">
         {coveredAssets.map(ticker => {
           const assetForecasts = forecasts?.filter(f => f.ticker === ticker) ?? [];
           const assetYears = coveredYears.filter(y => assetForecasts.some(f => f.targetYear === y));
+          const info = assetPriceInfo[ticker];
+          const sources = [...new Set(assetForecasts.map(f => f.source))];
+          const isExpanded = expandedAssets.has(ticker);
 
           if (assetYears.length === 0) return null;
 
           return (
-            <div key={ticker}>
-              <p className="text-sm font-semibold mb-2">{ticker}</p>
-              <div className="responsive-table persp-table">
+            <div key={ticker} style={{ borderTop: "1px solid var(--border-color)", paddingTop: 12 }}>
+              {/* Asset header */}
+              <div className="flex items-center justify-between gap-4 mb-3 flex-wrap">
+                <div>
+                  <span className="font-mono font-bold text-sm">{ticker}</span>
+                  {info?.currentPriceEur != null && (
+                    <span className="ml-3 text-xs text-muted-foreground">
+                      Precio actual: <strong className="text-foreground">{fmt(info.currentPriceEur)}</strong>
+                    </span>
+                  )}
+                  {info?.impliedMarketCapBnEur != null && (
+                    <span className="ml-3 text-xs text-muted-foreground">
+                      Cap. impl. horizonte: <strong className="text-foreground">{info.impliedMarketCapBnEur.toFixed(0)} mil M €</strong>
+                    </span>
+                  )}
+                </div>
+                <div className="flex gap-3 text-xs text-muted-foreground flex-wrap">
+                  <span>Fuentes: {sources.length}</span>
+                  <span>Años: {assetYears.join(", ")}</span>
+                  {info?.modelType === "external_direct" && <Badge variant="success">Cobertura directa</Badge>}
+                  {info?.modelType === "external_interpolated" && <Badge variant="warning">Interpolado</Badge>}
+                  {info?.modelType === "no_coverage" && <Badge variant="neutral">Sin cobertura</Badge>}
+                </div>
+              </div>
+
+              {/* Price ranges per year */}
+              <div className="responsive-table persp-table mb-2">
                 <table>
                   <thead>
                     <tr>
                       <th>Año</th>
-                      <th>Escenario</th>
-                      <th className="num">Precio (€)</th>
-                      <th>Fuente</th>
-                      <th>Publicado</th>
-                      <th>Informe</th>
+                      <th className="num">Conservador</th>
+                      <th className="num">Base</th>
+                      <th className="num">Optimista</th>
+                      <th className="num">Muy alcista</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {assetYears.flatMap(year =>
-                      ["conservador", "moderado", "base", "favorable", "optimista", "medio", "muy_alcista"].map(sc => {
-                        const f = assetForecasts.find(x => x.targetYear === year && x.scenario === sc);
-                        if (!f) return null;
-                        return (
-                          <tr key={`${year}-${sc}`}>
-                            <td className="font-mono text-xs">{year}</td>
-                            <td className="text-xs">{SCENARIO_MAP[sc] ?? sc}</td>
-                            <td className="num font-semibold">{f.priceEur.toLocaleString("es-ES")} €</td>
-                            <td className="text-xs">{f.source}</td>
-                            <td className="text-xs text-muted-foreground">
-                              {f.publishedAt ? fmtDate(f.publishedAt) : "—"}
-                            </td>
-                            <td className="text-xs">
-                              {f.reportUrl
-                                ? <a href={f.reportUrl} target="_blank" rel="noopener noreferrer" className="text-primary underline">Ver informe</a>
-                                : "—"
-                              }
-                            </td>
-                          </tr>
-                        );
-                      }).filter(Boolean)
-                    )}
+                    {assetYears.map(year => {
+                      const cons = assetForecasts.find(f => f.targetYear === year && (f.scenario === "conservador"));
+                      const base = assetForecasts.find(f => f.targetYear === year && f.scenario === "base") ??
+                                   assetForecasts.find(f => f.targetYear === year && f.scenario === "medio");
+                      const opt  = assetForecasts.find(f => f.targetYear === year && f.scenario === "optimista");
+                      const bull = assetForecasts.find(f => f.targetYear === year && f.scenario === "muy_alcista");
+                      return (
+                        <tr key={year}>
+                          <td className="font-mono text-xs font-semibold">{year}</td>
+                          <td className="num text-xs">{cons ? `${cons.priceEur.toLocaleString("es-ES")} €` : "—"}</td>
+                          <td className="num text-xs font-semibold">{base ? `${base.priceEur.toLocaleString("es-ES")} €` : "—"}</td>
+                          <td className="num text-xs">{opt ? `${opt.priceEur.toLocaleString("es-ES")} €` : "—"}</td>
+                          <td className="num text-xs text-muted-foreground">{bull ? `${bull.priceEur.toLocaleString("es-ES")} €` : "—"}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
+
+              {/* Expandable sources */}
+              <button
+                type="button"
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
+                onClick={() => toggleAsset(ticker)}
+              >
+                <span>{isExpanded ? "▾" : "▸"}</span>
+                <span>Ver {sources.length} fuente{sources.length !== 1 ? "s" : ""} originales</span>
+              </button>
+              {isExpanded && (
+                <div className="mt-2 space-y-2">
+                  {assetForecasts.map((f, i) => (
+                    <div key={i} className="text-xs border-l-2 border-border pl-3 py-1">
+                      <div className="flex items-start justify-between gap-2 flex-wrap">
+                        <div>
+                          <span className="font-semibold">{f.source}</span>
+                          {f.reportTitle && <span className="ml-2 text-muted-foreground">— {f.reportTitle}</span>}
+                        </div>
+                        <div className="text-muted-foreground text-right">
+                          {f.publishedAt && <span>{fmtDate(f.publishedAt)} · </span>}
+                          <span className="font-mono font-semibold text-foreground">{f.priceEur.toLocaleString("es-ES")} € ({f.scenario})</span>
+                        </div>
+                      </div>
+                      {f.reportUrl && (
+                        <a href={f.reportUrl} target="_blank" rel="noopener noreferrer"
+                          className="text-xs text-muted-foreground underline break-all"
+                          style={{ wordBreak: "break-all" }}
+                        >
+                          {f.reportUrl.length > 80 ? f.reportUrl.slice(0, 80) + "…" : f.reportUrl}
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}
 
-        {activeAssets.filter(a => !coveredAssets.includes(a)).map(ticker => (
-          <p key={ticker} className="text-xs text-muted-foreground">
-            <span className="font-mono font-semibold">{ticker}</span>: Sin datos de analistas institucionales disponibles.
-          </p>
-        ))}
+        {uncoveredAssets.length > 0 && (
+          <div style={{ borderTop: "1px solid var(--border-color)", paddingTop: 12 }}>
+            {uncoveredAssets.map(ticker => {
+              const info = assetPriceInfo[ticker];
+              return (
+                <div key={ticker} className="text-xs text-muted-foreground mb-2">
+                  <span className="font-mono font-semibold text-foreground">{ticker}</span>
+                  {" "}— Sin cobertura externa de analistas institucionales.
+                  {info?.currentPriceEur != null && (
+                    <span className="ml-1">Precio actual: <strong className="text-foreground">{fmt(info.currentPriceEur)}</strong>.</span>
+                  )}
+                  {" "}La simulación usa el precio actual como referencia sin proyección.
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {coveredYears.length === 0 && uncoveredAssets.length === activeAssets.length && (
+          <p className="text-xs text-muted-foreground">No hay previsiones institucionales verificadas disponibles para los activos del plan.</p>
+        )}
+
+        {coveredAssets.length === 0 && (
+          <p className="text-xs text-muted-foreground">No hay previsiones verificadas para los activos de este plan en los años seleccionados.</p>
+        )}
 
         {years.filter(y => !coveredYears.includes(y)).length > 0 && (
           <p className="text-xs text-muted-foreground border-t pt-2 mt-2">
-            Años sin cobertura externa: {years.filter(y => !coveredYears.includes(y)).join(", ")}. La simulación para estos años se muestra como proyección sin respaldo de previsiones institucionales.
+            Años sin cobertura externa: <strong>{years.filter(y => !coveredYears.includes(y)).join(", ")}</strong>.
+            La simulación para estos años se muestra como proyección sin respaldo institucional.
           </p>
         )}
       </CardContent>
@@ -724,12 +830,38 @@ function AnalystForecastSection({ years, activeAssets }: { years: number[]; acti
   );
 }
 
-// ─── EURC Reconciliation Section ─────────────────────────────────────────────
+// ─── News summary placeholder ─────────────────────────────────────────────────
+
+function NewsSummarySection() {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Noticias relevantes para esta proyección</CardTitle>
+        <p className="text-xs text-muted-foreground mt-1">
+          Noticias que pueden afectar a los activos y previsiones del plan. Máximo 3 prioritarias.
+        </p>
+      </CardHeader>
+      <CardContent>
+        <p className="text-xs text-muted-foreground italic">
+          El módulo de noticias financieras está pendiente de integración con una fuente de datos verificada.
+          Próximamente se mostrarán noticias reales con impacto identificado por activo.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── EURC Reconciliation Section — contabilidad estructurada ─────────────────
 
 function EurcReconciliationSection({ sum }: { sum: ScenarioSummary }) {
+  const [detailOpen, setDetailOpen] = useState(false);
   const fmtE = (n: number) => n.toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
-  const eurcFreeInitial  = sum.initialEurcFreeEur ?? 0;
-  const eurcFiscalInit   = sum.initialEurcFiscalReserveEur ?? 0;
+  const fmtRow = (label: string, value: number, sign: "+" | "−" | "=" | "" = "") => ({
+    label, value, sign,
+  });
+
+  const eurcInitial      = sum.initialEurcFreeEur ?? 0;
+  const fiscalInit       = sum.initialEurcFiscalReserveEur ?? 0;
   const eurcInflow       = sum.totalNetEurcInflowEur ?? 0;
   const rebuys           = sum.totalRebuysEur;
   const reinvested       = sum.totalEurcReinvestedEur;
@@ -737,52 +869,132 @@ function EurcReconciliationSection({ sum }: { sum: ScenarioSummary }) {
   const fiscalGenerated  = sum.totalTaxEur;
   const fiscalFinal      = sum.finalFiscalReserveEur;
 
-  const computedFree = eurcFreeInitial + eurcInflow - rebuys - reinvested;
-  const diffFree     = eurcFreeFinal - computedFree;
-  const computedFiscal = eurcFiscalInit + fiscalGenerated;
-  const diffFiscal     = fiscalFinal - computedFiscal;
+  // EURC libre: saldo inicial + entradas − salidas = libre calculado
+  const eurcComputed = eurcInitial + eurcInflow - rebuys - reinvested;
+  const diffFree     = eurcFreeFinal - eurcComputed;
+
+  // Reserva fiscal: inicial + generada = calculada
+  const fiscalComputed = fiscalInit + fiscalGenerated;
+  const diffFiscal     = fiscalFinal - fiscalComputed;
+
+  const isConciliated = Math.abs(diffFree) < 0.02 && Math.abs(diffFiscal) < 0.02;
+  const hasDiscrepancy = Math.abs(diffFree) >= 0.02 || Math.abs(diffFiscal) >= 0.02;
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Conciliación EURC</CardTitle>
-        <p className="text-xs text-muted-foreground mt-1">
-          Verificación de saldo EURC libre y reserva fiscal durante toda la simulación. La diferencia debe ser ≤ 0,01 € (redondeo).
-        </p>
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <CardTitle>Conciliación EURC</CardTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              Origen, utilización y saldo disponible de la liquidez generada por ventas.
+            </p>
+          </div>
+          <div>
+            {isConciliated && !hasDiscrepancy && (
+              <Badge variant="success">Conciliado</Badge>
+            )}
+            {hasDiscrepancy && (
+              <Badge variant="warning">Diferencia pendiente</Badge>
+            )}
+          </div>
+        </div>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div>
-          <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">EURC libre</p>
-          <table className="w-full text-xs">
-            <tbody>
-              <tr><td className="py-0.5">EURC libre inicial</td><td className="text-right font-mono">{fmtE(eurcFreeInitial)}</td></tr>
-              <tr className="text-gain"><td className="py-0.5">+ EURC neto de ventas</td><td className="text-right font-mono">+{fmtE(eurcInflow)}</td></tr>
-              <tr className="text-loss"><td className="py-0.5">− Recompras (comisión incl.)</td><td className="text-right font-mono">−{fmtE(rebuys)}</td></tr>
-              <tr className="text-loss"><td className="py-0.5">− Reinversión residual (comisión incl.)</td><td className="text-right font-mono">−{fmtE(reinvested)}</td></tr>
-              <tr className="border-t border-border/40"><td className="py-0.5 font-semibold">= EURC libre calculado</td><td className="text-right font-mono font-semibold">{fmtE(computedFree)}</td></tr>
-              <tr><td className="py-0.5">EURC libre final (motor)</td><td className="text-right font-mono">{fmtE(eurcFreeFinal)}</td></tr>
-              <tr className={`font-semibold ${Math.abs(diffFree) < 0.02 ? "text-gain" : "text-loss"}`}>
-                <td className="py-0.5">Diferencia</td>
-                <td className="text-right font-mono">{fmtE(diffFree)}</td>
+      <CardContent>
+        {/* ── Fórmula contable EURC libre ── */}
+        <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">EURC libre</p>
+        <table className="w-full text-xs mb-4" style={{ borderCollapse: "collapse" }}>
+          <tbody>
+            {[
+              fmtRow("EURC libre inicial",              eurcInitial,   ""),
+              fmtRow("+ EURC neto de ventas",           eurcInflow,    "+"),
+              fmtRow("− Recompras (comisión incl.)",    rebuys,        "−"),
+              fmtRow("− Reinversión residual",          reinvested,    "−"),
+            ].map((r, i) => (
+              <tr key={i}>
+                <td className="py-1 text-muted-foreground">{r.label}</td>
+                <td className="py-1 text-right font-mono">
+                  {r.sign === "+" ? <span className="text-gain">+{fmtE(r.value)}</span>
+                   : r.sign === "−" ? <span className="text-loss">{r.value !== 0 ? `−${fmtE(r.value)}` : fmtE(0)}</span>
+                   : fmtE(r.value)}
+                </td>
               </tr>
-            </tbody>
-          </table>
-        </div>
-        <div>
-          <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Reserva fiscal</p>
-          <table className="w-full text-xs">
-            <tbody>
-              <tr><td className="py-0.5">Reserva fiscal inicial</td><td className="text-right font-mono">{fmtE(eurcFiscalInit)}</td></tr>
-              <tr className="text-gain"><td className="py-0.5">+ Reserva generada por ventas</td><td className="text-right font-mono">+{fmtE(fiscalGenerated)}</td></tr>
-              <tr className="border-t border-border/40"><td className="py-0.5 font-semibold">= Reserva calculada</td><td className="text-right font-mono font-semibold">{fmtE(computedFiscal)}</td></tr>
-              <tr><td className="py-0.5">Reserva final (motor)</td><td className="text-right font-mono">{fmtE(fiscalFinal)}</td></tr>
-              <tr className={`font-semibold ${Math.abs(diffFiscal) < 0.02 ? "text-gain" : "text-loss"}`}>
-                <td className="py-0.5">Diferencia</td>
-                <td className="text-right font-mono">{fmtE(diffFiscal)}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+            ))}
+            <tr style={{ borderTop: "1px solid var(--border-color)" }}>
+              <td className="py-1 font-semibold">= EURC libre calculado</td>
+              <td className="py-1 text-right font-mono font-semibold">{fmtE(eurcComputed)}</td>
+            </tr>
+            <tr>
+              <td className="py-1 text-muted-foreground">EURC libre final (motor)</td>
+              <td className="py-1 text-right font-mono">{fmtE(eurcFreeFinal)}</td>
+            </tr>
+            <tr className={Math.abs(diffFree) < 0.02 ? "text-gain" : "text-loss"}>
+              <td className="py-1 font-semibold">Diferencia</td>
+              <td className="py-1 text-right font-mono font-semibold">{fmtE(diffFree)}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        {/* ── Reserva fiscal ── */}
+        <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Reserva fiscal</p>
+        <table className="w-full text-xs mb-4" style={{ borderCollapse: "collapse" }}>
+          <tbody>
+            <tr>
+              <td className="py-1 text-muted-foreground">Reserva fiscal inicial</td>
+              <td className="py-1 text-right font-mono">{fmtE(fiscalInit)}</td>
+            </tr>
+            <tr>
+              <td className="py-1 text-muted-foreground">+ Reserva generada por ventas</td>
+              <td className="py-1 text-right font-mono text-gain">+{fmtE(fiscalGenerated)}</td>
+            </tr>
+            <tr style={{ borderTop: "1px solid var(--border-color)" }}>
+              <td className="py-1 font-semibold">= Reserva calculada</td>
+              <td className="py-1 text-right font-mono font-semibold">{fmtE(fiscalComputed)}</td>
+            </tr>
+            <tr>
+              <td className="py-1 text-muted-foreground">Reserva final (motor)</td>
+              <td className="py-1 text-right font-mono">{fmtE(fiscalFinal)}</td>
+            </tr>
+            <tr className={Math.abs(diffFiscal) < 0.02 ? "text-gain" : "text-loss"}>
+              <td className="py-1 font-semibold">Diferencia</td>
+              <td className="py-1 text-right font-mono font-semibold">{fmtE(diffFiscal)}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        {/* ── Detalle desplegable ── */}
+        <button
+          type="button"
+          className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1 mt-1"
+          onClick={() => setDetailOpen(v => !v)}
+        >
+          <span>{detailOpen ? "▾" : "▸"}</span>
+          <span>Ver detalle de movimientos EURC</span>
+        </button>
+        {detailOpen && (
+          <div className="mt-3 text-xs space-y-1">
+            <div className="flex justify-between py-1 border-b border-border/30">
+              <span className="text-muted-foreground">Total recompras simuladas</span>
+              <span className="font-mono">{fmtE(rebuys)}</span>
+            </div>
+            <div className="flex justify-between py-1 border-b border-border/30">
+              <span className="text-muted-foreground">Total reinversión residual</span>
+              <span className="font-mono">{fmtE(reinvested)}</span>
+            </div>
+            <div className="flex justify-between py-1 border-b border-border/30">
+              <span className="text-muted-foreground">EURC libre final</span>
+              <span className="font-mono font-semibold">{fmtE(eurcFreeFinal)}</span>
+            </div>
+            <div className="flex justify-between py-1">
+              <span className="text-muted-foreground">Reserva fiscal final</span>
+              <span className="font-mono font-semibold">{fmtE(fiscalFinal)}</span>
+            </div>
+            <p className="text-muted-foreground pt-2">
+              Diferencia EURC libre: {Math.abs(diffFree) < 0.02 ? "✓ < 0,02 € (redondeo aceptable)" : `⚠ ${fmtE(Math.abs(diffFree))}`}
+              {" · "}Diferencia reserva fiscal: {Math.abs(diffFiscal) < 0.02 ? "✓ < 0,02 €" : `⚠ ${fmtE(Math.abs(diffFiscal))}`}
+            </p>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -1033,23 +1245,33 @@ export function Perspectivas() {
           </CardContent>
         </Card>
 
-        {/* ── BLOQUE 5: Secciones desplegables ── */}
+        {/* ── BLOQUE 5: Comparación compacta de los 5 escenarios (reemplaza la gráfica eliminada) ── */}
+        <ScenarioComparisonTable
+          simData={simData}
+          year={effectiveYear}
+          activeScenario={selectedScenario}
+          initialWealthEur={sum.initialWealthEur}
+          totalContributionsEur={sum.totalContributionsEur}
+        />
+
+        {/* ── BLOQUE 6: Secciones desplegables ── */}
         <CollapsibleSection title={`Tabla anual completa — ${SCENARIO_LABELS[selectedScenario]}`}>
           <AnnualTable snapshots={activeScenario.annualSnapshots} />
         </CollapsibleSection>
 
-        <CollapsibleSection title="Evolución del patrimonio (5 escenarios)">
-          <EvolutionChart simData={simData} />
-        </CollapsibleSection>
-
-        <CollapsibleSection title="Previsiones externas de analistas">
+        <CollapsibleSection title="Previsiones externas de analistas" defaultOpen>
           <AnalystForecastSection
             years={years}
             activeAssets={[...new Set([
               ...Object.keys(activeScenario.assetPriceInfo ?? {}),
               ...activeScenario.annualSnapshots.flatMap(s => Object.keys(s.positions ?? {})),
             ]).values()].filter(a => a !== "EURC" && a !== "EUR")}
+            assetPriceInfo={activeScenario.assetPriceInfo ?? {}}
           />
+        </CollapsibleSection>
+
+        <CollapsibleSection title="Noticias relevantes para esta proyección">
+          <NewsSummarySection />
         </CollapsibleSection>
 
         <CollapsibleSection title="Conciliación EURC">
