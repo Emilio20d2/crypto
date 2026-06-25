@@ -18,16 +18,19 @@ import type { ChartPoint } from "../components/MarketChart";
 import type { Period } from "../components/PeriodSelector";
 import { formatDateTime } from "../lib/format";
 
-const PRICE_REFRESH_MS = 10_000;
-// Auto-sync every 5 min — a full Coinbase sync is heavy; 30s was excessive
+// Snapshot ligero de precios cada 5 s — solo precio + valor, sin sparklines ni FIFO
+const PRICE_REFRESH_MS = 5_000;
+// Breakdown completo (posiciones + sparklines + coste Coinbase) cada 30 s
+const BREAKDOWN_REFRESH_MS = 30_000;
+// Auto-sync completo de Coinbase cada 5 min — operación pesada
 const COINBASE_SYNC_REFRESH_MS = 5 * 60_000;
-// Initial sync delayed so the UI is interactive before the network round-trip
 const COINBASE_SYNC_INITIAL_DELAY_MS = 8_000;
-const PORTFOLIO_CHART_REFRESH_MS = 10_000;
-const PORTFOLIO_LONG_CHART_REFRESH_MS = 120_000;
+// Series históricas: 60 s para periodos cortos, 120 s para largos
+const CHART_SHORT_STALE_MS = 60_000;
+const CHART_LONG_STALE_MS = 120_000;
 
 function chartRefreshMs(period: Period) {
-  return period === "1h" || period === "24h" ? PORTFOLIO_CHART_REFRESH_MS : PORTFOLIO_LONG_CHART_REFRESH_MS;
+  return period === "1h" || period === "24h" ? CHART_SHORT_STALE_MS : CHART_LONG_STALE_MS;
 }
 
 // The backend (portfolio:get-historical-series, given a period) already
@@ -149,6 +152,7 @@ export function Portfolio() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const backgroundSyncRunning = useRef(false);
+  const liveSnapshotRunning = useRef(false);
   const [manualPortfolioId, setManualPortfolioId] = useState<string | null>(null);
   const [period, setPeriod] = useState<Period>("24h");
 
@@ -170,33 +174,57 @@ export function Portfolio() {
   const portfolioOptions = portfoliosRes?.ok ? portfoliosRes.data : [];
   const selectedPortfolioId = manualPortfolioId ?? portfolioOptions[0]?.uuid ?? null;
 
+  // Breakdown completo: posiciones, sparklines, coste base. Cada 30 s.
   const { data: breakdownRes, isLoading: loadingBreakdown, isFetching: fetchingBreakdown } = useQuery({
     queryKey: ["coinbase", "breakdown", selectedPortfolioId],
     queryFn: () => window.cryptoControl.coinbase.getPortfolioBreakdown(selectedPortfolioId!, "EUR"),
     enabled: !!selectedPortfolioId,
-    staleTime: 15_000,
+    staleTime: 20_000,
+    refetchInterval: BREAKDOWN_REFRESH_MS,
+    refetchIntervalInBackground: true,
+  });
+
+  const breakdown = breakdownRes?.ok ? breakdownRes.data : null;
+
+  // Snapshot ligero de precios: solo precio + valor calculado. Cada 5 s.
+  // Solo activo cuando ya tenemos el breakdown base (necesitamos las cantidades).
+  // Guard de solapamiento: si la petición anterior sigue activa, se descarta.
+  const { data: liveSnapshotRes } = useQuery({
+    queryKey: ["portfolio", "live-snapshot", selectedPortfolioId],
+    queryFn: async () => {
+      if (liveSnapshotRunning.current) return undefined;
+      liveSnapshotRunning.current = true;
+      try {
+        return await window.cryptoControl.portfolio.getLiveSnapshot(selectedPortfolioId!);
+      } finally {
+        liveSnapshotRunning.current = false;
+      }
+    },
+    enabled: !!selectedPortfolioId && !!breakdown,
+    staleTime: 4_000,
     refetchInterval: PRICE_REFRESH_MS,
     refetchIntervalInBackground: true,
-    // Do not force a refetch on every mount — use cached data while revalidating
   });
 
   // Real reconstruction: historical qty (from transactionLegs) × historical
   // price (from priceHistory/candle cache) per asset, summed per timestamp.
+  // No refetch en background: la serie histórica es pesada y el último punto
+  // viene del liveSnapshot, no de una reconstrucción completa.
   const { data: historicalSeriesRes } = useQuery({
     queryKey: ["portfolio", "historical-series", period],
     queryFn: () => window.cryptoControl.portfolio.getHistoricalSeries({ period }),
-    staleTime: 15_000,
+    staleTime: CHART_SHORT_STALE_MS,
     refetchInterval: chartRefreshMs(period),
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
   });
 
   // Always 24h, for the "Variación 24h" metric.
   const { data: historicalSeries24hRes } = useQuery({
     queryKey: ["portfolio", "historical-series", "24h"],
     queryFn: () => window.cryptoControl.portfolio.getHistoricalSeries({ period: "24h" }),
-    staleTime: 15_000,
-    refetchInterval: PORTFOLIO_CHART_REFRESH_MS,
-    refetchIntervalInBackground: true,
+    staleTime: CHART_SHORT_STALE_MS,
+    refetchInterval: CHART_SHORT_STALE_MS,
+    refetchIntervalInBackground: false,
   });
 
   const { data: assetsRes } = useQuery({
@@ -222,11 +250,13 @@ export function Portfolio() {
         const result = await window.cryptoControl.coinbase.sync();
         if (!cancelled && result.ok) {
           // Selective invalidation: only what a Coinbase sync actually changes.
-          // Mercado prices/assets are unaffected by personal transaction import.
+          // Excluir historical-series: es demasiado pesado para invalidar en cada sync;
+          // se refresca por su propio intervalo (60-120 s).
           await queryClient.invalidateQueries({ queryKey: ["coinbase", "breakdown"] });
           await queryClient.invalidateQueries({ queryKey: ["coinbase", "portfolios"] });
           await queryClient.invalidateQueries({ queryKey: ["transactions"] });
-          await queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+          await queryClient.invalidateQueries({ queryKey: ["portfolio", "positions"] });
+          await queryClient.invalidateQueries({ queryKey: ["portfolio", "live-snapshot"] });
         }
       } finally {
         backgroundSyncRunning.current = false;
@@ -254,17 +284,38 @@ export function Portfolio() {
     () => (historicalSeries24hRes?.ok ? historicalSeries24hRes.data.points : []),
     [historicalSeries24hRes]
   );
+
+  const liveSnapshot = liveSnapshotRes && typeof liveSnapshotRes === "object" && "ok" in liveSnapshotRes
+    ? (liveSnapshotRes.ok ? (liveSnapshotRes as any).data : null)
+    : (liveSnapshotRes ?? null);
+
   const chartData = useMemo((): ChartPoint[] => {
     const reconstructed = toChartPoints(reconstructedSeries);
     if (reconstructed.length < 2) return [];
 
     // Only pin the live value for short periods (1h, 24h) where the series
-    // refreshes every 5s and the live point is genuinely contemporaneous.
+    // refreshes every 60s and the live point is genuinely contemporaneous.
     // For longer periods (1w, 1m, 1y, all) the last historical point may be
     // hours or days old: appending a live value from a different time creates
     // an artificial spike/drop at the right edge of the chart.
     if (period !== "1h" && period !== "24h") return reconstructed;
 
+    // Preferir liveSnapshot (más fresco, actualizado cada 5 s) sobre breakdown
+    const liveTotal = typeof liveSnapshot?.totalAssetValueEur === "number" && liveSnapshot.totalAssetValueEur > 0
+      ? liveSnapshot.totalAssetValueEur
+      : null;
+
+    if (liveTotal !== null) {
+      const nowSeconds = Math.floor(liveSnapshot.timestamp / 1000) as import("lightweight-charts").Time;
+      const last = reconstructed[reconstructed.length - 1];
+      if ((nowSeconds as number) > (last.time as number)) {
+        return [...reconstructed, { time: nowSeconds, value: liveTotal }];
+      }
+      // Actualizar último punto si el timestamp es prácticamente el mismo
+      return [...reconstructed.slice(0, -1), { time: last.time, value: liveTotal }];
+    }
+
+    // Fallback: usar breakdown si liveSnapshot no está disponible aún
     const liveBreakdown = breakdownRes?.ok && breakdownRes.data.state === "live" ? breakdownRes.data : null;
     if (liveBreakdown) {
       const liveValue = liveBreakdown.positions.reduce(
@@ -277,15 +328,15 @@ export function Portfolio() {
         0,
       );
       if (liveValue > 0) {
-        const nowSeconds = Math.floor(Date.now() / 1000) as import("lightweight-charts").Time;
+        const capturedSeconds = Math.floor(liveBreakdown.capturedAt / 1000) as import("lightweight-charts").Time;
         const last = reconstructed[reconstructed.length - 1];
-        if ((nowSeconds as number) > (last.time as number)) {
-          return [...reconstructed, { time: nowSeconds, value: liveValue }];
+        if ((capturedSeconds as number) > (last.time as number)) {
+          return [...reconstructed, { time: capturedSeconds, value: liveValue }];
         }
       }
     }
     return reconstructed;
-  }, [reconstructedSeries, breakdownRes, period]);
+  }, [reconstructedSeries, liveSnapshot, breakdownRes, period]);
 
   const localPositionMap = useMemo((): Record<string, number> => {
     const rawPositions = localPositionsRes?.ok ? (localPositionsRes.data as any)?.positions : null;
@@ -371,7 +422,6 @@ export function Portfolio() {
     );
   }
 
-  const breakdown = breakdownRes?.ok ? breakdownRes.data : null;
   const assets = assetsRes?.ok ? assetsRes.data : [];
 
   if (!breakdown?.balances) {
@@ -421,26 +471,37 @@ export function Portfolio() {
     }
   }
 
-  const totalInvested = totalInvestedComplete ? totalInvestedSum : null;
+  // Mostrar suma parcial incluso cuando no todos los activos tienen coste completo.
+  // Nunca bloquear toda la página por un activo con coste pendiente.
+  const totalInvested = totalInvestedSum > 0 ? totalInvestedSum : null;
+  const totalInvestedIsPartial = !totalInvestedComplete && totalInvestedSum > 0;
   const totalInvestedPendingLabel = pendingCostAssets.length > 0
     ? `Pendiente: ${pendingCostAssets.join(", ")}`
     : undefined;
 
-  // Crypto value (investment positions only) — used for P&L.
-  const cryptoTotal = positionsTotalBalance(positions);
+  // Valor cripto: preferir liveSnapshot (precios frescos cada 5 s) sobre breakdown
+  const snapshotCryptoTotal = typeof liveSnapshot?.cryptoValueEur === "number" && liveSnapshot.cryptoValueEur > 0
+    ? liveSnapshot.cryptoValueEur : null;
+  const snapshotEurcValue = typeof liveSnapshot?.eurcValueEur === "number"
+    ? liveSnapshot.eurcValueEur : eurcTotalFiat;
+  const cryptoTotal = snapshotCryptoTotal ?? positionsTotalBalance(positions);
 
   // Total patrimonial = cripto + EURC. Same definition used by live chart pin
   // and historical series. EUR fiat excluded per spec.
-  const totalBalance = cryptoTotal !== null || eurcTotalFiat > 0
-    ? (cryptoTotal ?? 0) + eurcTotalFiat
+  const totalBalance = cryptoTotal !== null || snapshotEurcValue > 0
+    ? (cryptoTotal ?? 0) + snapshotEurcValue
     : null;
 
   // P&L is crypto-only: EURC is a stablecoin reserve, not a speculative asset.
+  // Calculado incluso con coste parcial: mostramos lo que sabemos.
   const performance = totalInvested !== null && cryptoTotal !== null ? cryptoTotal - totalInvested : null;
-  const variationFromPositions = portfolio24hVariation(positions, eurcTotalFiat);
+  const performanceIsPartial = totalInvestedIsPartial;
+
+  const variationFromPositions = portfolio24hVariation(positions, snapshotEurcValue);
   const reconstructed24h = toChartPoints(series24h);
   const variationFromChart = chartVariation(reconstructed24h);
   const variation24h = variationFromPositions.value !== null ? variationFromPositions : variationFromChart;
+
   return (
     <section className="page-stack portfolio-page">
       <PageToolbar
@@ -457,10 +518,12 @@ export function Portfolio() {
       <PortfolioMetrics
         totalBalance={totalBalance}
         cryptoTotalEur={cryptoTotal}
-        eurcTotalEur={eurcTotalFiat > 0 ? eurcTotalFiat : null}
+        eurcTotalEur={snapshotEurcValue > 0 ? snapshotEurcValue : null}
         totalInvested={totalInvested}
+        totalInvestedIsPartial={totalInvestedIsPartial}
         totalInvestedPendingLabel={totalInvestedPendingLabel}
         performance={performance}
+        performanceIsPartial={performanceIsPartial}
         variation24h={variation24h.value}
         variation24hPercent={variation24h.percent}
         positionsCount={positions.length}

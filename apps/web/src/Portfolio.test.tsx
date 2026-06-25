@@ -37,6 +37,7 @@ beforeEach(() => {
       getFifoLots: () => ok([]),
       getHistoricalSeries: () => ok({ points: [], meta: { txCount: 0, pricePoints: 0, assetsTracked: [] } }),
       backfillCostBasis: async () => ({ ok: true as const, data: { legsChecked: 0, legsBackfilled: 0, legsStillPending: 0, byAsset: {} } }),
+      getLiveSnapshot: () => ok(null),
     },
     diagnostics: {
       getReport: async () => ({ ok: true as const, data: { accounts: 0, balances: 0, transactions: 0, conversions: 0, fees: 0, assets: 0, positions: 0, historicalPrices: 0, missingPrices: 0, missingCosts: 0, perAsset: [] } }),
@@ -370,8 +371,11 @@ describe("Cartera Coinbase", () => {
     await waitFor(() => {
       expect(screen.getAllByText("SEI").length).toBeGreaterThan(0);
     });
-    // Sin coste ni precio: debe mostrarse como "Pendiente", nunca ocultarse ni mostrar un 0 falso.
-    expect(screen.getAllByText(/^Pendiente$/i).length).toBeGreaterThan(0);
+    // Sin coste ni precio: debe mostrarse información de estado, nunca ocultarse ni mostrar un 0 falso.
+    // Con nuestra corrección, los campos muestran "Sin coste" o "Coste pendiente" en lugar de bloquear.
+    expect(
+      screen.queryAllByText(/Sin coste|Coste pendiente|Sin precio/i).length
+    ).toBeGreaterThan(0);
   });
 
   test("EURC no aparece como posición cripto en la Cartera", async () => {
@@ -554,10 +558,10 @@ describe("Cartera Coinbase", () => {
     await waitFor(() => {
       expect(screen.getByText("Beneficio / Pérdida")).toBeInTheDocument();
     });
-    // Without local cost data both P&L and "Total invertido" show "En cálculo"
-    expect(screen.getAllByText("En cálculo").length).toBeGreaterThanOrEqual(1);
-    // Ensure the P&L metric specifically shows "En cálculo" (not a EURC value)
+    // Sin coste: B/P y Total invertido muestran "Sin coste" (no bloquean con "En cálculo")
+    expect(screen.getAllByText("Sin coste").length).toBeGreaterThanOrEqual(1);
+    // El panel B/P muestra "Sin coste" porque no hay datos de coste local
     const pnlMetric = screen.getByText("Beneficio / Pérdida").closest(".portfolio-metric");
-    expect(pnlMetric?.textContent).toContain("En cálculo");
+    expect(pnlMetric?.textContent).toContain("Sin coste");
   });
 });

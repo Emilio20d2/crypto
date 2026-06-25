@@ -31,6 +31,7 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
       getFifoLots:         () => ipc("portfolio:get-fifo-lots"),
       getHistoricalSeries: (i?: unknown) => ipc("portfolio:get-historical-series", i),
       backfillCostBasis:   () => ipc("portfolio:backfillCostBasis"),
+      getLiveSnapshot:     (uuid: unknown) => ipc("portfolio:get-live-snapshot", uuid),
     },
     diagnostics: {
       getReport: () => ipc("diagnostics:getReport"),

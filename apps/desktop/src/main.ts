@@ -3454,6 +3454,46 @@ function setupIpcHandlers() {
     return await getPortfolioServiceInst().getPortfolioSnapshots(portfolioUuid);
   }));
 
+  ipcMain.handle("portfolio:get-live-snapshot", withResult(async (_, portfolioUuid: string) => {
+    const service = getPortfolioServiceInst();
+    const cached = await service.getCachedPortfolioBreakdownNoError(portfolioUuid, "EUR");
+    if (!cached || !cached.positions.length) return null;
+
+    const cryptoPositions = cached.positions.filter((p: any) => !p.isCash && p.asset !== "EURC");
+    const eurcPos = cached.positions.find((p: any) => p.asset === "EURC");
+    const eurcValue = typeof eurcPos?.totalBalanceFiat === "number" && Number.isFinite(eurcPos.totalBalanceFiat)
+      ? eurcPos.totalBalanceFiat : 0;
+
+    const priceResults = await Promise.all(
+      cryptoPositions.map(async (p: any) => {
+        const r = await marketService.getCurrentPrice(p.asset);
+        const qty = typeof p.totalBalanceCrypto === "number" && Number.isFinite(p.totalBalanceCrypto) ? p.totalBalanceCrypto : 0;
+        const currentValueEur = r.price !== null ? qty * r.price : null;
+        return {
+          assetId: p.asset as string,
+          quantity: qty,
+          currentPriceEur: r.price,
+          priceSource: r.provider,
+          priceStatus: r.state as "complete" | "fallback" | "cached" | "partial" | "unavailable",
+          currentValueEur,
+        };
+      })
+    );
+
+    const cryptoValueEur = priceResults.reduce((s: number, p: any) => s + (p.currentValueEur ?? 0), 0);
+
+    return {
+      timestamp: Date.now(),
+      fiat: "EUR" as const,
+      positions: priceResults,
+      cryptoValueEur,
+      eurcValueEur: eurcValue,
+      totalAssetValueEur: cryptoValueEur + eurcValue,
+      priceVersion: String(Date.now()),
+      portfolioVersion: String(cached.capturedAt ?? 0),
+    };
+  }));
+
   // ── contributionSchedule ────────────────────────────────────────────────────
   ipcMain.handle("contributionSchedule:list", withResult(async (_, input?: { cycleId?: string; status?: string }) => {
     const db = getDb();

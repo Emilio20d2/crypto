@@ -208,6 +208,23 @@ export interface CryptoControlAPI {
       legsStillPending: number;
       byAsset: Record<string, { checked: number; backfilled: number }>;
     }>>;
+    getLiveSnapshot(portfolioUuid: string): Promise<Result<{
+      timestamp: number;
+      fiat: "EUR";
+      positions: Array<{
+        assetId: string;
+        quantity: number;
+        currentPriceEur: number | null;
+        priceSource: string;
+        priceStatus: "live" | "cached" | "unavailable";
+        currentValueEur: number | null;
+      }>;
+      cryptoValueEur: number;
+      eurcValueEur: number;
+      totalAssetValueEur: number;
+      priceVersion: string;
+      portfolioVersion: string;
+    } | null>>;
   };
   diagnostics: {
     getReport(): Promise<Result<{

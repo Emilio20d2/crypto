@@ -98,8 +98,10 @@ export function PortfolioMetrics({
   cryptoTotalEur,
   eurcTotalEur,
   totalInvested,
+  totalInvestedIsPartial,
   totalInvestedPendingLabel,
   performance,
+  performanceIsPartial,
   variation24h,
   variation24hPercent,
   positionsCount,
@@ -108,8 +110,10 @@ export function PortfolioMetrics({
   cryptoTotalEur?: number | null;
   eurcTotalEur?: number | null;
   totalInvested?: number | null;
+  totalInvestedIsPartial?: boolean;
   totalInvestedPendingLabel?: string;
   performance?: number | null;
+  performanceIsPartial?: boolean;
   variation24h?: number | null;
   variation24hPercent?: number | null;
   positionsCount: number;
@@ -125,22 +129,37 @@ export function PortfolioMetrics({
     ? `Cripto ${formatMoneyCompact(cryptoTotalEur)} · EURC ${formatMoneyCompact(eurcTotalEur)}`
     : null;
 
+  const pnlSublabel = performanceIsPartial
+    ? "Coste parcial — ver tarjetas pendientes"
+    : "Sólo criptomonedas";
+
+  const investedSublabel = totalInvestedIsPartial
+    ? totalInvestedPendingLabel ?? "Coste parcial"
+    : (totalInvested == null ? totalInvestedPendingLabel : undefined);
+
   const secondaryMetrics = [
     {
       label: "Beneficio / Pérdida",
-      sublabel: "Sólo criptomonedas",
-      value: formatMoneyCompact(performance),
+      sublabel: pnlSublabel,
+      value: formatMoneyCompact(performance, performance === null ? "Sin coste" : "En cálculo"),
       tone: performance != null && performance < 0 ? "negative" : "positive",
       icon: TrendingUp,
     },
     {
       label: "Variación 24 h",
       sublabel: undefined as string | undefined,
-      value: formatPercentPoints(variation24hPercent, "En cálculo"),
+      value: formatPercentPoints(variation24hPercent, "Sin datos 24 h"),
       tone: variation24h != null && variation24h < 0 ? "negative" : "positive",
       icon: TrendingUp,
     },
-    { label: "Total invertido", sublabel: totalInvested == null ? totalInvestedPendingLabel : undefined, value: formatMoneyCompact(totalInvested), icon: Database },
+    {
+      label: "Total invertido",
+      sublabel: investedSublabel,
+      value: totalInvested != null
+        ? `${formatMoneyCompact(totalInvested)}${totalInvestedIsPartial ? " *" : ""}`
+        : "Sin coste",
+      icon: Database,
+    },
     {
       label: "Reserva EURC",
       sublabel: undefined as string | undefined,
@@ -343,16 +362,36 @@ function PositionCard({
       <span className="position-card-metrics">
         <span><small>Cantidad</small><strong>{formatCrypto(position.totalBalanceCrypto, "Pendiente")} {position.asset}</strong></span>
         <span>
-          <small>Precio actual <i className={currentPrice.state === "market" && portfolioState !== "cached" ? "price-source-live" : "price-source-partial"}>{currentPrice.state === "missing" ? "pendiente" : currentPrice.state === "partial" ? "parcial" : priceSourceLabel(position, portfolioState)}</i></small>
-          <strong>{formatMoneyPerCoin(currentPrice.price)}</strong>
+          <small>Precio actual <i className={currentPrice.state === "market" && portfolioState !== "cached" ? "price-source-live" : "price-source-partial"}>{currentPrice.state === "missing" ? "sin precio" : currentPrice.state === "partial" ? "calculado" : priceSourceLabel(position, portfolioState)}</i></small>
+          <strong>{formatMoneyPerCoin(currentPrice.price, currentPrice.state === "missing" ? "Sin precio disponible" : "Pendiente")}</strong>
         </span>
-        <span><small>Invertido</small><strong>{formatMoney(invested, "Coste pendiente de completar")}</strong></span>
-        <span><small>Beneficio/Pérdida</small><strong className={pnl !== null && pnl < 0 ? "text-negative" : "text-positive"}>{formatMoney(pnl, "Pendiente")}</strong></span>
-        <span><small>ROI</small><strong className={roi !== null && roi < 0 ? "text-negative" : "text-positive"}>{formatPercentPoints(roi)}</strong></span>
-        <span><small>Coste medio</small><strong>{formatMoneyPerCoin(averageCost, "Coste pendiente de completar")}</strong></span>
-        <span><small>Variación 24 h</small><strong className={change !== null && change < 0 ? "text-negative" : "text-positive"}>{formatPercentPoints(change)}</strong></span>
-        <span><small>Peso</small><strong>{weight === null ? "Pendiente" : `${weight.toLocaleString("es-ES", { maximumFractionDigits: 2 })}%`}</strong></span>
+        <span><small>Invertido</small><strong>{formatMoney(invested, "Coste pendiente")}</strong></span>
+        <span><small>Beneficio/Pérdida</small><strong className={pnl !== null && pnl < 0 ? "text-negative" : "text-positive"}>{formatMoney(pnl, invested === null ? "Sin coste" : "Pendiente")}</strong></span>
+        <span><small>ROI</small><strong className={roi !== null && roi < 0 ? "text-negative" : "text-positive"}>{formatPercentPoints(roi, invested === null ? "Sin coste" : "Pendiente")}</strong></span>
+        <span><small>Coste medio</small><strong>{formatMoneyPerCoin(averageCost, "Sin coste")}</strong></span>
+        <span><small>Variación 24 h</small><strong className={change !== null && change < 0 ? "text-negative" : "text-positive"}>{formatPercentPoints(change, "Sin datos 24 h")}</strong></span>
+        <span><small>Peso</small><strong>{weight === null ? "—" : `${weight.toLocaleString("es-ES", { maximumFractionDigits: 2 })}%`}</strong></span>
       </span>
+
+      {/* Diagnóstico cuando el precio viene de fuente secundaria o está ausente */}
+      {(currentPrice.state === "partial" || currentPrice.state === "missing" || (typeof position.market?.status === "string" && position.market.status.startsWith("fallback:"))) && (
+        <details className="position-card-diagnostic">
+          <summary>Detalle de fuente de datos</summary>
+          <dl>
+            <dt>Símbolo</dt><dd>{position.asset}</dd>
+            <dt>Precio Coinbase</dt><dd>{position.market?.status?.startsWith("fallback:") ? "No disponible" : formatMoneyPerCoin(position.market?.price, "Sin dato")}</dd>
+            <dt>Precio elegido</dt><dd>{formatMoneyPerCoin(currentPrice.price, "Sin precio")}</dd>
+            <dt>Fuente</dt><dd>{currentPrice.state === "missing" ? "ninguna" : currentPrice.state === "partial" ? "calculado (balance / fiat)" : position.market?.status?.replace("fallback:", "") || "coinbase"}</dd>
+            <dt>Variación 24 h</dt><dd>{formatPercentPoints(change, "Sin datos")}</dd>
+            <dt>Coste vigente</dt><dd>{formatMoney(invested, "Pendiente de operación")}</dd>
+            <dt>ROI</dt><dd>{formatPercentPoints(roi, invested === null ? "No calculable sin coste" : "Pendiente")}</dd>
+            {currentPrice.state === "missing" && <dt>Motivo</dt>}
+            {currentPrice.state === "missing" && <dd>Coinbase y fuentes secundarias sin precio. Verificar configuración.</dd>}
+            {currentPrice.state === "partial" && <dt>Motivo</dt>}
+            {currentPrice.state === "partial" && <dd>Precio calculado desde saldo en fiat / cripto; sin dato de mercado directo.</dd>}
+          </dl>
+        </details>
+      )}
 
       {(position.sparkline?.length ?? 0) > 0 && (
         <span className="position-card-spark">

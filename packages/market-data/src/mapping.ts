@@ -68,9 +68,9 @@ export const ASSET_MAP: Record<string, AssetMetadata> = {
     internalId: "SUI",
     symbol: "SUI",
     coinGeckoId: "sui",
-    coinbaseProductId: "SUI-EUR", // Check if coinbase supports SUI-EUR
+    coinbaseProductId: "SUI-EUR",
     quoteCurrency: "EUR",
-    supportedProviders: ["coingecko", "coinbase", "cryptocompare"]
+    supportedProviders: ["coingecko", "cryptocompare"]
   },
   "SEI": {
     internalId: "SEI",

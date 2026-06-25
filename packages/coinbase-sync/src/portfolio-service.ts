@@ -115,7 +115,7 @@ function computedFiatValue(amount: number | null, price: number | null): number 
 }
 
 const BALANCE_EPSILON = 1e-12;
-const MARKET_ENRICHMENT_TIMEOUT_MS = 3000;
+const MARKET_ENRICHMENT_TIMEOUT_MS = 8000;
 const SPARKLINE_24H_GRANULARITY = "FIFTEEN_MINUTE";
 
 function withTimeout<T>(promise: Promise<T>, ms: number, onTimeout: () => T): Promise<T> {
@@ -804,6 +804,12 @@ export class CoinbasePortfolioService {
       state: "cached",
       reason: errorReason
     }), quoteCurrency, false);
+  }
+
+  async getCachedPortfolioBreakdownNoError(portfolioUuid: string, currency: string): Promise<CoinbasePortfolioView | null> {
+    const p = this.db.select().from(schema.coinbasePortfolios).where(eq(schema.coinbasePortfolios.uuid, portfolioUuid)).get();
+    if (!p) return null;
+    return this.getCachedPortfolioBreakdown(portfolioUuid, currency, "cached");
   }
 
   private getCachedProduct(productId: string) {

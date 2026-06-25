@@ -39,6 +39,7 @@ const cryptoControl = {
     getFifoLots:          () => ipcRenderer.invoke("portfolio:get-fifo-lots"),
     getHistoricalSeries:  (input?: { period?: string }) => ipcRenderer.invoke("portfolio:get-historical-series", input),
     backfillCostBasis:    () => ipcRenderer.invoke("portfolio:backfillCostBasis"),
+    getLiveSnapshot:      (portfolioUuid: string) => ipcRenderer.invoke("portfolio:get-live-snapshot", portfolioUuid),
   },
   diagnostics: {
     getReport: () => ipcRenderer.invoke("diagnostics:getReport"),
