@@ -12,7 +12,7 @@ export const KNOWN_FORECASTS: ForecastSource[] = [
   // ─── Bitcoin ───────────────────────────────────────────────────────────────
 
   {
-    id: "ark-btc-2030",
+    id: "ark-btc-2030-bull",
     publisher: "ARK Invest",
     sourceType: "institution",
     assetId: "bitcoin",
@@ -23,6 +23,19 @@ export const KNOWN_FORECASTS: ForecastSource[] = [
     publishedAt: D("2024-02-01"),
     expiresAt:   D("2031-01-01"),
     notes: "ARK Big Ideas 2024 — bull case BTC target ~$1.5M by 2030",
+  },
+  {
+    id: "ark-btc-2030-base",
+    publisher: "ARK Invest",
+    sourceType: "institution",
+    assetId: "bitcoin",
+    direction: "bullish",
+    targetPriceUsd: 258_500,
+    targetYear: 2030,
+    confidence: 0.7,
+    publishedAt: D("2024-02-01"),
+    expiresAt:   D("2031-01-01"),
+    notes: "ARK Big Ideas 2024 — base case BTC target ~$258.5k by 2030",
   },
   {
     id: "stanchart-btc-2025",

@@ -40,86 +40,107 @@ interface TradeAlertsResult {
   checkedAt: number;
 }
 
+const ASSET_NAMES: Record<string, string> = {
+  BTC: "Bitcoin", ETH: "Ethereum", SOL: "Solana", SUI: "Sui",
+  ADA: "Cardano", DOT: "Polkadot", AVAX: "Avalanche", MATIC: "Polygon",
+  LINK: "Chainlink", UNI: "Uniswap", ATOM: "Cosmos", NEAR: "NEAR",
+  EURC: "Euro Coin", USDC: "USD Coin", USDT: "Tether",
+};
+
 const cc = (window as any).cryptoControl;
 
 function fmtEur(n: number) {
   return n.toLocaleString("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 2 });
 }
 function fmtPct(n: number, sign = true) {
-  return `${sign && n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
+  return `${sign && n >= 0 ? "+" : ""}${n.toFixed(1)} %`;
 }
 function fmtUnits(n: number, assetId: string) {
   const d = ["BTC", "ETH"].includes(assetId) ? 6 : 4;
   return `${n.toLocaleString("es-ES", { minimumFractionDigits: d, maximumFractionDigits: d })} ${assetId}`;
 }
 
-function SellAlertRow({ a }: { a: SellAlert }) {
+function SellAlertCard({ a }: { a: SellAlert }) {
   return (
-    <div className="trade-alert-row">
-      <div className="trade-alert-asset">
-        <CryptoLogo symbol={a.assetId} size={32} />
-        <div className="trade-alert-asset-info">
-          <span className="trade-alert-symbol">{a.assetId}</span>
-          <span className="trade-alert-tier-label badge badge-success">+{a.tier}%</span>
+    <article className="trade-alert-card">
+      <div className="trade-alert-card-head">
+        <CryptoLogo symbol={a.assetId} size={36} />
+        <div className="trade-alert-card-identity">
+          <span className="trade-alert-card-name">{ASSET_NAMES[a.assetId] ?? a.assetId}</span>
+          <span className="trade-alert-card-sym">{a.assetId}</span>
+        </div>
+        <span className="badge badge-success trade-alert-tier-badge">+{a.tier}%</span>
+      </div>
+
+      <div className="trade-alert-card-data">
+        <div className="trade-alert-cell">
+          <span className="trade-alert-cell-label">Precio actual</span>
+          <span className="trade-alert-cell-value">{fmtEur(a.currentPriceEur)}</span>
+        </div>
+        <div className="trade-alert-cell">
+          <span className="trade-alert-cell-label">Coste medio</span>
+          <span className="trade-alert-cell-value">{fmtEur(a.avgCostEur)}</span>
+        </div>
+        <div className="trade-alert-cell trade-alert-cell--span">
+          <span className="trade-alert-cell-label">Ganancia desde coste</span>
+          <span className="trade-alert-cell-value trade-alert-positive">{fmtPct(a.gainPct)}</span>
         </div>
       </div>
-      <dl className="trade-alert-details">
-        <div>
-          <dt>Precio actual</dt>
-          <dd>{fmtEur(a.currentPriceEur)}</dd>
+
+      <div className="trade-alert-action-box">
+        <div className="trade-alert-action-item">
+          <span className="trade-alert-action-label">Vender</span>
+          <strong className="trade-alert-action-amount">{fmtUnits(a.suggestedQtyUnits, a.assetId)}</strong>
         </div>
-        <div>
-          <dt>Coste medio</dt>
-          <dd>{fmtEur(a.avgCostEur)}</dd>
+        <div className="trade-alert-action-sep" aria-hidden="true" />
+        <div className="trade-alert-action-item">
+          <span className="trade-alert-action-label">Recibirías aprox.</span>
+          <span className="trade-alert-action-units">{fmtEur(a.suggestedAmountEur)}</span>
         </div>
-        <div>
-          <dt>Ganancia</dt>
-          <dd className="trade-alert-positive">{fmtPct(a.gainPct)}</dd>
-        </div>
-        <div className="trade-alert-action-cell">
-          <dt>Vender</dt>
-          <dd>
-            <span className="trade-alert-action">{fmtUnits(a.suggestedQtyUnits, a.assetId)}</span>
-            <span className="trade-alert-action-sub">≈ {fmtEur(a.suggestedAmountEur)}</span>
-          </dd>
-        </div>
-      </dl>
-    </div>
+      </div>
+    </article>
   );
 }
 
-function RebuyAlertRow({ a }: { a: RebuyAlert }) {
+function RebuyAlertCard({ a }: { a: RebuyAlert }) {
   return (
-    <div className="trade-alert-row">
-      <div className="trade-alert-asset">
-        <CryptoLogo symbol={a.assetId} size={32} />
-        <div className="trade-alert-asset-info">
-          <span className="trade-alert-symbol">{a.assetId}</span>
-          <span className="trade-alert-tier-label badge badge-warning">-{a.tier}%</span>
+    <article className="trade-alert-card">
+      <div className="trade-alert-card-head">
+        <CryptoLogo symbol={a.assetId} size={36} />
+        <div className="trade-alert-card-identity">
+          <span className="trade-alert-card-name">{ASSET_NAMES[a.assetId] ?? a.assetId}</span>
+          <span className="trade-alert-card-sym">{a.assetId}</span>
+        </div>
+        <span className="badge badge-warning trade-alert-tier-badge">−{a.tier}%</span>
+      </div>
+
+      <div className="trade-alert-card-data">
+        <div className="trade-alert-cell">
+          <span className="trade-alert-cell-label">Precio actual</span>
+          <span className="trade-alert-cell-value">{fmtEur(a.currentPriceEur)}</span>
+        </div>
+        <div className="trade-alert-cell">
+          <span className="trade-alert-cell-label">Precio de última venta</span>
+          <span className="trade-alert-cell-value">{fmtEur(a.lastSalePriceEur)}</span>
+        </div>
+        <div className="trade-alert-cell trade-alert-cell--span">
+          <span className="trade-alert-cell-label">Caída acumulada desde la venta</span>
+          <span className="trade-alert-cell-value trade-alert-negative">{fmtPct(-a.drawdownPct, false)}↓</span>
         </div>
       </div>
-      <dl className="trade-alert-details">
-        <div>
-          <dt>Precio actual</dt>
-          <dd>{fmtEur(a.currentPriceEur)}</dd>
+
+      <div className="trade-alert-action-box">
+        <div className="trade-alert-action-item">
+          <span className="trade-alert-action-label">Recomprar con</span>
+          <strong className="trade-alert-action-amount">{fmtEur(a.eurcToUseEur)} EURC</strong>
         </div>
-        <div>
-          <dt>Última venta</dt>
-          <dd>{fmtEur(a.lastSalePriceEur)}</dd>
+        <div className="trade-alert-action-sep" aria-hidden="true" />
+        <div className="trade-alert-action-item">
+          <span className="trade-alert-action-label">Recibirías aprox.</span>
+          <span className="trade-alert-action-units">{fmtUnits(a.suggestedQtyUnits, a.assetId)}</span>
         </div>
-        <div>
-          <dt>Caída</dt>
-          <dd className="trade-alert-negative">{fmtPct(-a.drawdownPct)}</dd>
-        </div>
-        <div className="trade-alert-action-cell">
-          <dt>Recomprar con</dt>
-          <dd>
-            <span className="trade-alert-action">{fmtEur(a.eurcToUseEur)} EURC</span>
-            <span className="trade-alert-action-sub">≈ {fmtUnits(a.suggestedQtyUnits, a.assetId)}</span>
-          </dd>
-        </div>
-      </dl>
-    </div>
+      </div>
+    </article>
   );
 }
 
@@ -138,7 +159,6 @@ export function TradeAlerts() {
     if (cc?.trade?.onNewAlerts) {
       unsubRef.current = cc.trade.onNewAlerts((alerts: unknown) => {
         setData(alerts as TradeAlertsResult);
-        // New batch clears the read state
         setReadAt(null);
       });
     }
@@ -157,7 +177,6 @@ export function TradeAlerts() {
     }
   }
 
-  // Suscripción siempre activa; tarjeta solo visible en la página de Cartera
   if (!onCartera || sellCount + rebuyCount === 0 || isRead) return null;
 
   const checkedTime = data?.checkedAt
@@ -181,40 +200,47 @@ export function TradeAlerts() {
           <CheckCircle2 size={15} />
         </Button>
       </CardHeader>
+
       <CardContent>
         {sellCount > 0 && (
           <div className="trade-alerts-section">
             <div className="trade-alerts-section-heading">
-              <TrendingUp size={14} className="trade-alert-icon-sell" />
+              <TrendingUp size={13} className="trade-alert-icon-sell" />
               Ventas parciales recomendadas
             </div>
-            <div className="trade-alerts-rows">
+            <div className="trade-alerts-grid">
               {data!.sellAlerts.map(a => (
-                <SellAlertRow key={`sell-${a.assetId}-${a.tier}`} a={a} />
+                <SellAlertCard key={`sell-${a.assetId}-${a.tier}`} a={a} />
               ))}
             </div>
-            {data!.eurcAvailableEur > 0 && (
-              <p className="trade-alerts-footer-note">
-                EURC disponible: {fmtEur(data!.eurcAvailableEur)}
-              </p>
-            )}
           </div>
         )}
 
         {rebuyCount > 0 && (
-          <div className={`trade-alerts-section${sellCount > 0 ? " trade-alerts-section--border" : ""}`}>
+          <div className={`trade-alerts-section${sellCount > 0 ? " trade-alerts-section--sep" : ""}`}>
             <div className="trade-alerts-section-heading">
-              <TrendingDown size={14} className="trade-alert-icon-rebuy" />
+              <TrendingDown size={13} className="trade-alert-icon-rebuy" />
               Recompras recomendadas
             </div>
-            <div className="trade-alerts-rows">
+            <div className="trade-alerts-grid">
               {data!.rebuyAlerts.map(a => (
-                <RebuyAlertRow key={`rebuy-${a.assetId}-${a.tier}`} a={a} />
+                <RebuyAlertCard key={`rebuy-${a.assetId}-${a.tier}`} a={a} />
               ))}
             </div>
-            <p className="trade-alerts-footer-note">
-              EURC disponible: {fmtEur(data!.eurcAvailableEur)} · Neto tras retención fiscal
-            </p>
+
+            <div className="trade-alerts-eurc-summary">
+              <span className="trade-alerts-eurc-label">EURC disponible</span>
+              <span className="trade-alerts-eurc-amount">{fmtEur(data!.eurcAvailableEur)}</span>
+              <span className="trade-alerts-eurc-note">Neto tras reserva fiscal</span>
+            </div>
+          </div>
+        )}
+
+        {sellCount > 0 && rebuyCount === 0 && data!.eurcAvailableEur > 0 && (
+          <div className="trade-alerts-eurc-summary trade-alerts-eurc-summary--mt">
+            <span className="trade-alerts-eurc-label">EURC disponible</span>
+            <span className="trade-alerts-eurc-amount">{fmtEur(data!.eurcAvailableEur)}</span>
+            <span className="trade-alerts-eurc-note">Neto tras reserva fiscal</span>
           </div>
         )}
       </CardContent>

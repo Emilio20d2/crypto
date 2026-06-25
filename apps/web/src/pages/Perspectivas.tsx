@@ -60,6 +60,7 @@ interface AnnualSnapshot {
   annualReturnPct: number | null;
   positions: Record<string, AnnualAssetPosition>;
   events: SimEvent[];
+  forecastCoverage: "covered" | "uncovered";
 }
 
 interface ScenarioSummary {
@@ -90,10 +91,11 @@ interface AssetPriceInfo {
   currentPriceEur: number | null;
   horizonPriceEur: number | null;
   priceMultiple: number | null;
-  modelType: "internal_cycle_model" | "analyst_consensus_adjusted";
-  consensusScore: number | null;
-  consensusSourceCount: number;
-  peakMultAdjustment: number | null;
+  modelType: "external_direct" | "external_interpolated" | "no_coverage";
+  externalSourceCount: number;
+  directCoverageYears: number[];
+  interpolatedCoverageYears: number[];
+  lastCoveredYear: number | null;
   circulatingSupplyM: number | null;
   impliedMarketCapBnEur: number | null;
   impliedMarketCapWarning: boolean;
@@ -250,10 +252,13 @@ function AnnualTable({ snapshots }: { snapshots: AnnualSnapshot[] }) {
           </thead>
           <tbody>
             {snapshots.map(s => (
-              <tr key={s.year} className={s.scope === "extrapol" ? "opacity-70" : ""}>
+              <tr key={s.year} className={`${s.scope === "extrapol" ? "opacity-70" : ""} ${s.forecastCoverage === "uncovered" ? "persp-row-no-coverage" : ""}`}>
                 <td>
                   <span style={{ fontWeight: 600 }}>{s.year}</span>
                   {s.scope === "extrapol" && <span className="ml-1 text-xs text-muted-foreground">*</span>}
+                  {s.forecastCoverage === "uncovered" && (
+                    <span className="ml-1 text-xs text-muted-foreground" title="Sin cobertura de previsiones externas">⚠</span>
+                  )}
                 </td>
                 <td className="num">{fmt(s.openingWealthEur)}</td>
                 <td className="num">{fmt(s.contributionsEur)}</td>
@@ -288,6 +293,7 @@ function AnnualTable({ snapshots }: { snapshots: AnnualSnapshot[] }) {
       <p className="text-xs text-muted-foreground">
         ⓘ Ventas y Recompras son movimientos internos (cripto ↔ EURC). No se suman ni restan al patrimonio — son informativas.
         {snapshots.some(s => s.scope === "extrapol") && " · * Años extrapolados fuera del plan explícito."}
+        {snapshots.some(s => s.forecastCoverage === "uncovered") && " · ⚠ Años sin previsiones externas verificadas — valores estimados sin respaldo institucional."}
       </p>
     </div>
   );
@@ -589,7 +595,7 @@ function AnalystForecastSection({ years, activeAssets }: { years: number[]; acti
 
         {years.filter(y => !coveredYears.includes(y)).length > 0 && (
           <p className="text-xs text-muted-foreground border-t pt-2 mt-2">
-            Años sin cobertura externa: {years.filter(y => !coveredYears.includes(y)).join(", ")}. No se muestran proyecciones para estos años — solo el modelo interno de ciclos.
+            Años sin cobertura externa: {years.filter(y => !coveredYears.includes(y)).join(", ")}. La simulación para estos años se muestra como proyección sin respaldo de previsiones institucionales.
           </p>
         )}
       </CardContent>

@@ -9,6 +9,9 @@
     "build": "tsc",
     "test": "vitest run"
   },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
   "devDependencies": {
     "electron-builder": "^24.13.3",
     "vitest": "^4.1.8"
