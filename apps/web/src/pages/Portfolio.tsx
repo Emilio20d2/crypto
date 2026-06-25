@@ -153,7 +153,6 @@ export function Portfolio() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const backgroundSyncRunning = useRef(false);
-  const liveSnapshotRunning = useRef(false);
   const prevSnapshotVersionRef = useRef<string | null>(null);
   const [manualPortfolioId, setManualPortfolioId] = useState<string | null>(null);
   const [period, setPeriod] = useState<Period>("24h");
@@ -191,21 +190,14 @@ export function Portfolio() {
   const breakdown = breakdownRes?.ok ? breakdownRes.data : null;
 
   // Snapshot ligero de precios: solo precio + valor calculado. Cada 5 s.
-  // Solo activo cuando ya tenemos el breakdown base (necesitamos las cantidades).
-  // Guard de solapamiento: si la petición anterior sigue activa, se descarta.
+  // El handler en main.ts ya tiene su propio guard de solapamiento (devuelve
+  // lastLiveSnapshotData si hay una petición en curso). No usar guard en el UI
+  // porque devolver undefined en React Query v5 borra el dato cacheado.
   const { data: liveSnapshotRes } = useQuery({
     queryKey: ["portfolio", "live-snapshot", selectedPortfolioId],
-    queryFn: async () => {
-      if (liveSnapshotRunning.current) return undefined;
-      liveSnapshotRunning.current = true;
-      try {
-        return await window.cryptoControl.portfolio.getLiveSnapshot(selectedPortfolioId!);
-      } finally {
-        liveSnapshotRunning.current = false;
-      }
-    },
+    queryFn: () => window.cryptoControl.portfolio.getLiveSnapshot(selectedPortfolioId!),
     enabled: !!selectedPortfolioId,
-    staleTime: 4_000,
+    staleTime: 0,
     refetchInterval: LIVE_COINBASE_REFRESH_MS,
     refetchIntervalInBackground: true,
   });
