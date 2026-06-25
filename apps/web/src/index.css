@@ -4107,7 +4107,8 @@ dd {
 
   .responsive-table {
     max-width: 100%;
-    overflow-x: visible;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
 }
 
@@ -5395,6 +5396,76 @@ dd {
   letter-spacing: 0.02em;
 }
 
+.persp-controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px 32px;
+  align-items: flex-start;
+}
+
+.persp-controls-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.persp-controls-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.persp-year-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.persp-year-nav-btn {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+  padding: 0;
+}
+
+.persp-year-nav-btn:hover:not(:disabled) {
+  background: var(--bg-row-hover);
+  border-color: var(--color-primary);
+  color: var(--text-primary);
+}
+
+.persp-year-nav-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.persp-year-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.persp-year-nav-display {
+  font-size: 24px;
+  font-weight: 750;
+  color: var(--text-primary);
+  letter-spacing: -0.03em;
+  min-width: 4.5ch;
+  text-align: center;
+}
+
 .persp-controls-hint {
   font-size: 12px;
   color: var(--text-muted);
@@ -5708,7 +5779,7 @@ dd {
   font-size: 14px;
   font-weight: 700;
   color: var(--text-primary);
-  word-break: break-all;
+  word-break: normal;
   overflow-wrap: anywhere;
 }
 
@@ -5768,6 +5839,14 @@ dd {
 }
 
 @media (max-width: 640px) {
+  .persp-controls-row {
+    gap: 16px 20px;
+  }
+
+  .persp-year-nav-display {
+    font-size: 20px;
+  }
+
   .persp-page {
     padding: 12px;
     gap: 14px;
@@ -5813,6 +5892,33 @@ dd {
 
   .persp-annual-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 360px) {
+  .persp-hero-metric span {
+    white-space: normal;
+  }
+
+  .persp-group-row {
+    flex-wrap: wrap;
+  }
+
+  .persp-group-row strong {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    flex-shrink: 1;
+    text-align: right;
+  }
+
+  .persp-scenario-btn {
+    padding: 0 8px;
+    font-size: 11px;
+    height: 30px;
+  }
+
+  .persp-controls {
+    padding: 12px 14px;
   }
 }
 
@@ -6082,4 +6188,83 @@ dd {
 }
 
 /* ─── End Trade Alerts ─── */
+
+/* ─── Utility classes (used in component JSX without Tailwind) ───────────── */
+
+.flex          { display: flex; }
+.inline-flex   { display: inline-flex; }
+.flex-col      { flex-direction: column; }
+.flex-wrap     { flex-wrap: wrap; }
+.flex-1        { flex: 1 1 0%; min-width: 0; }
+.items-center  { align-items: center; }
+.items-start   { align-items: flex-start; }
+.justify-between { justify-content: space-between; }
+.justify-end   { justify-content: flex-end; }
+.shrink-0      { flex-shrink: 0; }
+.ml-auto       { margin-left: auto; }
+.ml-1          { margin-left: 4px; }
+.ml-2          { margin-left: 8px; }
+.mt-1\.5       { margin-top: 6px; }
+.mt-2          { margin-top: 8px; }
+.mt-4          { margin-top: 16px; }
+.gap-1         { gap: 4px; }
+.gap-1\.5      { gap: 6px; }
+.gap-2         { gap: 8px; }
+.gap-3         { gap: 12px; }
+.gap-4         { gap: 16px; }
+.p-4           { padding: 16px; }
+.px-2          { padding-left: 8px; padding-right: 8px; }
+.py-1          { padding-top: 4px; padding-bottom: 4px; }
+.space-y-px > * + * { margin-top: 1px; }
+.space-y-1  > * + * { margin-top: 4px; }
+.space-y-2  > * + * { margin-top: 8px; }
+.space-y-4  > * + * { margin-top: 16px; }
+.max-h-40      { max-height: 160px; }
+.w-full        { width: 100%; }
+.w-16          { width: 64px; }
+.overflow-y-auto  { overflow-y: auto; }
+.overflow-x-auto  { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.truncate      { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.text-xs       { font-size: 12px; line-height: 1.5; }
+.text-sm       { font-size: 13px; line-height: 1.5; }
+.font-medium   { font-weight: 500; }
+.font-semibold { font-weight: 600; }
+.font-mono     { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.text-muted-foreground { color: var(--text-muted); }
+.text-foreground       { color: var(--text-primary); }
+.text-foreground\/75   { color: rgba(15, 23, 42, 0.75); }
+.hover\:text-foreground:hover { color: var(--text-primary); }
+.transition-colors     { transition: color 0.15s ease; }
+.border-b      { border-bottom: 1px solid var(--border-color); }
+.text-gain     { color: var(--color-success-text); }
+.text-loss     { color: var(--color-danger); }
+.opacity-70    { opacity: 0.7; }
+.select-none   { user-select: none; }
+
+/* ─── 320px safety net: very small screens ─────────────────────────────── */
+
+@media (max-width: 320px) {
+  .app-main {
+    padding: 10px 10px 16px;
+  }
+
+  .page-toolbar h1 {
+    font-size: 20px;
+  }
+
+  .ui-card-content {
+    padding: 12px;
+  }
+
+  .responsive-table {
+    font-size: 12px;
+  }
+
+  .responsive-table th,
+  .responsive-table td {
+    padding: 6px 8px;
+  }
+}
+
+/* ─── End Utility classes ─── */
 

@@ -35,6 +35,10 @@ const DEFAULT_REBUY_THRESHOLDS: { drawdownPct: number; eurcPct: number; label: s
   { drawdownPct: 15, eurcPct: 0.20, label: "Caída ≥ −15%" },
 ];
 
+// Importe mínimo para que una recompra sea operativamente útil.
+// Por debajo de este umbral no se genera señal aunque se cumpla la condición de caída.
+const MINIMUM_REBUY_EUR = 25;
+
 function makeSellSignal(
   assetId: string,
   ruleId: string,
@@ -227,8 +231,11 @@ export function evaluateSignals(input: SignalEngineInput): SignalEngineResult {
   // ── Señales de recompra: tiers configurados ───────────────────────────────
   const hasConfiguredTiers = rebuyTiers.some(r => r.status === "activa");
   const availableEurc = Math.max(0, treasury.freeRebuyLiquidity);
+  // Recompra solo permitida cuando existen ventas parciales reales ejecutadas.
+  // Sin venta real previa no hay EURC procedente de beneficios disponible para recomprar.
+  const hasAnyExecutedSale = Object.keys(lastSalePriceByAsset).length > 0;
 
-  if (hasConfiguredTiers) {
+  if (hasConfiguredTiers && hasAnyExecutedSale) {
     let remainingEurc = availableEurc;
     const sortedTiers = rebuyTiers
       .slice()
@@ -262,6 +269,8 @@ export function evaluateSignals(input: SignalEngineInput): SignalEngineResult {
       if (!evaluation.isTriggered || !evaluation.preview) continue;
 
       const p = evaluation.preview;
+      if (p.proposedAmountEur < MINIMUM_REBUY_EUR) continue;
+
       signals.push(makeRebuySignal(
         tier.assetId,
         tier.id,
@@ -279,7 +288,7 @@ export function evaluateSignals(input: SignalEngineInput): SignalEngineResult {
       ));
       remainingEurc = p.eurcRemainingAfterEur;
     }
-  } else if (availableEurc > 0) {
+  } else if (availableEurc >= MINIMUM_REBUY_EUR && hasAnyExecutedSale) {
     // Fallback: escalones automáticos cuando no hay tiers configurados
     for (const pos of positions) {
       const price = pos.currentPriceEur;

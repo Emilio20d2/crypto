@@ -3455,42 +3455,111 @@ function setupIpcHandlers() {
   }));
 
   ipcMain.handle("portfolio:get-live-snapshot", withResult(async (_, portfolioUuid: string) => {
-    const service = getPortfolioServiceInst();
-    const cached = await service.getCachedPortfolioBreakdownNoError(portfolioUuid, "EUR");
-    if (!cached || !cached.positions.length) return null;
+    const requestedAt = Date.now();
 
-    const cryptoPositions = cached.positions.filter((p: any) => !p.isCash && p.asset !== "EURC");
-    const eurcPos = cached.positions.find((p: any) => p.asset === "EURC");
-    const eurcValue = typeof eurcPos?.totalBalanceFiat === "number" && Number.isFinite(eurcPos.totalBalanceFiat)
-      ? eurcPos.totalBalanceFiat : 0;
+    // Attempt to get FRESH balances from Coinbase accounts API (lightweight call).
+    // Falls back to cached breakdown if credentials are missing or the call times out.
+    type RawAccount = { currency: string; available: number; hold: number };
+    let rawAccounts: RawAccount[] = [];
+    let usingFallback = false;
+    let fallbackReason: string | null = null;
 
+    try {
+      const creds = credsMgr.getCredentials();
+      if (!creds) throw new Error("No credentials");
+      const client = new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem);
+      const accountsRes = await Promise.race([
+        client.getAccounts(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Accounts API timeout (4s)")), 4000)
+        ),
+      ]);
+      rawAccounts = (accountsRes.accounts ?? [])
+        .map((a: any) => ({
+          currency: (a.currency ?? "") as string,
+          available: parseFloat(a.available_balance?.value ?? "0") || 0,
+          hold: parseFloat(a.hold?.value ?? "0") || 0,
+        }))
+        .filter((a: RawAccount) => a.currency && a.available + a.hold > 1e-10);
+    } catch (err) {
+      usingFallback = true;
+      fallbackReason = err instanceof Error ? err.message : String(err);
+      // Fall back to the cached portfolio breakdown (from last 30-s refresh)
+      const service = getPortfolioServiceInst();
+      const cached = await service.getCachedPortfolioBreakdownNoError(portfolioUuid, "EUR");
+      if (!cached || !cached.positions.length) return null;
+      rawAccounts = (cached.positions as any[]).map((p: any) => ({
+        currency: p.asset as string,
+        available: typeof p.totalBalanceCrypto === "number" ? p.totalBalanceCrypto : 0,
+        hold: 0,
+      })).filter((a: RawAccount) => a.currency && a.available > 1e-10);
+    }
+
+    const eurAccount  = rawAccounts.find(a => a.currency === "EUR");
+    const eurcAccount = rawAccounts.find(a => a.currency === "EURC");
+    const cryptoAccounts = rawAccounts.filter(a => a.currency !== "EUR" && a.currency !== "EURC");
+
+    const eurBalance  = eurAccount  ? eurAccount.available  + eurAccount.hold  : 0;
+    const eurcBalance = eurcAccount ? eurcAccount.available + eurcAccount.hold : 0;
+
+    // Fetch current prices in parallel (MarketService caches internally for ~5 s)
     const priceResults = await Promise.all(
-      cryptoPositions.map(async (p: any) => {
-        const r = await marketService.getCurrentPrice(p.asset);
-        const qty = typeof p.totalBalanceCrypto === "number" && Number.isFinite(p.totalBalanceCrypto) ? p.totalBalanceCrypto : 0;
+      cryptoAccounts.map(async (a: RawAccount) => {
+        const r = await marketService.getCurrentPrice(a.currency);
+        const qty = a.available + a.hold;
         const currentValueEur = r.price !== null ? qty * r.price : null;
         return {
-          assetId: p.asset as string,
+          assetId: a.currency,
           quantity: qty,
-          currentPriceEur: r.price,
-          priceSource: r.provider,
+          availableBalance: a.available,
+          holdBalance: a.hold,
+          currentPriceEur: r.price as number | null,
+          priceSource: r.provider as string,
           priceStatus: r.state as "complete" | "fallback" | "cached" | "partial" | "unavailable",
           currentValueEur,
         };
       })
     );
 
-    const cryptoValueEur = priceResults.reduce((s: number, p: any) => s + (p.currentValueEur ?? 0), 0);
+    const cryptoValueEur = priceResults.reduce((s, p) => s + (p.currentValueEur ?? 0), 0);
+    const receivedAt = Date.now();
+
+    // Balance version: stable hash of (currency, balance) pairs for change detection
+    const snapshotVersion = rawAccounts
+      .map(a => `${a.currency}:${(a.available + a.hold).toFixed(8)}`)
+      .sort()
+      .join("|");
+
+    const warnings: string[] = [];
+    if (usingFallback && fallbackReason) warnings.push(`Balances from cache: ${fallbackReason}`);
+    const missingPrices = priceResults.filter(p => p.currentValueEur === null).map(p => p.assetId);
+    if (missingPrices.length) warnings.push(`Missing prices: ${missingPrices.join(", ")}`);
 
     return {
-      timestamp: Date.now(),
-      fiat: "EUR" as const,
+      requestedAt,
+      receivedAt,
+      snapshotVersion,
+      usingFallback,
+      accounts: rawAccounts.map(a => ({
+        assetId: a.currency,
+        availableBalance: a.available,
+        holdBalance: a.hold,
+        totalBalance: a.available + a.hold,
+      })),
       positions: priceResults,
+      eurBalance,
+      eurcBalance,
+      eurcValueEur: eurcBalance,
       cryptoValueEur,
-      eurcValueEur: eurcValue,
-      totalAssetValueEur: cryptoValueEur + eurcValue,
-      priceVersion: String(Date.now()),
-      portfolioVersion: String(cached.capturedAt ?? 0),
+      totalAssetValueEur: cryptoValueEur + eurcBalance + eurBalance,
+      isComplete: missingPrices.length === 0,
+      missingPrices,
+      warnings,
+      // Legacy fields for backwards compat with existing consumers
+      timestamp: receivedAt,
+      fiat: "EUR" as const,
+      priceVersion: String(receivedAt),
+      portfolioVersion: snapshotVersion,
     };
   }));
 
@@ -4564,13 +4633,10 @@ function setupIpcHandlers() {
   // --- PERSPECTIVAS v2: motor de simulación mensual por activo (nuevo desde cero) ---
 
   ipcMain.handle("persp2:getSimulation", withResult(async (_, input?: {
-    horizonYears?: number;
     policy?: "plan_base" | "full_strategy";
   }) => {
     const { runPerspectivesSimulation, DEFAULT_SPANISH_TAX_BANDS } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
     const now = Date.now();
-    const horizonYears = Math.min(Math.max(input?.horizonYears ?? 10, 1), 30);
-    const horizonDate = now + horizonYears * 365.25 * 24 * 3600 * 1000;
 
     // Read active plan + cycles
     const planRows = db.select().from(schema.investmentPlans)
@@ -4585,6 +4651,19 @@ function setupIpcHandlers() {
       .orderBy(asc(schema.investmentCycles.startDate), asc(schema.investmentCycles.priority))
       .all()
       .filter(c => c.status === "active" || c.status === "planned");
+
+    // Derive simulation horizon from the latest cycle end date in the plan.
+    // This ensures Perspectivas always covers the full plan duration automatically.
+    const maxCycleEndMs = cycleRows.reduce((max, c) => (c.endDate && c.endDate > max ? c.endDate : max), 0);
+    let horizonDate: number;
+    if (maxCycleEndMs > now) {
+      const endYear = new Date(maxCycleEndMs).getFullYear();
+      horizonDate = new Date(endYear, 11, 31, 23, 59, 59, 999).getTime();
+    } else {
+      const d = new Date(now);
+      d.setFullYear(d.getFullYear() + 10);
+      horizonDate = d.getTime();
+    }
     const cycleIds = cycleRows.map(c => c.id);
 
     const allAssetRows = cycleIds.length > 0

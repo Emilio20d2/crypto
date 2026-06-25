@@ -146,10 +146,6 @@ const SCENARIO_LABELS: Record<SimScenario, string> = {
   favorable:   "Favorable",
   optimista:   "Optimista",
 };
-const CURRENT_YEAR = new Date().getFullYear();
-const HORIZON_YEARS = 20; // siempre 2026-2045, no configurable
-const END_YEAR = CURRENT_YEAR + HORIZON_YEARS;
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 // Siempre 2 decimales máx (formatMoney usa 4 para valores < €100)
@@ -216,6 +212,42 @@ function ScenarioSelector({
           {SCENARIO_LABELS[s]}
         </button>
       ))}
+    </div>
+  );
+}
+
+// ─── CompactYearNav ──────────────────────────────────────────────────────────
+
+function CompactYearNav({
+  years,
+  selected,
+  onSelect,
+}: {
+  years: number[];
+  selected: number | null;
+  onSelect: (y: number) => void;
+}) {
+  if (!years.length || selected === null) return null;
+  const idx = years.indexOf(selected);
+  const hasPrev = idx > 0;
+  const hasNext = idx < years.length - 1;
+  return (
+    <div className="persp-year-nav" role="group" aria-label="Año de consulta">
+      <button
+        type="button"
+        className="persp-year-nav-btn"
+        onClick={() => hasPrev && onSelect(years[idx - 1])}
+        disabled={!hasPrev}
+        aria-label="Año anterior"
+      >‹</button>
+      <span className="persp-year-nav-display" aria-live="polite">{selected}</span>
+      <button
+        type="button"
+        className="persp-year-nav-btn"
+        onClick={() => hasNext && onSelect(years[idx + 1])}
+        disabled={!hasNext}
+        aria-label="Año siguiente"
+      >›</button>
     </div>
   );
 }
@@ -763,9 +795,9 @@ export function Perspectivas() {
   const [selectedYear, setSelectedYear] = useState<number | null>(null);
 
   const { data: simData, isLoading, error, isFetching } = useQuery<PerspectivesSimulation>({
-    queryKey: ["persp2:getSimulation", END_YEAR],
+    queryKey: ["persp2:getSimulation"],
     queryFn: async () => {
-      const result = await window.cryptoControl.persp2.getSimulation({ horizonYears: HORIZON_YEARS }) as { ok: boolean; data?: unknown; error?: { message?: string } };
+      const result = await window.cryptoControl.persp2.getSimulation({}) as { ok: boolean; data?: unknown; error?: { message?: string } };
       if (!result.ok) throw new Error(result.error?.message ?? "Error en la simulación");
       const sim = result.data as PerspectivesSimulation;
       return sim;
@@ -799,7 +831,13 @@ export function Perspectivas() {
     return (
       <div className="flex-1 overflow-y-auto">
         <PageToolbar title="Perspectivas" />
-        <div className="p-4"><LoadingState message="Calculando simulación de perspectivas..." /></div>
+        <div className="p-4 space-y-4">
+          <div className="persp-controls">
+            <div className="persp-horizon-info">Calculando horizonte del Plan…</div>
+            <ScenarioSelector value={selectedScenario} onChange={setSelectedScenario} />
+          </div>
+          <LoadingState message="Calculando simulación de perspectivas..." />
+        </div>
       </div>
     );
   }
@@ -823,7 +861,12 @@ export function Perspectivas() {
     return (
       <div className="flex-1 overflow-y-auto">
         <PageToolbar title="Perspectivas" />
-        <div className="p-4"><ErrorState message={msg} /></div>
+        <div className="p-4 space-y-4">
+          <div className="persp-controls">
+            <ScenarioSelector value={selectedScenario} onChange={setSelectedScenario} />
+          </div>
+          <ErrorState message={msg} />
+        </div>
       </div>
     );
   }
@@ -847,12 +890,9 @@ export function Perspectivas() {
       <PageToolbar
         title="Perspectivas"
         actions={
-          <div className="flex items-center gap-2">
-            {isFetching && <span className="text-xs text-muted-foreground">Calculando…</span>}
-            <span className="text-xs text-muted-foreground">
-              {new Date(simData.computedAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}
-            </span>
-          </div>
+          <span className="text-xs text-muted-foreground">
+            {new Date(simData.computedAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}
+          </span>
         }
       />
 
@@ -861,12 +901,23 @@ export function Perspectivas() {
         {/* ── BLOQUE 1: Cabecera y controles ── */}
         <div className="persp-controls">
           <div className="persp-horizon-info">
-            Horizonte · {CURRENT_YEAR}–{END_YEAR} · {HORIZON_YEARS} años
+            Plan {simData.startYear}–{simData.endYear}
+            {isFetching && <span style={{ marginLeft: 8, opacity: 0.6 }}>· Recalculando…</span>}
           </div>
-          <ScenarioSelector value={selectedScenario} onChange={setSelectedScenario} />
-          <p className="persp-controls-hint">
-            Las aportaciones y reglas EURC se aplican por ciclo según las fechas configuradas en el Plan. El motor simula el cambio de ciclo automáticamente.
-          </p>
+          <div className="persp-controls-row">
+            <div className="persp-controls-section">
+              <div className="persp-controls-label">Año de consulta</div>
+              <CompactYearNav
+                years={years}
+                selected={effectiveYear}
+                onSelect={y => setSelectedYear(y)}
+              />
+            </div>
+            <div className="persp-controls-section">
+              <div className="persp-controls-label">Escenario</div>
+              <ScenarioSelector value={selectedScenario} onChange={setSelectedScenario} />
+            </div>
+          </div>
         </div>
 
         {/* ── BLOQUE 2: Tarjeta principal de patrimonio ── */}
@@ -877,7 +928,7 @@ export function Perspectivas() {
             <div className="persp-hero-meta">
               <span>{SCENARIO_LABELS[selectedScenario]}</span>
               <span aria-hidden="true">·</span>
-              <span>Horizonte {CURRENT_YEAR}–{END_YEAR}</span>
+              <span>Plan {simData.startYear}–{simData.endYear}</span>
             </div>
           </div>
           <div className="persp-hero-metrics">

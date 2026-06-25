@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Wallet } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -153,8 +153,11 @@ export function Portfolio() {
   const queryClient = useQueryClient();
   const backgroundSyncRunning = useRef(false);
   const liveSnapshotRunning = useRef(false);
+  const prevSnapshotVersionRef = useRef<string | null>(null);
   const [manualPortfolioId, setManualPortfolioId] = useState<string | null>(null);
   const [period, setPeriod] = useState<Period>("24h");
+  const [liveUpdateMs, setLiveUpdateMs] = useState<number | null>(null);
+  const [secondsAgo, setSecondsAgo] = useState<number | null>(null);
 
   const { data: statusRes, isLoading: loadingStatus } = useQuery({
     queryKey: ["coinbase", "status"],
@@ -240,38 +243,70 @@ export function Portfolio() {
     refetchIntervalInBackground: true,
   });
 
+  // Shared sync function — called by auto-interval AND by balance-change detection
+  const syncInBackground = useCallback(async () => {
+    if (backgroundSyncRunning.current || !connected) return;
+    backgroundSyncRunning.current = true;
+    try {
+      const result = await window.cryptoControl.coinbase.sync();
+      if (result.ok) {
+        // Selective invalidation: only what a Coinbase sync actually changes.
+        // Excluir historical-series: es demasiado pesado para invalidar en cada sync.
+        await queryClient.invalidateQueries({ queryKey: ["coinbase", "breakdown"] });
+        await queryClient.invalidateQueries({ queryKey: ["coinbase", "portfolios"] });
+        await queryClient.invalidateQueries({ queryKey: ["transactions"] });
+        await queryClient.invalidateQueries({ queryKey: ["portfolio", "positions"] });
+        await queryClient.invalidateQueries({ queryKey: ["portfolio", "live-snapshot"] });
+      }
+    } finally {
+      backgroundSyncRunning.current = false;
+    }
+  }, [connected, queryClient]);
+
   useEffect(() => {
     if (!connected) return;
-    let cancelled = false;
-    const syncInBackground = async () => {
-      if (backgroundSyncRunning.current) return;
-      backgroundSyncRunning.current = true;
-      try {
-        const result = await window.cryptoControl.coinbase.sync();
-        if (!cancelled && result.ok) {
-          // Selective invalidation: only what a Coinbase sync actually changes.
-          // Excluir historical-series: es demasiado pesado para invalidar en cada sync;
-          // se refresca por su propio intervalo (60-120 s).
-          await queryClient.invalidateQueries({ queryKey: ["coinbase", "breakdown"] });
-          await queryClient.invalidateQueries({ queryKey: ["coinbase", "portfolios"] });
-          await queryClient.invalidateQueries({ queryKey: ["transactions"] });
-          await queryClient.invalidateQueries({ queryKey: ["portfolio", "positions"] });
-          await queryClient.invalidateQueries({ queryKey: ["portfolio", "live-snapshot"] });
-        }
-      } finally {
-        backgroundSyncRunning.current = false;
-      }
-    };
 
     // Delay first auto-sync so the UI is interactive before the network round-trip
     const initialTimer = window.setTimeout(() => void syncInBackground(), COINBASE_SYNC_INITIAL_DELAY_MS);
     const intervalId = window.setInterval(() => void syncInBackground(), COINBASE_SYNC_REFRESH_MS);
     return () => {
-      cancelled = true;
       window.clearTimeout(initialTimer);
       window.clearInterval(intervalId);
     };
-  }, [connected, queryClient]);
+  }, [connected, syncInBackground]);
+
+  // Balance change detection: when snapshotVersion changes, trigger a full sync
+  // to import any new transactions and recalculate FIFO/average cost.
+  const liveSnapshot = useMemo(() => {
+    const res = liveSnapshotRes;
+    if (!res) return null;
+    if (typeof res === "object" && "ok" in res) {
+      return res.ok ? (res as any).data : null;
+    }
+    return res ?? null;
+  }, [liveSnapshotRes]);
+
+  useEffect(() => {
+    if (!liveSnapshot?.receivedAt) return;
+    setLiveUpdateMs(liveSnapshot.receivedAt);
+
+    const version = liveSnapshot.snapshotVersion ?? liveSnapshot.portfolioVersion ?? null;
+    if (version && prevSnapshotVersionRef.current !== null && prevSnapshotVersionRef.current !== version) {
+      // Balance changed on Coinbase — trigger a full sync to import new transactions
+      void syncInBackground();
+    }
+    prevSnapshotVersionRef.current = version;
+  }, [liveSnapshot, syncInBackground]);
+
+  // "Actualizado hace X s" counter — ticks every second
+  useEffect(() => {
+    const tick = () => {
+      setSecondsAgo(liveUpdateMs !== null ? Math.floor((Date.now() - liveUpdateMs) / 1000) : null);
+    };
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [liveUpdateMs]);
 
   // The backend already generates the exact grid for `period` (same
   // granularity Mercado uses, zero-padded before the first transaction) —
@@ -284,10 +319,6 @@ export function Portfolio() {
     () => (historicalSeries24hRes?.ok ? historicalSeries24hRes.data.points : []),
     [historicalSeries24hRes]
   );
-
-  const liveSnapshot = liveSnapshotRes && typeof liveSnapshotRes === "object" && "ok" in liveSnapshotRes
-    ? (liveSnapshotRes.ok ? (liveSnapshotRes as any).data : null)
-    : (liveSnapshotRes ?? null);
 
   const chartData = useMemo((): ChartPoint[] => {
     const reconstructed = toChartPoints(reconstructedSeries);
@@ -484,12 +515,12 @@ export function Portfolio() {
     ? liveSnapshot.cryptoValueEur : null;
   const snapshotEurcValue = typeof liveSnapshot?.eurcValueEur === "number"
     ? liveSnapshot.eurcValueEur : eurcTotalFiat;
+  const snapshotEurBalance = typeof liveSnapshot?.eurBalance === "number" ? liveSnapshot.eurBalance : 0;
   const cryptoTotal = snapshotCryptoTotal ?? positionsTotalBalance(positions);
 
-  // Total patrimonial = cripto + EURC. Same definition used by live chart pin
-  // and historical series. EUR fiat excluded per spec.
+  // Total patrimonial = cripto + EURC + EUR (all Coinbase balances at current prices)
   const totalBalance = cryptoTotal !== null || snapshotEurcValue > 0
-    ? (cryptoTotal ?? 0) + snapshotEurcValue
+    ? (cryptoTotal ?? 0) + snapshotEurcValue + snapshotEurBalance
     : null;
 
   // P&L is crypto-only: EURC is a stablecoin reserve, not a speculative asset.
@@ -509,8 +540,20 @@ export function Portfolio() {
         eyebrow="Portfolio activo"
         meta={
           <span className="toolbar-status">
-            <DataStatus state={breakdown.state === "unavailable" ? "unavailable" : "live"} reason={breakdown.reason} />
-            <span>{fetchingBreakdown ? "Actualizando…" : `Actualizado ${formatDateTime(breakdown.capturedAt)}`}</span>
+            <DataStatus
+              state={liveSnapshot?.usingFallback ? "cached" : breakdown.state === "unavailable" ? "unavailable" : "live"}
+              reason={liveSnapshot?.usingFallback ? "Usando caché local" : breakdown.reason}
+            />
+            <span>
+              {secondsAgo === null
+                ? (fetchingBreakdown ? "Sincronizando…" : "Conectando…")
+                : secondsAgo <= 7
+                ? `Actualizado hace ${secondsAgo} s`
+                : secondsAgo <= 20
+                ? `Datos de hace ${secondsAgo} s`
+                : `Última actualización: ${formatDateTime(liveUpdateMs ?? breakdown.capturedAt)}`
+              }
+            </span>
           </span>
         }
       />

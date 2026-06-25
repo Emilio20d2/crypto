@@ -402,6 +402,12 @@ export function calculateSmartBuyAllocation(
   const totalOpportunityScore = eligibleCandidates.reduce((s, c) => s + (c.isOpportunity ? c.scores.priceOpportunity : 0), 0);
   const totalPotentialScore = eligibleCandidates.reduce((s, c) => s + c.scores.longTermPotential, 0);
   const weights = normalizedWeights(mode, options.weights);
+  // When oportunidad mode finds no market signals, fall back to plan base allocation
+  const opportunityFallback = mode === "oportunidad" && totalOpportunityScore <= 0;
+  if (opportunityFallback) {
+    restrictions.push("Sin señales de mercado con suficiente trazabilidad — distribución proporcional al Plan como referencia");
+  }
+  const isPortfolioNew = totalPortfolioValueEur === null || totalPortfolioValueEur <= 0;
   let hasOpportunities = false;
   let remaining = spendableAmount;
 
@@ -433,7 +439,8 @@ export function calculateSmartBuyAllocation(
     } else if (mode === "equilibrar") {
       recommendedAmountEur = balanceAmount;
     } else if (mode === "oportunidad") {
-      recommendedAmountEur = opportunityAmount;
+      // Fallback to plan base when no market signals available
+      recommendedAmountEur = opportunityFallback ? baseAmount : opportunityAmount;
     } else if (mode === "potencial") {
       recommendedAmountEur = asset.isInPlan === false ? 0 : potentialAmount;
     } else {
@@ -473,7 +480,7 @@ export function calculateSmartBuyAllocation(
       recommendedAmountEur = 0;
       assetRestrictions.push("Activo fuera del Plan: candidato para estudiar antes de comprar");
     }
-    if (mode === "oportunidad" && !isOpportunity) {
+    if (mode === "oportunidad" && !isOpportunity && !opportunityFallback) {
       recommendedAmountEur = 0;
       assetRestrictions.push("Sin oportunidad trazable suficiente actualmente");
     }
@@ -513,11 +520,24 @@ export function calculateSmartBuyAllocation(
     const action = classifyAction(asset, recommendedAmountEur, isOpportunity, dataQualityForAsset, originType);
 
     const reasonParts: string[] = [];
-    if (isUnderweight) reasonParts.push(`Infraponderado: ${currentValueEur?.toFixed(0) ?? "?"} € vs ${targetValueEur.toFixed(0)} € objetivo`);
-    else if (currentValueEur !== null) reasonParts.push(`Objetivo cubierto: ${currentValueEur.toFixed(0)} € vs ${targetValueEur.toFixed(0)} €`);
+    if (isUnderweight) {
+      const deficit = targetValueEur - (currentValueEur ?? 0);
+      reasonParts.push(`Infraponderado: ${(currentValueEur ?? 0).toFixed(0)} € actual vs ${targetValueEur.toFixed(0)} € objetivo (déficit ${deficit.toFixed(0)} €)`);
+    } else if (currentValueEur !== null && currentValueEur > 0) {
+      reasonParts.push(`Equilibrado: ${currentValueEur.toFixed(0)} € actual vs ${targetValueEur.toFixed(0)} € objetivo`);
+    } else if (isPortfolioNew) {
+      reasonParts.push(`Cartera nueva — distribución proporcional al objetivo ${asset.targetAllocationPct ?? 0}%`);
+    }
     if (opportunityReason) reasonParts.push(opportunityReason);
+    if (opportunityFallback && mode === "oportunidad") reasonParts.push("Sin señales de mercado detectadas — usando distribución de referencia del Plan");
     if (mode === "potencial" || mode === "mixto") reasonParts.push(potentialReason ?? "Potencial no evaluable con los datos actuales");
     if (originType === "eurc") reasonParts.push("Origen EURC libre: compra táctica, no aportación mensual ni Propuesta de Recompra");
+    const deviationEur = Math.round((recommendedAmountEur - baseAmount) * 100) / 100;
+    if (Math.abs(deviationEur) >= 0.5 && (mode === "plan" || mode === "equilibrar")) {
+      reasonParts.push(deviationEur > 0
+        ? `Corrección aplicada: +${deviationEur.toFixed(2)} € por infraponderación`
+        : `Reducción aplicada: ${deviationEur.toFixed(2)} € por sobreponderación`);
+    }
 
     return {
       rank: index + 1,
@@ -526,7 +546,7 @@ export function calculateSmartBuyAllocation(
       recommendedAmountEur,
       recommendedPercentage: amount > 0 ? Math.round((recommendedAmountEur / amount) * 10_000) / 100 : 0,
       baseAmountEur: baseAmount,
-      deviationFromBaseEur: Math.round((recommendedAmountEur - baseAmount) * 100) / 100,
+      deviationFromBaseEur: deviationEur,
       targetAllocationPct: asset.targetAllocationPct,
       currentValueEur: currentValueEur !== null ? Math.round(currentValueEur * 100) / 100 : null,
       currentWeightPct: currentWeightPct !== null ? Math.round(currentWeightPct * 100) / 100 : null,

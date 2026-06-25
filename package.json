@@ -21,8 +21,8 @@
     "electron": "^30.5.1"
   },
   "build": {
-    "appId": "com.cryptocontrol.clean",
-    "productName": "Crypto Control Nueva",
+    "appId": "com.cryptocontrol.app",
+    "productName": "Crypto Control",
     "afterPack": "scripts/afterPack.js",
     "directories": {
       "output": "dist-packaged"
@@ -45,7 +45,7 @@
       { "from": "apps/desktop/bin/keychain-helper", "to": "bin/keychain-helper" }
     ],
     "dmg": {
-      "title": "Crypto Control Nueva"
+      "title": "Crypto Control"
     }
   }
 }

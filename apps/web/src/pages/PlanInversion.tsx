@@ -354,6 +354,25 @@ const EMPTY_REVISIONS: StrategyRevision[] = [];
 
 type SmartBuyUiMode = "plan" | "oportunidad" | "mixto" | "potencial";
 
+const SMART_BUY_MODE_INFO: Record<SmartBuyUiMode, { label: string; description: string }> = {
+  plan: {
+    label: "Cumplir el Plan",
+    description: "Prioriza los activos más infraponderados respecto al objetivo del Plan. Si la cartera está equilibrada, la distribución coincide con las ponderaciones del Plan.",
+  },
+  oportunidad: {
+    label: "Aprovechar oportunidades",
+    description: "Concentra la aportación en activos con caídas trazables en 24 h o 7 d. Si no hay señales suficientes, muestra la distribución del Plan como referencia.",
+  },
+  mixto: {
+    label: "Modo mixto",
+    description: "Combina el cumplimiento del Plan (60 %), equilibrio de cartera (15 %), oportunidades de mercado (20 %) y potencial a largo plazo (5 %). Configura los pesos abajo.",
+  },
+  potencial: {
+    label: "Potencial a medio/largo plazo",
+    description: "Valora cada activo por liquidez, calidad de datos y alineación estratégica. Útil para decidir dónde concentrar en el horizonte elegido.",
+  },
+};
+
 function SmartBuyPanel({ cycleId, defaultAmount }: { cycleId: string; defaultAmount: number }) {
   const navigate = useNavigate();
   const [amount, setAmount] = useState(String(defaultAmount));
@@ -437,6 +456,9 @@ function SmartBuyPanel({ cycleId, defaultAmount }: { cycleId: string; defaultAmo
             <option value="mixto">Modo mixto</option>
             <option value="potencial">Potencial medio/largo plazo</option>
           </select>
+          <small style={{ marginTop: 4, color: "var(--text-muted)", fontSize: 12 }}>
+            {SMART_BUY_MODE_INFO[mode].description}
+          </small>
         </label>
         <div className="form-group">
           <span>Origen de fondos</span>
@@ -484,16 +506,39 @@ function SmartBuyPanel({ cycleId, defaultAmount }: { cycleId: string; defaultAmo
 
       {result ? (
         <div>
-          <div className="investment-distribution" style={{ marginBottom: 8 }}>
-            <span>Cartera actual: <strong>{result.totalPortfolioValueEur !== null ? `${formatMoney(result.totalPortfolioValueEur)}` : "Sin datos"}</strong></span>
-            <span>Importe analizado: <strong>{formatMoney(result.analyzedAmountEur)}</strong></span>
-            <span>Origen: <strong>Aportaciones EUR</strong></span>
-            {typeof result.pendingAmountEur === "number" && result.pendingAmountEur > 0 ? <span>Pendiente: <strong>{formatMoney(result.pendingAmountEur)}</strong></span> : null}
-            <span>Calidad de datos: <strong>{result.dataQuality === "completo" ? "Completa" : result.dataQuality === "parcial" ? "Parcial" : "Sin datos"}</strong></span>
-            {result.hasOpportunities ? <span className="badge badge-success">Oportunidades detectadas</span> : null}
-          </div>
+          {(() => {
+            const isNew = result.totalPortfolioValueEur === null || result.totalPortfolioValueEur <= 0;
+            const hasAnyDeviation = result.recommendations.some(r => Math.abs(r.deviationFromBaseEur) >= 0.5);
+            const isFallback = result.restrictionsApplied.some(r => r.includes("señales de mercado"));
+            const modeLabel = SMART_BUY_MODE_INFO[mode].label;
+            let insight = "";
+            if (mode === "oportunidad" && isFallback) {
+              insight = "Sin caídas trazables en mercado. Mostrando distribución del Plan como referencia.";
+            } else if (mode === "oportunidad" && result.hasOpportunities) {
+              const opCount = result.recommendations.filter(r => r.isOpportunity).length;
+              insight = `${opCount} activo${opCount !== 1 ? "s" : ""} con oportunidad de compra detectada.`;
+            } else if (mode === "plan" && isNew) {
+              insight = "Cartera nueva — distribución proporcional a las ponderaciones del Plan.";
+            } else if (mode === "plan" && !hasAnyDeviation) {
+              insight = "Cartera equilibrada respecto al Plan — distribución proporcional al objetivo.";
+            } else if (hasAnyDeviation) {
+              const corrected = result.recommendations.filter(r => r.deviationFromBaseEur > 0.5).map(r => r.assetId);
+              insight = corrected.length > 0 ? `Corrección de infraponderación aplicada: ${corrected.join(", ")}.` : "";
+            }
+            return (
+              <div className="investment-distribution" style={{ marginBottom: 8 }}>
+                <span>Modo: <strong>{modeLabel}</strong></span>
+                <span>Cartera actual: <strong>{result.totalPortfolioValueEur !== null && result.totalPortfolioValueEur > 0 ? formatMoney(result.totalPortfolioValueEur) : "Sin posiciones previas"}</strong></span>
+                <span>Importe analizado: <strong>{formatMoney(result.analyzedAmountEur)}</strong></span>
+                {typeof result.pendingAmountEur === "number" && result.pendingAmountEur > 0 ? <span>Sin asignar: <strong>{formatMoney(result.pendingAmountEur)}</strong></span> : null}
+                <span>Datos de mercado: <strong>{result.dataQuality === "completo" ? "Completos" : result.dataQuality === "parcial" ? "Parciales" : "No disponibles"}</strong></span>
+                {result.hasOpportunities ? <span className="badge badge-success">Oportunidades detectadas</span> : null}
+                {insight ? <span style={{ color: "var(--text-muted)", fontStyle: "italic", fontSize: 12, gridColumn: "1 / -1" }}>{insight}</span> : null}
+              </div>
+            );
+          })()}
           <p className="investment-contribution-meta">
-            Compra Inteligente usa aportaciones. Las recompras usan la reserva/liquidez EURC en Ventas/Recompras, con sus propias reglas de activación.
+            Compra Inteligente usa aportaciones EUR. Las recompras con EURC se gestionan aparte en Ventas/Recompras con sus propias reglas de activación.
           </p>
 
           {result.restrictionsApplied.length > 0 ? (
@@ -506,7 +551,20 @@ function SmartBuyPanel({ cycleId, defaultAmount }: { cycleId: string; defaultAmo
             <p className="empty-inline">No hay activos activos en el ciclo para distribuir.</p>
           ) : (
             <div className="investment-contribution-list">
-              {result.recommendations.map((rec) => (
+              {result.recommendations.map((rec) => {
+                const actionLabel: Record<string, string> = {
+                  comprar: "Comprar",
+                  comprar_parcialmente: "Comprar parcialmente",
+                  mantener: "Mantener",
+                  esperar: "Esperar señal",
+                  no_evaluable: "Sin datos suficientes",
+                  candidato_plan: "Candidato — revisar antes",
+                  objetivo_alcanzado: "Objetivo alcanzado",
+                  pausado: "Pausado",
+                  no_elegible: "No elegible",
+                };
+                const hasDeviation = Math.abs(rec.deviationFromBaseEur) >= 0.5;
+                return (
                 <article
                   key={rec.assetId}
                   className={`investment-contribution${rec.isOpportunity ? " investment-contribution--opportunity" : ""}`}
@@ -514,50 +572,70 @@ function SmartBuyPanel({ cycleId, defaultAmount }: { cycleId: string; defaultAmo
                   <div className="investment-contribution-header">
                     <div>
                       <strong>{rec.rank ? `${rec.rank}. ` : ""}{rec.assetId}</strong>
-                      {rec.targetAllocationPct !== null ? <span>{rec.targetAllocationPct}% objetivo · {rec.action?.replaceAll("_", " ") ?? "analizado"}</span> : <span>{rec.action?.replaceAll("_", " ") ?? "analizado"}</span>}
+                      {rec.targetAllocationPct !== null
+                        ? <span>Objetivo {rec.targetAllocationPct}% · {actionLabel[rec.action ?? ""] ?? rec.action}</span>
+                        : <span>{actionLabel[rec.action ?? ""] ?? rec.action}</span>}
                     </div>
                     <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                       {rec.isOpportunity ? <span className="badge badge-success">Oportunidad</span> : null}
                       {rec.isUnderweight ? <span className="badge">Infraponderado</span> : null}
-                      <span className="badge">{rec.confidenceLevel === "alta" ? "Confianza alta" : rec.confidenceLevel === "media" ? "Confianza media" : rec.confidenceLevel === "baja" ? "Confianza baja" : "No evaluable"}</span>
+                      {hasDeviation && rec.deviationFromBaseEur > 0 ? <span className="badge badge-success">+Ajuste</span> : null}
+                      {hasDeviation && rec.deviationFromBaseEur < 0 ? <span className="badge">−Ajuste</span> : null}
                     </div>
                   </div>
-                  <p className="investment-contribution-meta">
-                    Recomendado: <strong>{formatMoney(rec.recommendedAmountEur)}</strong>
-                    {typeof rec.recommendedPercentage === "number" ? ` · ${rec.recommendedPercentage.toLocaleString("es-ES", { maximumFractionDigits: 2 })}% del importe` : ""}
-                    {" "} · Base por ponderación: {formatMoney(rec.baseAmountEur)}
-                    {rec.deviationFromBaseEur !== 0 ? ` · Ajuste: ${rec.deviationFromBaseEur > 0 ? "+" : ""}${formatMoney(rec.deviationFromBaseEur)}` : ""}
+
+                  {/* Recommended amount — primary info */}
+                  <p className="investment-contribution-meta" style={{ fontSize: 13 }}>
+                    <strong style={{ fontSize: 15 }}>{formatMoney(rec.recommendedAmountEur)}</strong>
+                    {typeof rec.recommendedPercentage === "number"
+                      ? <span style={{ color: "var(--text-muted)", marginLeft: 6 }}>{rec.recommendedPercentage.toLocaleString("es-ES", { maximumFractionDigits: 1 })}% del importe</span>
+                      : null}
+                    {hasDeviation
+                      ? <span style={{ color: rec.deviationFromBaseEur > 0 ? "var(--color-success-text)" : "var(--text-muted)", marginLeft: 8 }}>
+                          ({rec.deviationFromBaseEur > 0 ? "+" : ""}{formatMoney(rec.deviationFromBaseEur)} vs base {formatMoney(rec.baseAmountEur)})
+                        </span>
+                      : <span style={{ color: "var(--text-muted)", marginLeft: 8 }}>= base {formatMoney(rec.baseAmountEur)}</span>}
                   </p>
+
+                  {/* Allocation state */}
+                  {(rec.currentWeightPct !== null || rec.currentValueEur !== null) ? (
+                    <p className="investment-contribution-meta">
+                      {typeof rec.currentWeightPct === "number"
+                        ? <>Peso actual <strong>{rec.currentWeightPct.toLocaleString("es-ES", { maximumFractionDigits: 1 })}%</strong> → tras compra <strong>{(rec.estimatedWeightAfterBuyPct ?? rec.currentWeightPct).toLocaleString("es-ES", { maximumFractionDigits: 1 })}%</strong> (objetivo {rec.targetAllocationPct}%)</>
+                        : <>Valor actual {rec.currentValueEur !== null ? formatMoney(rec.currentValueEur) : "—"} · Objetivo {rec.targetValueEur !== null ? formatMoney(rec.targetValueEur) : "—"}</>}
+                    </p>
+                  ) : null}
+
+                  {/* Price & quantity */}
                   <p className="investment-contribution-meta">
                     Precio: {typeof rec.currentPriceEur === "number" ? formatMoney(rec.currentPriceEur) : "Pendiente"}
-                    {" "} · Cantidad aprox.: {typeof rec.estimatedQuantity === "number" ? `${rec.estimatedQuantity.toLocaleString("es-ES", { maximumFractionDigits: 8 })} ${rec.assetId}` : "—"}
-                    {" "} · Riesgo: {rec.riskLevel?.replace("no_evaluable", "no evaluable") ?? "—"}
+                    {typeof rec.estimatedQuantity === "number"
+                      ? <> · ~{rec.estimatedQuantity.toLocaleString("es-ES", { maximumFractionDigits: 8 })} {rec.assetId}</>
+                      : null}
+                    {typeof rec.averagePriceEur === "number" && typeof rec.estimatedAverageCostAfterBuyEur === "number"
+                      ? <> · Coste medio tras compra: {formatMoney(rec.estimatedAverageCostAfterBuyEur)}</>
+                      : null}
                   </p>
-                  {rec.currentValueEur !== null ? (
-                    <p className="investment-contribution-meta">
-                      Actual: {formatMoney(rec.currentValueEur)} · Objetivo: {rec.targetValueEur !== null ? formatMoney(rec.targetValueEur) : "—"}
-                      {typeof rec.currentWeightPct === "number" ? ` · Peso actual: ${rec.currentWeightPct.toLocaleString("es-ES", { maximumFractionDigits: 2 })}%` : ""}
-                      {typeof rec.estimatedWeightAfterBuyPct === "number" ? ` · Tras compra: ${rec.estimatedWeightAfterBuyPct.toLocaleString("es-ES", { maximumFractionDigits: 2 })}%` : ""}
-                    </p>
-                  ) : null}
-                  <p className="investment-contribution-meta">
-                    Coste medio: {typeof rec.averagePriceEur === "number" ? formatMoney(rec.averagePriceEur) : "Pendiente"}
-                    {" "} · Coste medio estimado: {typeof rec.estimatedAverageCostAfterBuyEur === "number" ? formatMoney(rec.estimatedAverageCostAfterBuyEur) : "—"}
+
+                  {/* Explanation — always show */}
+                  <p className="investment-contribution-meta" style={{ color: "var(--text-secondary)" }}>
+                    {rec.explanation ?? rec.reason}
                   </p>
-                  {rec.opportunityReason ? (
-                    <p className="investment-contribution-meta" style={{ color: "var(--color-success, green)" }}>
-                      {rec.opportunityReason}
+
+                  {/* Score breakdown — only when interesting */}
+                  {rec.scoreBreakdown && (rec.scoreBreakdown.priceOpportunity > 0 || rec.scoreBreakdown.longTermPotential > 0) ? (
+                    <p className="investment-contribution-meta" style={{ color: "var(--text-muted)", fontSize: 11 }}>
+                      Puntuación {rec.scoreBreakdown.final}/100
+                      {rec.scoreBreakdown.priceOpportunity > 0 ? ` · Oportunidad ${rec.scoreBreakdown.priceOpportunity}` : ""}
+                      {rec.scoreBreakdown.longTermPotential > 0 ? ` · Potencial ${rec.scoreBreakdown.longTermPotential}` : ""}
+                      {` · Datos ${rec.scoreBreakdown.dataQuality}`}
                     </p>
                   ) : null}
-                  {rec.potentialReason ? <p className="investment-contribution-meta">{rec.potentialReason}</p> : null}
-                  {rec.scoreBreakdown ? (
-                    <p className="investment-contribution-meta">
-                      Puntuación: {rec.scoreBreakdown.final}/100 · Plan {rec.scoreBreakdown.planAlignment} · Oportunidad {rec.scoreBreakdown.priceOpportunity} · Potencial {rec.scoreBreakdown.longTermPotential} · Datos {rec.scoreBreakdown.dataQuality}
-                    </p>
-                  ) : null}
-                  <p className="investment-contribution-meta">{rec.explanation ?? rec.reason}</p>
+
                   {rec.restrictionsApplied && rec.restrictionsApplied.length > 0 ? (
-                    <p className="investment-contribution-meta">{rec.restrictionsApplied.join(" · ")}</p>
+                    <p className="investment-contribution-meta" style={{ color: "var(--text-muted)", fontSize: 11 }}>
+                      {rec.restrictionsApplied.join(" · ")}
+                    </p>
                   ) : null}
                   <div className="investment-form-actions">
                     <Button
@@ -571,7 +649,8 @@ function SmartBuyPanel({ cycleId, defaultAmount }: { cycleId: string; defaultAmo
                     </Button>
                   </div>
                 </article>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
