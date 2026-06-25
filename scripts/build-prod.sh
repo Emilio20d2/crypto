@@ -31,7 +31,7 @@ fi
 
 # ── 2. Cerrar procesos activos ────────────────────────────────────────────────
 echo "→ Cerrando procesos Electron activos…"
-pkill -x "Crypto Control Nueva" 2>/dev/null && echo "  killed" || echo "  (ninguno activo)"
+pkill -x "Crypto Control" 2>/dev/null && echo "  killed" || echo "  (ninguno activo)"
 sleep 1
 
 # ── 3. Limpiar artefactos anteriores ─────────────────────────────────────────
@@ -142,7 +142,7 @@ echo "  ✅ dist/main.js: hace $((NOW_TS - MAIN_MTIME))s"
 echo ""
 echo "→ Empaquetando con electron-builder…"
 DATE_STR=$(date +%Y%m%d-%H%M)
-DMG_NAME="Crypto-Control-Nueva-${COMMIT_SHORT}-${DATE_STR}.dmg"
+DMG_NAME="Crypto-Control-${COMMIT_SHORT}-${DATE_STR}.dmg"
 
 electron-builder --mac --config.directories.output=dist-packaged 2>&1 | grep -E "(packaging|building|built|error|warn|skip)" | head -20
 
@@ -160,7 +160,7 @@ echo "  DMG: $DMG_NAME"
 # ── 10. Verificar app.asar ────────────────────────────────────────────────────
 echo ""
 echo "→ Verificando app.asar…"
-APP_PATH="$REPO_ROOT/dist-packaged/mac-arm64/Crypto Control Nueva.app"
+APP_PATH="$REPO_ROOT/dist-packaged/mac-arm64/Crypto Control.app"
 ASAR_PATH="$APP_PATH/Contents/Resources/app.asar"
 
 if [ ! -f "$ASAR_PATH" ]; then
@@ -239,9 +239,9 @@ echo "  SHA-256: $SHA"
 echo ""
 echo "PRÓXIMOS PASOS"
 echo "  1. Montar DMG:  hdiutil attach '$NEW_DMG'"
-echo "  2. Instalar:    cp -r '/Volumes/Crypto Control Nueva/Crypto Control Nueva.app' /Applications/"
-echo "  3. Desmontar:   diskutil eject 'Crypto Control Nueva'"
-echo "  4. Abrir:       open '/Applications/Crypto Control Nueva.app'"
+echo "  2. Instalar:    cp -r '/Volumes/Crypto Control/Crypto Control.app' /Applications/"
+echo "  3. Desmontar:   diskutil eject 'Crypto Control'"
+echo "  4. Abrir:       open '/Applications/Crypto Control.app'"
 echo "  5. Verificar:   Configuración > Diagnóstico > BUILD VALIDATION"
 echo "     Debe mostrar commit: $COMMIT_SHORT"
 echo ""
