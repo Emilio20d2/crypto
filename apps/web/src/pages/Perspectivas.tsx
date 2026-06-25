@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChartNoAxesCombined } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/Card";
@@ -7,7 +7,6 @@ import { EmptyState } from "../components/EmptyState";
 import { ErrorState } from "../components/ErrorState";
 import { LoadingState } from "../components/LoadingState";
 import { PageToolbar } from "../components/PageToolbar";
-import { SegmentedControl } from "../components/SegmentedControl";
 // formatMoney no se usa aquí: el formatter local (_eur2) garantiza max 2 decimales
 
 // ─── Types (mirrors packages/portfolio/src/perspectives/types.ts) ────────────
@@ -196,9 +195,34 @@ const EVENT_LABELS: Record<string, string> = {
   contribution: "Aportación",
 };
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
+// ─── ScenarioSelector ─────────────────────────────────────────────────────────
 
-function YearSelector({
+function ScenarioSelector({
+  value,
+  onChange,
+}: {
+  value: SimScenario;
+  onChange: (s: SimScenario) => void;
+}) {
+  return (
+    <div className="persp-scenario-selector" role="group" aria-label="Escenario de simulación">
+      {SCENARIOS.map(s => (
+        <button
+          key={s}
+          type="button"
+          className={`persp-scenario-btn${s === value ? " persp-scenario-btn--active" : ""}`}
+          onClick={() => onChange(s)}
+        >
+          {SCENARIO_LABELS[s]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ─── YearStrip ────────────────────────────────────────────────────────────────
+
+function YearStrip({
   years,
   selected,
   onSelect,
@@ -207,18 +231,72 @@ function YearSelector({
   selected: number;
   onSelect: (y: number) => void;
 }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!scrollRef.current) return;
+    const activeEl = scrollRef.current.querySelector(".persp-year-strip-btn--active") as HTMLElement | null;
+    activeEl?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+  }, [selected]);
+
+  const idx = years.indexOf(selected);
+
   return (
-    <div className="fiscal-year-selector" role="group" aria-label="Seleccionar año">
-      {years.map(y => (
-        <button
-          key={y}
-          type="button"
-          className={`fiscal-year-btn${y === selected ? " fiscal-year-btn--active" : ""}`}
-          onClick={() => onSelect(y)}
-        >
-          {y}
-        </button>
-      ))}
+    <div className="persp-year-strip" role="group" aria-label="Seleccionar año">
+      <button
+        type="button"
+        className="persp-year-strip-nav"
+        onClick={() => idx > 0 && onSelect(years[idx - 1])}
+        disabled={idx <= 0}
+        aria-label="Año anterior"
+      >‹</button>
+      <div className="persp-year-strip-scroll" ref={scrollRef}>
+        {years.map(y => (
+          <button
+            key={y}
+            type="button"
+            className={`persp-year-strip-btn${y === selected ? " persp-year-strip-btn--active" : ""}`}
+            onClick={() => onSelect(y)}
+          >
+            {y}
+          </button>
+        ))}
+      </div>
+      <button
+        type="button"
+        className="persp-year-strip-nav"
+        onClick={() => idx < years.length - 1 && onSelect(years[idx + 1])}
+        disabled={idx >= years.length - 1}
+        aria-label="Año siguiente"
+      >›</button>
+    </div>
+  );
+}
+
+// ─── CollapsibleSection ───────────────────────────────────────────────────────
+
+function CollapsibleSection({
+  title,
+  children,
+  defaultOpen = false,
+}: {
+  title: string;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="persp-collapsible">
+      <button
+        type="button"
+        className="persp-collapsible-toggle"
+        onClick={() => setOpen(v => !v)}
+        aria-expanded={open}
+      >
+        <span>{title}</span>
+        <span className={`persp-collapsible-icon${open ? " persp-collapsible-icon--open" : ""}`}>▸</span>
+      </button>
+      {open && <div className="persp-collapsible-body">{children}</div>}
     </div>
   );
 }
@@ -305,53 +383,64 @@ function YearDetail({ snap }: { snap: AnnualSnapshot }) {
   const [eventsOpen, setEventsOpen] = useState(false);
   const positions = Object.values(snap.positions).filter(p => p.balance > 0 || p.failed);
 
+  const phaseLabel =
+    snap.scope === "extrapol"
+      ? "Extrapolado"
+      : snap.forecastCoverage === "uncovered"
+      ? "Sin cobertura"
+      : "Con cobertura";
+
   return (
-    <div className="space-y-3">
-      {/* Flujos del año */}
-      <div className="persp-kpi-grid">
-        <div className="persp-kpi">
-          <span className="persp-kpi-label">Apertura neta</span>
-          <span className="persp-kpi-value">{fmt(snap.openingWealthEur)}</span>
+    <div className="space-y-4">
+      {/* 3×3 grid de métricas */}
+      <div className="persp-annual-grid">
+        <div className="persp-annual-metric">
+          <span className="persp-annual-label">Apertura neta</span>
+          <span className="persp-annual-value">{fmt(snap.openingWealthEur)}</span>
         </div>
-        <div className="persp-kpi">
-          <span className="persp-kpi-label">Aportaciones</span>
-          <span className="persp-kpi-value">{fmt(snap.contributionsEur)}</span>
+        <div className="persp-annual-metric">
+          <span className="persp-annual-label">Aportaciones</span>
+          <span className="persp-annual-value">{fmt(snap.contributionsEur)}</span>
         </div>
-        <div className={`persp-kpi ${snap.marketGainEur >= 0 ? "kpi-pos" : "kpi-neg"}`}>
-          <span className="persp-kpi-label">Resultado mercado</span>
-          <span className="persp-kpi-value">{fmtSign(snap.marketGainEur)}</span>
+        <div className="persp-annual-metric">
+          <span className="persp-annual-label">Cierre neto</span>
+          <span className={`persp-annual-value ${snap.closingWealthEur >= snap.openingWealthEur ? "pos" : "neg"}`}>
+            {fmt(snap.closingWealthEur)}
+          </span>
         </div>
-        <div className={`persp-kpi ${snap.closingWealthEur >= snap.openingWealthEur ? "kpi-pos" : "kpi-neg"}`}>
-          <span className="persp-kpi-label">Cierre neto</span>
-          <span className="persp-kpi-value">{fmt(snap.closingWealthEur)}</span>
+        <div className="persp-annual-metric">
+          <span className="persp-annual-label">Resultado mercado</span>
+          <span className={`persp-annual-value ${snap.marketGainEur >= 0 ? "pos" : "neg"}`}>
+            {fmtSign(snap.marketGainEur)}
+          </span>
         </div>
-        {snap.annualReturnPct != null && (
-          <div className={`persp-kpi ${snap.annualReturnPct >= 0 ? "kpi-pos" : "kpi-neg"}`}>
-            <span className="persp-kpi-label">TWR anual</span>
-            <span className="persp-kpi-value">{fmtAnnualPct(snap.annualReturnPct)}</span>
-          </div>
-        )}
-        {snap.salesEur > 0 && (
-          <div className="persp-kpi kpi-warn">
-            <span className="persp-kpi-label">Ventas ⓘ</span>
-            <span className="persp-kpi-value">{fmt(snap.salesEur)}</span>
-          </div>
-        )}
-        {snap.rebuysEur > 0 && (
-          <div className="persp-kpi kpi-pos">
-            <span className="persp-kpi-label">Recompras ⓘ</span>
-            <span className="persp-kpi-value">{fmt(snap.rebuysEur)}</span>
-          </div>
-        )}
-        {snap.taxEur > 0 && (
-          <div className="persp-kpi kpi-warn">
-            <span className="persp-kpi-label">Impuesto</span>
-            <span className="persp-kpi-value">{fmt(snap.taxEur)}</span>
-          </div>
-        )}
+        <div className="persp-annual-metric">
+          <span className="persp-annual-label">TWR anual</span>
+          <span className={`persp-annual-value ${snap.annualReturnPct != null ? (snap.annualReturnPct >= 0 ? "pos" : "neg") : ""}`}>
+            {snap.annualReturnPct != null ? fmtAnnualPct(snap.annualReturnPct) : "—"}
+          </span>
+        </div>
+        <div className="persp-annual-metric">
+          <span className="persp-annual-label">Fase</span>
+          <span className="persp-annual-value">{phaseLabel}</span>
+        </div>
+        <div className="persp-annual-metric">
+          <span className="persp-annual-label">Ventas ⓘ</span>
+          <span className="persp-annual-value">{snap.salesEur > 0 ? fmt(snap.salesEur) : "—"}</span>
+        </div>
+        <div className="persp-annual-metric">
+          <span className="persp-annual-label">Recompras ⓘ</span>
+          <span className="persp-annual-value">{snap.rebuysEur > 0 ? fmt(snap.rebuysEur) : "—"}</span>
+        </div>
+        <div className="persp-annual-metric">
+          <span className="persp-annual-label">Impuesto</span>
+          <span className={`persp-annual-value ${snap.taxEur > 0 ? "warn" : ""}`}>
+            {snap.taxEur > 0 ? fmt(snap.taxEur) : "—"}
+          </span>
+        </div>
       </div>
 
-      {/* Posiciones compactas */}
+      {/* Posiciones del año */}
       {positions.length > 0 && (
         <div className="responsive-table persp-table">
           <table>
@@ -669,8 +758,6 @@ function EurcReconciliationSection({ sum }: { sum: ScenarioSummary }) {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
-const SCENARIO_OPTS = SCENARIOS.map(s => ({ value: s as string, label: SCENARIO_LABELS[s] }));
-
 export function Perspectivas() {
   const [selectedScenario, setSelectedScenario] = useState<SimScenario>("base");
   const [selectedYear, setSelectedYear] = useState<number | null>(null);
@@ -769,157 +856,154 @@ export function Perspectivas() {
         }
       />
 
-      <div className="p-4 space-y-6 max-w-6xl mx-auto">
+      <div className="persp-page">
 
-        {/* Selectors */}
-        <Card>
-          <CardContent className="pt-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-muted-foreground">Horizonte: {CURRENT_YEAR}–{END_YEAR} ({HORIZON_YEARS} años)</span>
-            </div>
-            <div className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">Escenario</span>
-              <SegmentedControl
-                value={selectedScenario}
-                options={SCENARIO_OPTS}
-                onChange={v => setSelectedScenario(v as SimScenario)}
-                label="Escenario de simulación"
-              />
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Las aportaciones y reglas EURC se aplican por ciclo según las fechas de inicio y fin configuradas en el Plan. El motor simula el cambio de ciclo automáticamente.
-            </p>
-          </CardContent>
-        </Card>
-
-        {/* KPI summary */}
-        <div className="persp-kpi-grid">
-          <div className="persp-kpi">
-            <span className="persp-kpi-label">Patrimonio inicial</span>
-            <span className="persp-kpi-value">{fmt(sum.initialWealthEur)}</span>
+        {/* ── BLOQUE 1: Cabecera y controles ── */}
+        <div className="persp-controls">
+          <div className="persp-horizon-info">
+            Horizonte · {CURRENT_YEAR}–{END_YEAR} · {HORIZON_YEARS} años
           </div>
-          <div className={`persp-kpi ${sum.finalNetWealthEur >= sum.initialWealthEur ? "kpi-pos" : "kpi-neg"}`}>
-            <span className="persp-kpi-label">Patrimonio final neto</span>
-            <span className="persp-kpi-value">{fmt(sum.finalNetWealthEur)}</span>
-          </div>
-          {sum.finalFiscalReserveEur > 0 && (
-            <div className="persp-kpi">
-              <span className="persp-kpi-label">Patrimonio final bruto</span>
-              <span className="persp-kpi-value">{fmt(sum.finalNetWealthEur + sum.finalFiscalReserveEur)}</span>
-            </div>
-          )}
-          <div className="persp-kpi">
-            <span className="persp-kpi-label">Capital aportado</span>
-            <span className="persp-kpi-value">{fmt(sum.totalContributionsEur)}</span>
-          </div>
-          <div className={`persp-kpi ${beneficioNetoEur >= 0 ? "kpi-pos" : "kpi-neg"}`}>
-            <span className="persp-kpi-label">Beneficio neto est.</span>
-            <span className="persp-kpi-value">{fmtSign(beneficioNetoEur)}</span>
-          </div>
-          {sum.twr != null && (
-            <div className={`persp-kpi ${sum.twr >= 0 ? "kpi-pos" : "kpi-neg"}`}>
-              <span className="persp-kpi-label">TWR acumulado</span>
-              <span className="persp-kpi-value">{fmtAnnualPct(sum.twr * 100)}</span>
-            </div>
-          )}
-          <div className={`persp-kpi ${(sum.xirr ?? 0) >= 0 ? "kpi-pos" : "kpi-neg"}`}>
-            <span className="persp-kpi-label">XIRR anual</span>
-            <span className="persp-kpi-value">{fmtPct(sum.xirr)}</span>
-          </div>
-          {sum.maxDrawdownPct != null && (
-            <div className="persp-kpi kpi-neg">
-              <span className="persp-kpi-label">Drawdown máx.</span>
-              <span className="persp-kpi-value">−{(sum.maxDrawdownPct * 100).toFixed(1)}%</span>
-            </div>
-          )}
-          {sum.totalSalesEur > 0 && (
-            <div className="persp-kpi kpi-warn">
-              <span className="persp-kpi-label">Ventas simuladas</span>
-              <span className="persp-kpi-value">{fmt(sum.totalSalesEur)}</span>
-            </div>
-          )}
-          {sum.totalRebuysEur > 0 && (
-            <div className="persp-kpi kpi-pos">
-              <span className="persp-kpi-label">Recompras simuladas</span>
-              <span className="persp-kpi-value">{fmt(sum.totalRebuysEur)}</span>
-            </div>
-          )}
-          {sum.totalEurcReinvestedEur > 0 && (
-            <div className="persp-kpi">
-              <span className="persp-kpi-label">Reinversión EURC</span>
-              <span className="persp-kpi-value">{fmt(sum.totalEurcReinvestedEur)}</span>
-            </div>
-          )}
-          {sum.totalTaxEur > 0 && (
-            <div className="persp-kpi kpi-warn">
-              <span className="persp-kpi-label">Impuesto estimado</span>
-              <span className="persp-kpi-value">{fmt(sum.totalTaxEur)}</span>
-            </div>
-          )}
-          {sum.finalFiscalReserveEur > 0 && (
-            <div className="persp-kpi kpi-warn">
-              <span className="persp-kpi-label">Reserva fiscal final</span>
-              <span className="persp-kpi-value">{fmt(sum.finalFiscalReserveEur)}</span>
-            </div>
-          )}
-          {sum.finalEurcFreeEur > 0 && (
-            <div className="persp-kpi">
-              <span className="persp-kpi-label">EURC libre final</span>
-              <span className="persp-kpi-value">{fmt(sum.finalEurcFreeEur)}</span>
-            </div>
-          )}
+          <ScenarioSelector value={selectedScenario} onChange={setSelectedScenario} />
+          <p className="persp-controls-hint">
+            Las aportaciones y reglas EURC se aplican por ciclo según las fechas configuradas en el Plan. El motor simula el cambio de ciclo automáticamente.
+          </p>
         </div>
 
-        {/* Detalle por año */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Detalle por año</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <YearSelector
-              years={years}
-              selected={effectiveYear ?? years[0]}
-              onSelect={y => setSelectedYear(y)}
-            />
-            {selectedSnap && (
-              <div className="border-t border-border/50 pt-3">
-                <YearDetail snap={selectedSnap} />
+        {/* ── BLOQUE 2: Tarjeta principal de patrimonio ── */}
+        <div className="persp-hero">
+          <div className="persp-hero-main">
+            <div className="persp-hero-label">Patrimonio neto estimado</div>
+            <div className="persp-hero-value">{fmt(sum.finalNetWealthEur)}</div>
+            <div className="persp-hero-meta">
+              <span>{SCENARIO_LABELS[selectedScenario]}</span>
+              <span aria-hidden="true">·</span>
+              <span>Horizonte {CURRENT_YEAR}–{END_YEAR}</span>
+            </div>
+          </div>
+          <div className="persp-hero-metrics">
+            <div className="persp-hero-metric">
+              <span>Patrimonio inicial</span>
+              <strong>{fmt(sum.initialWealthEur)}</strong>
+            </div>
+            <div className="persp-hero-metric">
+              <span>Capital aportado</span>
+              <strong>{fmt(sum.totalContributionsEur)}</strong>
+            </div>
+            <div className="persp-hero-metric">
+              <span>Beneficio neto estimado</span>
+              <strong className={beneficioNetoEur >= 0 ? "pos" : "neg"}>{fmtSign(beneficioNetoEur)}</strong>
+            </div>
+            {sum.finalFiscalReserveEur > 0 && (
+              <div className="persp-hero-metric">
+                <span>Patrimonio bruto</span>
+                <strong>{fmt(sum.finalNetWealthEur + sum.finalFiscalReserveEur)}</strong>
               </div>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
 
-        {/* Tabla anual */}
+        {/* ── BLOQUE 3: Métricas financieras secundarias (3 grupos) ── */}
+        <div className="persp-groups">
+
+          <div className="persp-group">
+            <div className="persp-group-title">Rentabilidad y riesgo</div>
+            <div className="persp-group-rows">
+              {sum.twr != null && (
+                <div className="persp-group-row">
+                  <span>TWR acumulado</span>
+                  <strong className={sum.twr >= 0 ? "pos" : "neg"}>{fmtAnnualPct(sum.twr * 100)}</strong>
+                </div>
+              )}
+              <div className="persp-group-row">
+                <span>XIRR anual</span>
+                <strong className={(sum.xirr ?? 0) >= 0 ? "pos" : "neg"}>{fmtPct(sum.xirr)}</strong>
+              </div>
+              {sum.maxDrawdownPct != null && (
+                <div className="persp-group-row">
+                  <span>Drawdown máximo</span>
+                  <strong className="neg">−{(sum.maxDrawdownPct * 100).toFixed(1)}%</strong>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="persp-group">
+            <div className="persp-group-title">Gestión de ciclos</div>
+            <div className="persp-group-rows">
+              <div className="persp-group-row">
+                <span>Ventas simuladas</span>
+                <strong>{sum.totalSalesEur > 0 ? fmt(sum.totalSalesEur) : "—"}</strong>
+              </div>
+              <div className="persp-group-row">
+                <span>Recompras simuladas</span>
+                <strong>{sum.totalRebuysEur > 0 ? fmt(sum.totalRebuysEur) : "—"}</strong>
+              </div>
+              <div className="persp-group-row">
+                <span>Reinversión EURC</span>
+                <strong>{sum.totalEurcReinvestedEur > 0 ? fmt(sum.totalEurcReinvestedEur) : "—"}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div className="persp-group">
+            <div className="persp-group-title">Fiscalidad y liquidez</div>
+            <div className="persp-group-rows">
+              <div className="persp-group-row">
+                <span>Impuesto estimado</span>
+                <strong className={sum.totalTaxEur > 0 ? "warn" : ""}>{sum.totalTaxEur > 0 ? fmt(sum.totalTaxEur) : "—"}</strong>
+              </div>
+              <div className="persp-group-row">
+                <span>Reserva fiscal final</span>
+                <strong className={sum.finalFiscalReserveEur > 0 ? "warn" : ""}>{sum.finalFiscalReserveEur > 0 ? fmt(sum.finalFiscalReserveEur) : "—"}</strong>
+              </div>
+              <div className="persp-group-row">
+                <span>EURC libre final</span>
+                <strong>{sum.finalEurcFreeEur > 0 ? fmt(sum.finalEurcFreeEur) : "—"}</strong>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        {/* ── BLOQUE 4: Selector anual + Detalle ── */}
         <Card>
           <CardHeader>
-            <CardTitle>Tabla anual — {SCENARIO_LABELS[selectedScenario]}</CardTitle>
+            <CardTitle>Resumen de {effectiveYear ?? "—"}</CardTitle>
+            <div className="mt-3">
+              <YearStrip
+                years={years}
+                selected={effectiveYear ?? years[0]}
+                onSelect={y => setSelectedYear(y)}
+              />
+            </div>
           </CardHeader>
           <CardContent>
-            <AnnualTable snapshots={activeScenario.annualSnapshots} />
+            {selectedSnap && <YearDetail snap={selectedSnap} />}
           </CardContent>
         </Card>
 
-        {/* Evolución del patrimonio */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Evolución del patrimonio (5 escenarios)</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <EvolutionChart simData={simData} />
-          </CardContent>
-        </Card>
+        {/* ── BLOQUE 5: Secciones desplegables ── */}
+        <CollapsibleSection title={`Tabla anual completa — ${SCENARIO_LABELS[selectedScenario]}`}>
+          <AnnualTable snapshots={activeScenario.annualSnapshots} />
+        </CollapsibleSection>
 
-        {/* Previsiones externas de analistas */}
-        <AnalystForecastSection
-          years={years}
-          activeAssets={[...new Set([
-            ...Object.keys(activeScenario.assetPriceInfo ?? {}),
-            ...activeScenario.annualSnapshots.flatMap(s => Object.keys(s.positions ?? {})),
-          ]).values()].filter(a => a !== "EURC" && a !== "EUR")}
-        />
+        <CollapsibleSection title="Evolución del patrimonio (5 escenarios)">
+          <EvolutionChart simData={simData} />
+        </CollapsibleSection>
 
-        {/* Conciliación EURC */}
-        <EurcReconciliationSection sum={sum} />
+        <CollapsibleSection title="Previsiones externas de analistas">
+          <AnalystForecastSection
+            years={years}
+            activeAssets={[...new Set([
+              ...Object.keys(activeScenario.assetPriceInfo ?? {}),
+              ...activeScenario.annualSnapshots.flatMap(s => Object.keys(s.positions ?? {})),
+            ]).values()].filter(a => a !== "EURC" && a !== "EUR")}
+          />
+        </CollapsibleSection>
+
+        <CollapsibleSection title="Conciliación EURC">
+          <EurcReconciliationSection sum={sum} />
+        </CollapsibleSection>
 
       </div>
     </div>
