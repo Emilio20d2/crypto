@@ -5769,11 +5769,16 @@ function createWindow() {
     height: 800,
     title: "Crypto Control Nueva",
     icon: appIconPath,
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+
+  mainWindow.once("ready-to-show", () => {
+    mainWindow!.show();
   });
 
   mainWindow.webContents.on("console-message", (_e, level, message, line, sourceId) => {
@@ -5808,13 +5813,14 @@ app.whenReady().then(() => {
   const tReady = Date.now();
   console.log(`[Timing] electronReady: ${tReady - _processStart}ms desde inicio proceso`);
 
-  const tDb = Date.now();
-  setupDatabase();
-  console.log(`[Timing] setupDatabase: ${Date.now() - tDb}ms`);
-
+  // Ventana primero: el renderer empieza a cargar HTML mientras el main thread inicializa DB e IPC
   const tWin = Date.now();
   createWindow();
   console.log(`[Timing] createWindow: ${Date.now() - tWin}ms`);
+
+  const tDb = Date.now();
+  setupDatabase();
+  console.log(`[Timing] setupDatabase: ${Date.now() - tDb}ms`);
 
   const tIpc = Date.now();
   setupIpcHandlers();
