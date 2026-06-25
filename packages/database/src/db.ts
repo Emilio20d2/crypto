@@ -102,6 +102,10 @@ export function getDb() {
   return dbInstance;
 }
 
+export function getSqlite(): Database.Database | null {
+  return sqliteInstance;
+}
+
 // Create all plan/cycle/schedule tables using IF NOT EXISTS so this is safe
 // to call even when the Drizzle migration failed (legacy DB with conflicting tables).
 export function ensureEssentialTables(): void {
@@ -367,6 +371,79 @@ export function ensureEssentialTables(): void {
       reviewed_at   TEXT    NOT NULL,
       PRIMARY KEY (ticker, target_year, scenario)
     );
+
+    -- Motor de Perspectivas v3: registro de fuentes verificables
+    CREATE TABLE IF NOT EXISTS forecast_sources (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL,
+      base_url TEXT NOT NULL,
+      rss_url TEXT,
+      method TEXT NOT NULL DEFAULT 'manual',
+      check_frequency_hours INTEGER NOT NULL DEFAULT 24,
+      last_checked_at INTEGER,
+      last_success_at INTEGER,
+      consecutive_errors INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      priority INTEGER NOT NULL DEFAULT 5,
+      subscription_required INTEGER NOT NULL DEFAULT 0,
+      notes TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_forecast_sources_status ON forecast_sources (status);
+
+    -- Motor de Perspectivas v3: observaciones de precios de analistas (fuente única)
+    CREATE TABLE IF NOT EXISTS forecast_observations (
+      id TEXT PRIMARY KEY NOT NULL,
+      source_id TEXT NOT NULL,
+      asset_id TEXT NOT NULL,
+      ticker TEXT NOT NULL,
+      publisher TEXT NOT NULL,
+      author TEXT,
+      report_title TEXT NOT NULL,
+      original_url TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      published_at INTEGER NOT NULL,
+      retrieved_at INTEGER NOT NULL,
+      verified_at INTEGER,
+      expires_at INTEGER,
+      target_year INTEGER NOT NULL,
+      target_type TEXT NOT NULL DEFAULT 'point',
+      original_currency TEXT NOT NULL DEFAULT 'USD',
+      target_low_original REAL,
+      target_base_original REAL,
+      target_high_original REAL,
+      target_low_eur REAL,
+      target_base_eur REAL,
+      target_high_eur REAL,
+      fx_rate REAL,
+      fx_rate_at INTEGER,
+      fx_source TEXT,
+      methodology TEXT,
+      quality_score REAL NOT NULL DEFAULT 0.5,
+      freshness_score REAL NOT NULL DEFAULT 0.5,
+      horizon_score REAL NOT NULL DEFAULT 0.5,
+      methodology_score REAL NOT NULL DEFAULT 0.5,
+      independence_score REAL NOT NULL DEFAULT 0.5,
+      final_weight REAL NOT NULL DEFAULT 0.5,
+      verified INTEGER NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      rejected_reason TEXT,
+      forecast_version TEXT NOT NULL DEFAULT '1'
+    );
+    CREATE INDEX IF NOT EXISTS idx_forecast_obs_asset ON forecast_observations (asset_id, target_year, active);
+    CREATE INDEX IF NOT EXISTS idx_forecast_obs_source ON forecast_observations (source_id);
+
+    -- Motor de Perspectivas v3: log de cada intento de ingestión
+    CREATE TABLE IF NOT EXISTS forecast_ingestion_log (
+      id TEXT PRIMARY KEY NOT NULL,
+      source_id TEXT NOT NULL,
+      checked_at INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      new_items INTEGER NOT NULL DEFAULT 0,
+      items_scanned INTEGER NOT NULL DEFAULT 0,
+      error_message TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_forecast_log_source ON forecast_ingestion_log (source_id, checked_at);
   `);
 
   // Migrate data from old analyst_targets (PK: ticker+scenario, only 2030 data) if needed

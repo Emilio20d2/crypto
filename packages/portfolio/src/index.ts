@@ -26,8 +26,14 @@ export type {
   SimInput, SimCycle, SimCycleAsset, SimSaleRule, SimRebuyTier,
   SimSubstitution, SimRevision, SimOptions, TaxBand,
   PriceModelType, CoverageState, ExternalPriceResult,
+  ObservationRow, SourceRow, IngestionLogRow, AssetYearCoverage,
+  IngestableSource, IngestResult, SeedSource, SeedObservation,
 } from "./perspectives";
 export {
   SIM_SCENARIOS, SCENARIO_LABELS, DEFAULT_SPANISH_TAX_BANDS, DEFAULT_SIM_OPTIONS,
   monthKey, runPerspectivesSimulation, buildExternalPriceMap,
+  observationToForecastSources, computeCoverageMatrix, computeFinalWeight,
+  MIN_SOURCES_FOR_QUANTILE, ingestSource, ingestRssSource, ingestHttpSource, verifyUrl,
+  SEED_FORECAST_SOURCES, SEED_FORECAST_OBSERVATIONS,
 } from "./perspectives";
+export type { ForecastSource, ForecastDirection, ForecastSourceType } from "./perspectives";

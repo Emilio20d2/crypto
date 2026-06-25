@@ -296,6 +296,10 @@ export interface SimInput {
 
   // Opciones
   options: SimOptions;
+
+  // Previsiones externas verificables desde la BD (fuente primaria).
+  // Si es undefined o vacío, el motor caerá en KNOWN_FORECASTS como respaldo.
+  externalForecasts?: import("./forecast-sources").ForecastSource[];
 }
 
 export interface CurrentPosition {

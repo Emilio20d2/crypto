@@ -17,6 +17,7 @@ import {
 import type { ChartPoint } from "../components/MarketChart";
 import type { Period } from "../components/PeriodSelector";
 import { formatDateTime } from "../lib/format";
+import { calculateLiveTotalAssetValue, type LivePortfolioValueSnapshot } from "../lib/live-snapshot";
 
 // Snapshot ligero en vivo: cuentas + balances + precios cada 5 s
 const LIVE_COINBASE_REFRESH_MS = 5_000;
@@ -203,7 +204,7 @@ export function Portfolio() {
         liveSnapshotRunning.current = false;
       }
     },
-    enabled: !!selectedPortfolioId && !!breakdown,
+    enabled: !!selectedPortfolioId,
     staleTime: 4_000,
     refetchInterval: LIVE_COINBASE_REFRESH_MS,
     refetchIntervalInBackground: true,
@@ -277,7 +278,7 @@ export function Portfolio() {
 
   // Balance change detection: when snapshotVersion changes, trigger a full sync
   // to import any new transactions and recalculate FIFO/average cost.
-  const liveSnapshot = useMemo(() => {
+  const liveSnapshot = useMemo((): LivePortfolioValueSnapshot | null => {
     const res = liveSnapshotRes;
     if (!res) return null;
     if (typeof res === "object" && "ok" in res) {
@@ -429,8 +430,34 @@ export function Portfolio() {
       </section>
     );
   }
-  // Only full-block on breakdown when there's no cached data at all
+  // Only full-block on breakdown when there's no cached data at all.
+  // If the live snapshot has already arrived (5 s polling starts immediately),
+  // show the total value right away instead of a blank spinner.
   if (selectedPortfolioId && loadingBreakdown) {
+    const earlySnap = liveSnapshot;
+    if (earlySnap) {
+      const earlyTotal = calculateLiveTotalAssetValue(earlySnap);
+      return (
+        <section className="page-stack portfolio-page">
+          <PageToolbar title="Cartera" eyebrow="Portfolio activo"
+            meta={<span className="toolbar-status"><span>Cargando detalle…</span></span>}
+          />
+          <PortfolioMetrics
+            totalBalance={earlyTotal}
+            cryptoTotalEur={earlySnap.cryptoValueEur}
+            eurcTotalEur={earlySnap.eurcValueEur > 0 ? earlySnap.eurcValueEur : null}
+            totalInvested={null}
+            totalInvestedIsPartial={false}
+            totalInvestedPendingLabel={undefined}
+            performance={null}
+            performanceIsPartial={false}
+            variation24h={null}
+            variation24hPercent={null}
+            positionsCount={0}
+          />
+        </section>
+      );
+    }
     return (
       <section className="page-stack">
         <PageToolbar title="Cartera" meta="Cargando datos" />
@@ -578,11 +605,12 @@ export function Portfolio() {
   const snapshotEurBalance = typeof liveSnapshot?.eurBalance === "number" ? liveSnapshot.eurBalance : 0;
   const cryptoTotal = snapshotCryptoTotal ?? positionsTotalBalance(mergedPositions);
 
-  // Total patrimonial = cripto + EURC + EUR.
-  // EURC se suma una sola vez (snapshotEurcValue); no aparece en cryptoValueEur.
-  const totalBalance = cryptoTotal !== null || snapshotEurcValue > 0
-    ? (cryptoTotal ?? 0) + snapshotEurcValue + snapshotEurBalance
-    : null;
+  // Total patrimonial = cripto + EURC + EUR via shared function (no double-counting).
+  const totalBalance = liveSnapshot
+    ? calculateLiveTotalAssetValue(liveSnapshot)
+    : (cryptoTotal !== null || snapshotEurcValue > 0
+      ? (cryptoTotal ?? 0) + snapshotEurcValue + snapshotEurBalance
+      : null);
 
   // P&L is crypto-only: EURC is a stablecoin reserve, not a speculative asset.
   const performance = totalInvested !== null && cryptoTotal !== null ? cryptoTotal - totalInvested : null;
@@ -601,8 +629,8 @@ export function Portfolio() {
         meta={
           <span className="toolbar-status">
             <DataStatus
-              state={liveSnapshot?.usingFallback ? "cached" : breakdown.state === "unavailable" ? "unavailable" : "live"}
-              reason={liveSnapshot?.usingFallback ? "Usando caché local" : breakdown.reason}
+              state={liveSnapshot?.usingFallback ? "cached" : breakdown?.state === "unavailable" ? "unavailable" : "live"}
+              reason={liveSnapshot?.usingFallback ? "Usando caché local" : breakdown?.reason}
             />
             <span>
               {secondsAgo === null
@@ -611,7 +639,7 @@ export function Portfolio() {
                 ? `Actualizado hace ${secondsAgo} s`
                 : secondsAgo <= 20
                 ? `Datos de hace ${secondsAgo} s`
-                : `Última actualización: ${formatDateTime(liveUpdateMs ?? breakdown.capturedAt)}`
+                : `Última actualización: ${formatDateTime(liveUpdateMs ?? breakdown?.capturedAt)}`
               }
             </span>
           </span>

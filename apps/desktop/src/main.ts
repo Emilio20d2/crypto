@@ -216,7 +216,54 @@ function setupDatabase() {
     console.error("[DB] Error al verificar tablas esenciales:", e instanceof Error ? e.message : String(e));
   }
 
+  try {
+    seedForecastData();
+  } catch (e: unknown) {
+    console.error("[ForecastSeed] Error al sembrar datos iniciales:", e instanceof Error ? e.message : String(e));
+  }
+
   console.log(`[Timing] setupDatabase total: ${Date.now() - t0}ms`);
+}
+
+function seedForecastData(): void {
+  const { SEED_FORECAST_SOURCES, SEED_FORECAST_OBSERVATIONS } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+  const sqlite = (require("@crypto-control/database") as typeof import("@crypto-control/database")).getSqlite();
+  if (!sqlite) return;
+
+  // Sembramos fuentes (INSERT OR IGNORE para no sobrescribir actualizaciones del usuario)
+  const insertSource = sqlite.prepare(`
+    INSERT OR IGNORE INTO forecast_sources (id, name, category, base_url, rss_url, method,
+      check_frequency_hours, status, priority, subscription_required, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+  `);
+  for (const s of SEED_FORECAST_SOURCES) {
+    insertSource.run(s.id, s.name, s.category, s.base_url, s.rss_url ?? null,
+      s.method, s.check_frequency_hours, s.priority, s.subscription_required, s.notes ?? null);
+  }
+
+  // Sembramos observaciones (INSERT OR IGNORE)
+  const insertObs = sqlite.prepare(`
+    INSERT OR IGNORE INTO forecast_observations (
+      id, source_id, asset_id, ticker, publisher, author, report_title, original_url,
+      source_type, published_at, retrieved_at, verified_at, expires_at, target_year, target_type,
+      original_currency, target_low_original, target_base_original, target_high_original,
+      fx_rate, fx_rate_at, fx_source, methodology, quality_score, freshness_score,
+      horizon_score, methodology_score, independence_score, final_weight, verified, active,
+      forecast_version
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `);
+  for (const o of SEED_FORECAST_OBSERVATIONS) {
+    insertObs.run(
+      o.id, o.source_id, o.asset_id, o.ticker, o.publisher, o.author ?? null,
+      o.report_title, o.original_url, o.source_type, o.published_at, o.retrieved_at,
+      o.verified_at, o.expires_at, o.target_year, o.target_type, o.original_currency,
+      o.target_low_original ?? null, o.target_base_original ?? null, o.target_high_original ?? null,
+      o.fx_rate, o.fx_rate_at, o.fx_source, o.methodology,
+      o.quality_score, o.freshness_score, o.horizon_score, o.methodology_score,
+      o.independence_score, o.final_weight, o.verified, o.active, o.forecast_version,
+    );
+  }
+  console.log(`[ForecastSeed] Fuentes: ${SEED_FORECAST_SOURCES.length} | Observaciones: ${SEED_FORECAST_OBSERVATIONS.length}`);
 }
 
 function setupIpcHandlers() {
@@ -4866,6 +4913,24 @@ function setupIpcHandlers() {
     const eurcFiscalReserve = treasurySummary?.fiscalReserveBalance ?? 0;
     const eurCash = treasurySummary?.cashBalance ?? 0;
 
+    // Cargar previsiones verificadas de la BD (fuente primaria del motor)
+    const { observationToForecastSources } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    const sqlite = (require("@crypto-control/database") as typeof import("@crypto-control/database")).getSqlite();
+    let externalForecastPoints: import("@crypto-control/portfolio").ForecastSource[] = [];
+    if (sqlite) {
+      const rows = sqlite.prepare(
+        `SELECT id, source_id, asset_id, ticker, publisher, report_title, original_url,
+                source_type, published_at, expires_at, target_year, target_type, original_currency,
+                target_low_original, target_base_original, target_high_original, fx_rate,
+                final_weight, verified, active
+         FROM forecast_observations
+         WHERE active = 1 AND (expires_at IS NULL OR expires_at > ?)
+         ORDER BY published_at DESC`
+      ).all(now) as import("@crypto-control/portfolio").ObservationRow[];
+      externalForecastPoints = rows.flatMap(r => observationToForecastSources(r));
+      console.log(`[ForecastEngine] observaciones_activas=${rows.length} puntos_generados=${externalForecastPoints.length}`);
+    }
+
     const simInput = {
       now,
       horizonDate,
@@ -4881,9 +4946,159 @@ function setupIpcHandlers() {
         commissionRate: 0.004,
         taxBands: DEFAULT_SPANISH_TAX_BANDS,
       },
+      externalForecasts: externalForecastPoints.length > 0 ? externalForecastPoints : undefined,
     };
 
     return runPerspectivesSimulation(simInput);
+  }));
+
+  // --- PERSPECTIVAS v3: estado de previsiones y cobertura ──────────────────────
+
+  ipcMain.handle("perspectives:getForecastStatus", withResult(async () => {
+    const { computeCoverageMatrix } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    const sqlite = (require("@crypto-control/database") as typeof import("@crypto-control/database")).getSqlite();
+    if (!sqlite) return { observations: [], sources: [], coverage: [], ingestionLog: [] };
+
+    const now = Date.now();
+    type ObsRow = { id: string; source_id: string; asset_id: string; ticker: string; publisher: string;
+      report_title: string; original_url: string; source_type: string; published_at: number;
+      expires_at: number | null; target_year: number; target_type: string; original_currency: string;
+      target_low_original: number | null; target_base_original: number | null; target_high_original: number | null;
+      fx_rate: number | null; final_weight: number; verified: number; active: number; };
+    const observations = sqlite.prepare(
+      `SELECT id, source_id, asset_id, ticker, publisher, report_title, original_url, source_type,
+              published_at, expires_at, target_year, target_type, original_currency,
+              target_low_original, target_base_original, target_high_original, fx_rate,
+              final_weight, verified, active
+       FROM forecast_observations ORDER BY asset_id, target_year, published_at DESC`
+    ).all() as ObsRow[];
+
+    const sources = sqlite.prepare(
+      `SELECT id, name, category, base_url, rss_url, method, check_frequency_hours,
+              last_checked_at, last_success_at, consecutive_errors, status, priority, subscription_required, notes
+       FROM forecast_sources ORDER BY priority, name`
+    ).all();
+
+    const coverage = computeCoverageMatrix(observations as import("@crypto-control/portfolio").ObservationRow[]);
+
+    const ingestionLog = sqlite.prepare(
+      `SELECT id, source_id, checked_at, status, new_items, items_scanned, error_message
+       FROM forecast_ingestion_log
+       WHERE checked_at > ? ORDER BY checked_at DESC LIMIT 50`
+    ).all(now - 7 * 24 * 3600 * 1000);
+
+    return { observations, sources, coverage, ingestionLog };
+  }));
+
+  // --- PERSPECTIVAS v3: entrada manual de observación verificada ───────────────
+
+  ipcMain.handle("perspectives:addObservation", withResult(async (_, obs: {
+    sourceId: string; assetId: string; ticker: string; publisher: string;
+    author?: string; reportTitle: string; originalUrl: string; sourceType: string;
+    publishedAt: number; targetYear: number; targetType: "point" | "range" | "low_base_high";
+    originalCurrency?: string;
+    targetLowOriginal?: number | null; targetBaseOriginal?: number | null; targetHighOriginal?: number | null;
+    methodology?: string; verified?: boolean;
+  }) => {
+    const sqlite = (require("@crypto-control/database") as typeof import("@crypto-control/database")).getSqlite();
+    if (!sqlite) throw new Error("Base de datos no disponible");
+    const { verifyUrl } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+
+    // Verificar URL antes de insertar
+    const urlCheck = await verifyUrl(obs.originalUrl);
+    if (!urlCheck.reachable) {
+      throw new Error(`URL no verificable: ${obs.originalUrl} — ${urlCheck.errorMessage ?? `HTTP ${urlCheck.statusCode}`}`);
+    }
+
+    const now = Date.now();
+    const id = `manual-${obs.assetId}-${obs.targetYear}-${now}`;
+
+    // Calcular scores básicos
+    const freshnessMs = now - obs.publishedAt;
+    const freshnessYears = freshnessMs / (365.25 * 24 * 3600 * 1000);
+    const freshnessScore = Math.max(0, Math.exp(-freshnessYears / 1.5));
+    const horizonYears = obs.targetYear - new Date(now).getFullYear();
+    const horizonScore = horizonYears >= 3 ? 0.90 : horizonYears >= 1 ? 0.70 : 0.50;
+    const qualityScore = obs.verified ? 0.85 : 0.65;
+    const methodologyScore = obs.methodology ? 0.80 : 0.60;
+    const independenceScore = 0.75;
+    const finalWeight = qualityScore * 0.30 + freshnessScore * 0.25 + horizonScore * 0.20 +
+      methodologyScore * 0.15 + independenceScore * 0.10 + (obs.verified ? 0.10 : 0);
+
+    const fxRate = 0.92; // ECB aprox; se puede actualizar posteriormente
+
+    sqlite.prepare(`
+      INSERT OR REPLACE INTO forecast_observations (
+        id, source_id, asset_id, ticker, publisher, author, report_title, original_url,
+        source_type, published_at, retrieved_at, verified_at, expires_at, target_year, target_type,
+        original_currency, target_low_original, target_base_original, target_high_original,
+        fx_rate, fx_rate_at, fx_source, methodology, quality_score, freshness_score,
+        horizon_score, methodology_score, independence_score, final_weight, verified, active, forecast_version
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      id, obs.sourceId, obs.assetId, obs.ticker, obs.publisher, obs.author ?? null,
+      obs.reportTitle, obs.originalUrl, obs.sourceType, obs.publishedAt, now,
+      obs.verified ? now : null,
+      new Date(obs.targetYear + 1, 0, 1).getTime(),
+      obs.targetYear, obs.targetType, obs.originalCurrency ?? "USD",
+      obs.targetLowOriginal ?? null, obs.targetBaseOriginal ?? null, obs.targetHighOriginal ?? null,
+      fxRate, now, "ECB reference rate (approx)", obs.methodology ?? null,
+      qualityScore, freshnessScore, horizonScore, methodologyScore, independenceScore, finalWeight,
+      obs.verified ? 1 : 0, 1, "manual",
+    );
+
+    console.log(`[ForecastIngestion] manual_entry asset=${obs.assetId} year=${obs.targetYear} publisher="${obs.publisher}"`);
+    return { id, verified: urlCheck.reachable };
+  }));
+
+  // --- PERSPECTIVAS v3: ingestión manual de fuentes RSS ────────────────────────
+
+  ipcMain.handle("perspectives:runIngestion", withResult(async (_, opts?: { sourceId?: string }) => {
+    const { ingestSource } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    const sqlite = (require("@crypto-control/database") as typeof import("@crypto-control/database")).getSqlite();
+    if (!sqlite) throw new Error("Base de datos no disponible");
+    const now = Date.now();
+
+    type SrcRow = { id: string; name: string; rss_url: string | null; base_url: string;
+      method: string; check_frequency_hours: number; last_checked_at: number | null;
+      subscription_required: number; };
+    const whereClause = opts?.sourceId
+      ? `WHERE id = '${opts.sourceId.replace(/'/g, "''")}'`
+      : `WHERE status = 'active' AND method != 'manual'`;
+    const sources = sqlite.prepare(
+      `SELECT id, name, rss_url, base_url, method, check_frequency_hours, last_checked_at, subscription_required
+       FROM forecast_sources ${whereClause} ORDER BY priority`
+    ).all() as SrcRow[];
+
+    function srcRowToIngestable(src: SrcRow): import("@crypto-control/portfolio").IngestableSource {
+      return {
+        id: src.id, name: src.name, rssUrl: src.rss_url, baseUrl: src.base_url,
+        method: src.method as "rss" | "http" | "manual",
+        checkFrequencyHours: src.check_frequency_hours,
+        lastCheckedAt: src.last_checked_at, subscriptionRequired: src.subscription_required,
+      };
+    }
+
+    const results: Array<{ sourceId: string; name: string; status: string; newItems: number; itemsScanned: number; errorMessage: string | null; flaggedTitles: string[] }> = [];
+    for (const src of sources) {
+      const result = await ingestSource(srcRowToIngestable(src), now);
+      sqlite.prepare(`
+        INSERT INTO forecast_ingestion_log (id, source_id, checked_at, status, new_items, items_scanned, error_message)
+        VALUES (?,?,?,?,?,?,?)
+      `).run(
+        `log-${src.id}-${now}`, src.id, now, result.status,
+        result.newItems, result.itemsScanned, result.errorMessage ?? null,
+      );
+      sqlite.prepare(
+        `UPDATE forecast_sources SET last_checked_at = ?,
+         last_success_at = CASE WHEN ? = 'success' THEN ? ELSE last_success_at END,
+         consecutive_errors = CASE WHEN ? = 'error' THEN consecutive_errors + 1 ELSE 0 END
+         WHERE id = ?`
+      ).run(now, result.status, now, result.status, src.id);
+      results.push({ sourceId: src.id, name: src.name, status: result.status, newItems: result.newItems,
+        itemsScanned: result.itemsScanned, errorMessage: result.errorMessage, flaggedTitles: result.flaggedTitles });
+    }
+    return { checkedAt: now, sources: results.length, results };
   }));
 
   // --- COMPRA INTELIGENTE: recomendación explicable sin ejecución automática ---
@@ -5983,10 +6198,74 @@ app.whenReady().then(() => {
 
   console.log(`[Timing] TOTAL arranque hasta IPC listo: ${Date.now() - _processStart}ms`);
 
+  // Ingestión periódica de fuentes RSS públicas (cada 3 horas para medios, 24h para research)
+  // El primer ciclo arranca 60 segundos después del lanzamiento para no bloquear el arranque.
+  setTimeout(() => {
+    runForecastIngestion().catch(e => console.error("[ForecastIngestion] Error en ciclo inicial:", e));
+    // Cada 3 horas para medios (RSS)
+    setInterval(() => {
+      runForecastIngestion("media").catch(e => console.error("[ForecastIngestion] Error en ciclo RSS:", e));
+    }, 3 * 60 * 60 * 1000);
+    // Cada 24 horas para fuentes de investigación
+    setInterval(() => {
+      runForecastIngestion("research").catch(e => console.error("[ForecastIngestion] Error en ciclo research:", e));
+    }, 24 * 60 * 60 * 1000);
+  }, 60_000);
+
   app.on("activate", function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
+
+async function runForecastIngestion(category?: "media" | "research"): Promise<void> {
+  const { ingestSource } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+  const sqlite = (require("@crypto-control/database") as typeof import("@crypto-control/database")).getSqlite();
+  if (!sqlite) return;
+  const now = Date.now();
+
+  const mediaCategories = ["media"];
+  const researchCategories = ["asset_manager", "bank", "research_firm", "exchange_research", "analytics"];
+  const targetCategories = !category ? [...mediaCategories, ...researchCategories]
+    : category === "media" ? mediaCategories : researchCategories;
+  const targetFreqHours = !category ? 3 : category === "media" ? 3 : 24;
+
+  type SrcRow = { id: string; name: string; rss_url: string | null; base_url: string;
+    method: string; check_frequency_hours: number; last_checked_at: number | null; subscription_required: number; };
+
+  const placeholders = targetCategories.map(() => "?").join(",");
+  const sources = sqlite.prepare(
+    `SELECT id, name, rss_url, base_url, method, check_frequency_hours, last_checked_at, subscription_required
+     FROM forecast_sources
+     WHERE status = 'active' AND method != 'manual'
+     AND category IN (${placeholders})
+     AND (last_checked_at IS NULL OR last_checked_at < ?)
+     ORDER BY priority`
+  ).all(...targetCategories, now - targetFreqHours * 3600 * 1000) as SrcRow[];
+
+  for (const src of sources) {
+    try {
+      const ingestable: import("@crypto-control/portfolio").IngestableSource = {
+        id: src.id, name: src.name, rssUrl: src.rss_url, baseUrl: src.base_url,
+        method: src.method as "rss" | "http" | "manual",
+        checkFrequencyHours: src.check_frequency_hours,
+        lastCheckedAt: src.last_checked_at, subscriptionRequired: src.subscription_required,
+      };
+      const result = await ingestSource(ingestable, now);
+      sqlite.prepare(
+        `INSERT INTO forecast_ingestion_log (id, source_id, checked_at, status, new_items, items_scanned, error_message)
+         VALUES (?,?,?,?,?,?,?)`
+      ).run(`log-${src.id}-${now}`, src.id, now, result.status, result.newItems, result.itemsScanned, result.errorMessage ?? null);
+      sqlite.prepare(
+        `UPDATE forecast_sources SET last_checked_at = ?,
+         last_success_at = CASE WHEN ? = 'success' THEN ? ELSE last_success_at END,
+         consecutive_errors = CASE WHEN ? = 'error' THEN consecutive_errors + 1 ELSE 0 END
+         WHERE id = ?`
+      ).run(now, result.status, now, result.status, src.id);
+    } catch (e) {
+      console.error(`[ForecastIngestion] source=${src.id} fatal_error:`, e instanceof Error ? e.message : String(e));
+    }
+  }
+}
 
 app.on("window-all-closed", function () {
   if (process.platform !== "darwin") app.quit();

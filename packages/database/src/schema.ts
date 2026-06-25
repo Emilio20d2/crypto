@@ -586,3 +586,82 @@ export const strategicSignals = sqliteTable("strategic_signals", {
     idxSignalsDetected: index("idx_strategic_signals_detected").on(table.detectedAt),
   };
 });
+
+// ─── Motor de Perspectivas — fuentes registradas ──────────────────────────────
+
+export const forecastSources = sqliteTable("forecast_sources", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  category: text("category").notNull(), // "asset_manager" | "bank" | "research_firm" | "media" | "analytics" | "exchange_research"
+  baseUrl: text("base_url").notNull(),
+  rssUrl: text("rss_url"),
+  method: text("method").notNull().default("manual"), // "rss" | "http" | "manual"
+  checkFrequencyHours: integer("check_frequency_hours").notNull().default(24),
+  lastCheckedAt: integer("last_checked_at"),
+  lastSuccessAt: integer("last_success_at"),
+  consecutiveErrors: integer("consecutive_errors").notNull().default(0),
+  status: text("status").notNull().default("active"), // "active" | "paused" | "error" | "discontinued"
+  priority: integer("priority").notNull().default(5),
+  subscriptionRequired: integer("subscription_required").notNull().default(0),
+  notes: text("notes"),
+}, (table) => ({
+  idxForecastSourcesStatus: index("idx_forecast_sources_status").on(table.status),
+}));
+
+// ─── Motor de Perspectivas — observaciones individuales de previsión ──────────
+
+export const forecastObservations = sqliteTable("forecast_observations", {
+  id: text("id").primaryKey(),
+  sourceId: text("source_id").notNull(),
+  assetId: text("asset_id").notNull(),        // "bitcoin" | "ethereum" | "sui" …
+  ticker: text("ticker").notNull(),            // "BTC" | "ETH" | "SUI" …
+  publisher: text("publisher").notNull(),
+  author: text("author"),
+  reportTitle: text("report_title").notNull(),
+  originalUrl: text("original_url").notNull(),
+  sourceType: text("source_type").notNull(),   // "asset_manager" | "bank" | "research_firm" | "media" | "analytics"
+  publishedAt: integer("published_at").notNull(),
+  retrievedAt: integer("retrieved_at").notNull(),
+  verifiedAt: integer("verified_at"),
+  expiresAt: integer("expires_at"),
+  targetYear: integer("target_year").notNull(),
+  targetType: text("target_type").notNull().default("point"), // "point" | "range" | "low_base_high"
+  originalCurrency: text("original_currency").notNull().default("USD"),
+  targetLowOriginal: real("target_low_original"),
+  targetBaseOriginal: real("target_base_original"),
+  targetHighOriginal: real("target_high_original"),
+  targetLowEur: real("target_low_eur"),
+  targetBaseEur: real("target_base_eur"),
+  targetHighEur: real("target_high_eur"),
+  fxRate: real("fx_rate"),
+  fxRateAt: integer("fx_rate_at"),
+  fxSource: text("fx_source"),
+  methodology: text("methodology"),
+  qualityScore: real("quality_score").notNull().default(0.5),
+  freshnessScore: real("freshness_score").notNull().default(0.5),
+  horizonScore: real("horizon_score").notNull().default(0.5),
+  methodologyScore: real("methodology_score").notNull().default(0.5),
+  independenceScore: real("independence_score").notNull().default(0.5),
+  finalWeight: real("final_weight").notNull().default(0.5),
+  verified: integer("verified").notNull().default(0),
+  active: integer("active").notNull().default(1),
+  rejectedReason: text("rejected_reason"),
+  forecastVersion: text("forecast_version").notNull().default("1"),
+}, (table) => ({
+  idxForecastObsAsset: index("idx_forecast_obs_asset").on(table.assetId, table.targetYear, table.active),
+  idxForecastObsSource: index("idx_forecast_obs_source").on(table.sourceId),
+}));
+
+// ─── Motor de Perspectivas — log de ingestión ─────────────────────────────────
+
+export const forecastIngestionLog = sqliteTable("forecast_ingestion_log", {
+  id: text("id").primaryKey(),
+  sourceId: text("source_id").notNull(),
+  checkedAt: integer("checked_at").notNull(),
+  status: text("status").notNull(), // "success" | "error" | "no_change"
+  newItems: integer("new_items").notNull().default(0),
+  itemsScanned: integer("items_scanned").notNull().default(0),
+  errorMessage: text("error_message"),
+}, (table) => ({
+  idxForecastLogSource: index("idx_forecast_log_source").on(table.sourceId, table.checkedAt),
+}));

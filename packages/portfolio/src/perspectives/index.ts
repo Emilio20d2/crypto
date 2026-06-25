@@ -6,3 +6,13 @@ export {
   buildExternalPriceMap, monthKey, getAssetTier, CIRCULATING_SUPPLY_M,
   type CoverageState, type ExternalPriceResult,
 } from "./external-price-builder";
+export {
+  observationToForecastSources, computeCoverageMatrix, computeFinalWeight,
+  MIN_SOURCES_FOR_QUANTILE,
+  type ObservationRow, type SourceRow, type IngestionLogRow, type AssetYearCoverage,
+} from "./forecast-repository";
+export {
+  ingestSource, ingestRssSource, ingestHttpSource, verifyUrl,
+  type IngestableSource, type IngestResult,
+} from "./forecast-ingestion";
+export { SEED_FORECAST_SOURCES, SEED_FORECAST_OBSERVATIONS, type SeedSource, type SeedObservation } from "./forecast-seed";

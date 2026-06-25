@@ -161,6 +161,9 @@ const cryptoControl = {
     getConsolidatedSnapshot: ()                                    => ipcRenderer.invoke("perspectives:getConsolidatedSnapshot"),
     getProjection:           (input?: unknown)                     => ipcRenderer.invoke("perspectives:getProjection", input),
     getAnalystForecasts:     ()                                    => ipcRenderer.invoke("perspectives:getAnalystForecasts"),
+    getForecastStatus:       ()                                    => ipcRenderer.invoke("perspectives:getForecastStatus"),
+    addObservation:          (obs: unknown)                        => ipcRenderer.invoke("perspectives:addObservation", obs),
+    runIngestion:            (opts?: unknown)                      => ipcRenderer.invoke("perspectives:runIngestion", opts),
   },
   persp2: {
     getSimulation: (input?: { horizonYears?: number; policy?: "plan_base" | "full_strategy" }) =>
