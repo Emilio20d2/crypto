@@ -666,7 +666,12 @@ function AnalystForecastSection({ years, activeAssets, assetPriceInfo }: {
   };
 
   const toggleAsset = (ticker: string) =>
-    setExpandedAssets(prev => { const n = new Set(prev); n.has(ticker) ? n.delete(ticker) : n.add(ticker); return n; });
+    setExpandedAssets(prev => {
+      const n = new Set(prev);
+      if (n.has(ticker)) n.delete(ticker);
+      else n.add(ticker);
+      return n;
+    });
 
   return (
     <Card>

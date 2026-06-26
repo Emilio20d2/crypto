@@ -11,7 +11,9 @@ function getReadAt(): number | null {
   try { return Number(localStorage.getItem(READ_KEY)) || null; } catch { return null; }
 }
 function saveReadAt(v: number) {
-  try { localStorage.setItem(READ_KEY, String(v)); } catch {}
+  try { localStorage.setItem(READ_KEY, String(v)); } catch {
+    // localStorage may be unavailable in restricted contexts.
+  }
 }
 
 interface SellAlert {

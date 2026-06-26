@@ -185,7 +185,6 @@ export function Portfolio() {
   const prevSnapshotVersionRef = useRef<string | null>(null);
   const [manualPortfolioId, setManualPortfolioId] = useState<string | null>(null);
   const [period, setPeriod] = useState<Period>("24h");
-  const [liveUpdateMs, setLiveUpdateMs] = useState<number | null>(null);
   const [secondsAgo, setSecondsAgo] = useState<number | null>(null);
 
   const { data: statusRes, isLoading: loadingStatus } = useQuery({
@@ -338,10 +337,10 @@ export function Portfolio() {
     }
     return map;
   }, [liveSnapshot]);
+  const liveUpdateMs = liveSnapshot?.receivedAt ?? null;
 
   useEffect(() => {
     if (!liveSnapshot?.receivedAt) return;
-    setLiveUpdateMs(liveSnapshot.receivedAt);
 
     const version = liveSnapshot.snapshotVersion ?? liveSnapshot.portfolioVersion ?? null;
     if (version && prevSnapshotVersionRef.current !== null && prevSnapshotVersionRef.current !== version) {
@@ -403,7 +402,6 @@ export function Portfolio() {
     const liveBreakdown = breakdownRes?.ok && breakdownRes.data.state === "live" ? breakdownRes.data : null;
     if (liveBreakdown) {
       const liveValue = liveBreakdown.positions.reduce(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (sum: number, p: any) => {
           if (typeof p.totalBalanceFiat !== "number" || !Number.isFinite(p.totalBalanceFiat)) return sum;
           if (p.isCash && p.asset !== "EURC") return sum; // exclude EUR fiat, keep EURC

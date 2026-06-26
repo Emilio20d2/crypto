@@ -309,7 +309,8 @@ function AddAssetForm({
   // Sync assetId when catalog loads after first render (async query)
   useEffect(() => {
     if (!assetId && catalog.length > 0) {
-      setAssetId(catalog[0].id);
+      const id = window.setTimeout(() => setAssetId(catalog[0].id), 0);
+      return () => window.clearTimeout(id);
     }
   }, [catalog, assetId]);
   const [percentage, setPercentage] = useState("");

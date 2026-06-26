@@ -868,15 +868,6 @@ describe("Prueba de 6 ciclos — valor total cada 5 segundos", () => {
 
 describe("Detección de cambio de balance", () => {
   const now = Date.now();
-  let syncCount = 0;
-
-  beforeEach(() => {
-    syncCount = 0;
-    window.cryptoControl.coinbase.sync = () => {
-      syncCount++;
-      return ok({ itemsProcessed: 0, newTransactions: 0, skippedDuplicates: 0 });
-    };
-  });
 
   test("cambio de snapshotVersion dispara syncInBackground", async () => {
     let callCount = 0;
