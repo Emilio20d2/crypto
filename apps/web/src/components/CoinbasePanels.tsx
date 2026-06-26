@@ -356,6 +356,16 @@ export function CoinbaseSettingsPanel() {
   const statusState: ConnectionState = statusQuery.isLoading ? "checking" : connected ? "connected" : "disconnected";
   const isBusy = statusQuery.isLoading || connectionState === "connecting" || connectionState === "syncing";
 
+  const refreshCoinbaseDependentQueries = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["coinbase"] }),
+      queryClient.invalidateQueries({ queryKey: ["transactions"] }),
+      queryClient.invalidateQueries({ queryKey: ["portfolio"] }),
+      queryClient.invalidateQueries({ queryKey: ["treasury"] }),
+      queryClient.invalidateQueries({ queryKey: ["treasury-summary"] }),
+    ]);
+  };
+
   const applyImportResult = async (data: CdpImportResult) => {
     setConnectionState("connected");
     setImportMode("none");
@@ -364,7 +374,7 @@ export function CoinbaseSettingsPanel() {
     if (data.permissions.canTransfer) extraPerms.push("transferencias");
     setWarnMsg(extraPerms.length ? `Se recomienda una clave solo lectura. Permisos adicionales: ${extraPerms.join(", ")}.` : "");
     setSuccessMsg("Credencial validada y guardada correctamente.");
-    await queryClient.invalidateQueries({ queryKey: ["coinbase"] });
+    await refreshCoinbaseDependentQueries();
   };
 
   const handleImportFile = async () => {
@@ -422,7 +432,7 @@ export function CoinbaseSettingsPanel() {
     setSuccessMsg("Coinbase desconectado.");
     setWarnMsg("");
     setErrorMsg("");
-    await queryClient.invalidateQueries({ queryKey: ["coinbase"] });
+    await refreshCoinbaseDependentQueries();
   };
 
   const handleSync = async () => {
@@ -433,8 +443,7 @@ export function CoinbaseSettingsPanel() {
     if (result.ok) {
       setLastSyncResult(result.data);
       setSuccessMsg(`${result.data.newTransactions} nuevas · ${result.data.skippedDuplicates} duplicadas · ${result.data.itemsProcessed} procesadas.`);
-      await queryClient.invalidateQueries({ queryKey: ["transactions"] });
-      await queryClient.invalidateQueries({ queryKey: ["coinbase"] });
+      await refreshCoinbaseDependentQueries();
       setConnectionState("connected");
       return;
     }

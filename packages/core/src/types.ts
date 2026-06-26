@@ -177,6 +177,69 @@ export interface CatalogAsset {
   hasCoinbase: boolean;
 }
 
+export interface PortfolioLiveSnapshot {
+  requestedAt: number;
+  receivedAt: number;
+  marketTimestamp?: number;
+  snapshotVersion: string;
+  balanceVersion?: string;
+  priceVersion: string;
+  usingFallback: boolean;
+  balances?: Array<{
+    accountId: string | null;
+    assetId: string;
+    available: number;
+    hold: number;
+    total: number;
+    source: "coinbase" | "cache";
+  }>;
+  prices?: Record<string, {
+    assetId: string;
+    productId: string | null;
+    priceEur: number | null;
+    originalPrice: number | null;
+    originalCurrency: "EUR" | "USD" | null;
+    fxRate: number | null;
+    fxSource: string | null;
+    source: string;
+    quotedAt: number;
+    state: "live" | "polling" | "fallback" | "stale" | "unavailable";
+  }>;
+  accounts: Array<{
+    assetId: string;
+    availableBalance: number;
+    holdBalance: number;
+    totalBalance: number;
+  }>;
+  positions: Array<{
+    assetId: string;
+    quantity: number;
+    availableBalance: number;
+    holdBalance: number;
+    currentPriceEur: number | null;
+    priceEur?: number | null;
+    priceSource: string;
+    priceStatus: "complete" | "live" | "polling" | "cached" | "partial" | "fallback" | "stale" | "unavailable";
+    currentValueEur: number | null;
+    valueEur?: number | null;
+  }>;
+  eurBalance: number;
+  eurcBalance: number;
+  eurcValueEur: number;
+  cryptoValueEur: number;
+  totalAssetValueEur: number | null;
+  isComplete: boolean;
+  complete?: boolean;
+  stale?: boolean;
+  missingPrices: string[];
+  warnings: string[];
+  skippedTicks?: number;
+  // Legacy compat fields
+  timestamp: number;
+  fiat: "EUR";
+  portfolioVersion: string;
+}
+
 // API Interface
 export interface CryptoControlAPI {
   assets: {
@@ -208,41 +271,8 @@ export interface CryptoControlAPI {
       legsStillPending: number;
       byAsset: Record<string, { checked: number; backfilled: number }>;
     }>>;
-    getLiveSnapshot(portfolioUuid: string): Promise<Result<{
-      requestedAt: number;
-      receivedAt: number;
-      snapshotVersion: string;
-      usingFallback: boolean;
-      accounts: Array<{
-        assetId: string;
-        availableBalance: number;
-        holdBalance: number;
-        totalBalance: number;
-      }>;
-      positions: Array<{
-        assetId: string;
-        quantity: number;
-        availableBalance: number;
-        holdBalance: number;
-        currentPriceEur: number | null;
-        priceSource: string;
-        priceStatus: "complete" | "live" | "cached" | "partial" | "fallback" | "unavailable";
-        currentValueEur: number | null;
-      }>;
-      eurBalance: number;
-      eurcBalance: number;
-      eurcValueEur: number;
-      cryptoValueEur: number;
-      totalAssetValueEur: number;
-      isComplete: boolean;
-      missingPrices: string[];
-      warnings: string[];
-      // Legacy compat fields
-      timestamp: number;
-      fiat: "EUR";
-      priceVersion: string;
-      portfolioVersion: string;
-    } | null>>;
+    getLiveSnapshot(portfolioUuid: string): Promise<Result<PortfolioLiveSnapshot | null>>;
+    onLiveSnapshot?: (callback: (snapshot: PortfolioLiveSnapshot) => void) => () => void;
   };
   diagnostics: {
     getReport(): Promise<Result<{

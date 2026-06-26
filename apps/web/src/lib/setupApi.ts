@@ -32,6 +32,7 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
       getHistoricalSeries: (i?: unknown) => ipc("portfolio:get-historical-series", i),
       backfillCostBasis:   () => ipc("portfolio:backfillCostBasis"),
       getLiveSnapshot:     (uuid: unknown) => ipc("portfolio:get-live-snapshot", uuid),
+      onLiveSnapshot:      () => () => {},
     },
     diagnostics: {
       getReport: () => ipc("diagnostics:getReport"),

@@ -3271,7 +3271,7 @@ function setupIpcHandlers() {
     const client = new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem);
     const syncService = new CoinbaseSyncService(syncDb, schema, client);
     const result = await syncService.syncWithErrorHandling();
-    void realtimeEngine?.refreshNow("manual-sync");
+    await realtimeEngine?.refreshNow("manual-sync");
 
     // Best-effort, non-blocking — newly-imported legs get a chance at a real
     // historical-price cost basis right away without slowing down sync itself.

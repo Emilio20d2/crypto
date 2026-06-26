@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { Portfolio } from "./pages/Portfolio";
@@ -566,9 +566,9 @@ describe("Cartera Coinbase", () => {
   });
 });
 
-// ─── Sincronización viva cada 5 s ─────────────────────────────────────────────
+// ─── Sincronización viva desde el motor central ───────────────────────────────
 
-describe("Cartera — live snapshot 5 s", () => {
+describe("Cartera — live snapshot del motor central", () => {
   const makeLiveSnapshot = (overrides?: Partial<{
     btcBalance: number; btcPrice: number; btcValue: number;
     eurBalance: number; eurcBalance: number;
@@ -605,7 +605,7 @@ describe("Cartera — live snapshot 5 s", () => {
     };
   };
 
-  test("precio de la tarjeta BTC se actualiza con el snapshot vivo (5 s)", async () => {
+  test("precio de la tarjeta BTC se actualiza con el snapshot vivo", async () => {
     // Breakdown tiene BTC a 55.340 €; live snapshot lo actualiza a 90.000 €
     window.cryptoControl.portfolio.getLiveSnapshot = () => ok(makeLiveSnapshot({ btcPrice: 90000 }));
 
@@ -798,7 +798,7 @@ describe("Prueba de 6 ciclos — valor total cada 5 segundos", () => {
 
   test("6 snapshots consecutivos se procesan correctamente por calculateLiveTotalAssetValue", async () => {
     // Verificación funcional: cada snapshot del ciclo produce el total correcto
-    // (el timing de 5 s lo gestiona React Query; aquí probamos la lógica de cálculo)
+    // (el timing de 5 s lo gestiona el motor central; aquí probamos la lógica de cálculo)
     const { calculateLiveTotalAssetValue } = await import("./lib/live-snapshot");
 
     const expected = [50_000, 50_100, 50_200, 50_300, 50_400, 50_500];
@@ -859,10 +859,56 @@ describe("Detección de cambio de balance", () => {
       expect(screen.getByText("50.000,00 €")).toBeInTheDocument();
     });
 
-    // Segundo snapshot tiene distinta snapshotVersion (balance cambió en Coinbase)
-    // El sync se dispara en background; testear que la UI actualizó el valor es suficiente
-    // (el sync real requeriría fake timers para el refetchInterval)
-    // Verificamos que el primer snapshot se procesó correctamente
+    // El primer snapshot se procesa; los cambios posteriores llegan por evento
+    // portfolio:live-snapshot desde el motor central.
     expect(callCount).toBeGreaterThanOrEqual(1);
+  });
+
+  test("evento portfolio:live-snapshot actualiza el total sin polling del renderer", async () => {
+    let liveSnapshotCallback: ((snapshot: any) => void) | null = null;
+    window.cryptoControl.portfolio.getLiveSnapshot = () =>
+      Promise.resolve({
+        ok: true as const,
+        data: {
+          requestedAt: now, receivedAt: now,
+          snapshotVersion: "v1-initial", usingFallback: false,
+          accounts: [], positions: [],
+          eurBalance: 0, eurcBalance: 0, eurcValueEur: 0,
+          cryptoValueEur: 50_000, totalAssetValueEur: 50_000,
+          isComplete: true, missingPrices: [], warnings: [],
+          timestamp: now, fiat: "EUR" as const,
+          priceVersion: String(now), portfolioVersion: "v1-initial",
+        },
+      });
+    window.cryptoControl.portfolio.onLiveSnapshot = (callback) => {
+      liveSnapshotCallback = callback;
+      return () => {
+        liveSnapshotCallback = null;
+      };
+    };
+    window.cryptoControl.coinbase.getPortfolioBreakdown = () => new Promise(() => {});
+
+    renderWithQuery(<Portfolio />);
+
+    await waitFor(() => {
+      expect(screen.getByText("50.000,00 €")).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      liveSnapshotCallback?.({
+        requestedAt: now + 5_000, receivedAt: now + 5_000,
+        snapshotVersion: "v2-event", usingFallback: false,
+        accounts: [], positions: [],
+        eurBalance: 0, eurcBalance: 0, eurcValueEur: 0,
+        cryptoValueEur: 50_500, totalAssetValueEur: 50_500,
+        isComplete: true, missingPrices: [], warnings: [],
+        timestamp: now + 5_000, fiat: "EUR" as const,
+        priceVersion: String(now + 5_000), portfolioVersion: "v2-event",
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("50.500,00 €")).toBeInTheDocument();
+    });
   });
 });

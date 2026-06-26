@@ -19,8 +19,6 @@ import type { Period } from "../components/PeriodSelector";
 import { formatDateTime } from "../lib/format";
 import { calculateLiveTotalAssetValue, type LivePortfolioValueSnapshot } from "../lib/live-snapshot";
 
-// Snapshot ligero en vivo: cuentas + balances + precios cada 5 s
-const LIVE_COINBASE_REFRESH_MS = 5_000;
 // Breakdown completo (sparklines + metadatos de mercado) cada 30 s
 const BREAKDOWN_REFRESH_MS = 30_000;
 // Auto-sync completo de Coinbase cada 5 min — operación pesada (histórico + FIFO)
@@ -189,21 +187,30 @@ export function Portfolio() {
 
   const breakdown = breakdownRes?.ok ? breakdownRes.data : null;
 
-  // Snapshot ligero de precios: solo precio + valor calculado. Cada 5 s.
-  // El handler en main.ts ya tiene su propio guard de solapamiento (devuelve
-  // lastLiveSnapshotData si hay una petición en curso). No usar guard en el UI
-  // porque devolver undefined en React Query v5 borra el dato cacheado.
+  const liveSnapshotQueryKey = useMemo(
+    () => ["portfolio", "live-snapshot", selectedPortfolioId] as const,
+    [selectedPortfolioId],
+  );
+
+  // Snapshot ligero de precios: el fetch inicial arranca el motor en main; las
+  // actualizaciones posteriores llegan por evento IPC desde el motor central.
   const { data: liveSnapshotRes } = useQuery({
-    queryKey: ["portfolio", "live-snapshot", selectedPortfolioId],
+    queryKey: liveSnapshotQueryKey,
     queryFn: () => window.cryptoControl.portfolio.getLiveSnapshot(selectedPortfolioId!),
     enabled: !!selectedPortfolioId,
-    staleTime: 0,
-    refetchInterval: LIVE_COINBASE_REFRESH_MS,
-    refetchIntervalInBackground: true,
+    staleTime: 10_000,
     refetchOnWindowFocus: "always",
     refetchOnReconnect: "always",
     refetchOnMount: "always",
   });
+
+  useEffect(() => {
+    if (!selectedPortfolioId) return;
+    const unsubscribe = window.cryptoControl.portfolio.onLiveSnapshot?.((snapshot) => {
+      queryClient.setQueryData(liveSnapshotQueryKey, { ok: true, data: snapshot });
+    });
+    return () => unsubscribe?.();
+  }, [liveSnapshotQueryKey, queryClient, selectedPortfolioId]);
 
   // Real reconstruction: historical qty (from transactionLegs) × historical
   // price (from priceHistory/candle cache) per asset, summed per timestamp.
@@ -252,7 +259,7 @@ export function Portfolio() {
         await queryClient.invalidateQueries({ queryKey: ["coinbase", "portfolios"] });
         await queryClient.invalidateQueries({ queryKey: ["transactions"] });
         await queryClient.invalidateQueries({ queryKey: ["portfolio", "positions"] });
-        await queryClient.invalidateQueries({ queryKey: ["portfolio", "live-snapshot"] });
+        await queryClient.refetchQueries({ queryKey: ["portfolio", "live-snapshot"], type: "active" });
       }
     } finally {
       backgroundSyncRunning.current = false;
