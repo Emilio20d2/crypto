@@ -324,6 +324,57 @@ function setupIpcHandlers() {
     };
   }
 
+  function createRealtimeWebSocket(url: string): import("./realtime-portfolio-market-engine").RealtimeWebSocket {
+    const GlobalWebSocket = (globalThis as { WebSocket?: new (url: string) => unknown }).WebSocket;
+    // Electron's packaged main process may not expose global WebSocket. The
+    // ws adapter keeps Coinbase ticker streaming available in the installed app.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const requiredWs = require("ws") as { WebSocket?: new (url: string) => unknown } & (new (url: string) => unknown);
+    const WsCtor = GlobalWebSocket ?? requiredWs.WebSocket ?? requiredWs;
+    const raw = new WsCtor(url) as {
+      readyState?: number;
+      send(data: string): void;
+      close(): void;
+      addEventListener?: (event: string, handler: (event: { data?: unknown }) => void) => void;
+      on?: (event: string, handler: (...args: unknown[]) => void) => void;
+    };
+    const adapter: import("./realtime-portfolio-market-engine").RealtimeWebSocket = {
+      onopen: null,
+      onmessage: null,
+      onerror: null,
+      onclose: null,
+      get readyState() {
+        return raw.readyState ?? 0;
+      },
+      send(data: string) {
+        raw.send(data);
+      },
+      close() {
+        raw.close();
+      },
+    };
+    const toStringPayload = (data: unknown) => {
+      if (typeof data === "string") return data;
+      if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
+      if (ArrayBuffer.isView(data)) return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf8");
+      return data;
+    };
+
+    if (typeof raw.addEventListener === "function") {
+      raw.addEventListener("open", () => adapter.onopen?.());
+      raw.addEventListener("message", (event) => adapter.onmessage?.({ data: toStringPayload(event.data) }));
+      raw.addEventListener("error", (event) => adapter.onerror?.(event));
+      raw.addEventListener("close", () => adapter.onclose?.());
+    } else if (typeof raw.on === "function") {
+      raw.on("open", () => adapter.onopen?.());
+      raw.on("message", (data) => adapter.onmessage?.({ data: toStringPayload(data) }));
+      raw.on("error", (error) => adapter.onerror?.(error));
+      raw.on("close", () => adapter.onclose?.());
+    }
+
+    return adapter;
+  }
+
   // --- Permission settings helpers (no live API calls) ---
   function savePermissions(perms: { canView: boolean; canTrade: boolean; canTransfer: boolean }): void {
     const upsert = (key: string, val: string) =>
@@ -3536,9 +3587,7 @@ function setupIpcHandlers() {
     getCachedPortfolioBreakdown: async (portfolioUuid: string) =>
       await getPortfolioServiceInst().getCachedPortfolioBreakdownNoError(portfolioUuid, "EUR"),
     getRestPrice: async (assetId: string) => await getCurrentPriceFast(assetId),
-    createWebSocket: typeof (globalThis as { WebSocket?: unknown }).WebSocket === "function"
-      ? (url: string) => new ((globalThis as { WebSocket: new (url: string) => unknown }).WebSocket)(url) as import("./realtime-portfolio-market-engine").RealtimeWebSocket
-      : undefined,
+    createWebSocket: createRealtimeWebSocket,
     publish: (snapshot) => {
       mainWindow?.webContents.send("portfolio:live-snapshot", snapshot);
     },

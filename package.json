@@ -8,7 +8,8 @@
     "@crypto-control/core": "*",
     "@crypto-control/database": "*",
     "@crypto-control/market-data": "*",
-    "7zip-bin": "^5.2.0"
+    "7zip-bin": "^5.2.0",
+    "ws": "^8.21.0"
   },
   "main": "dist/main.js",
   "scripts": {
