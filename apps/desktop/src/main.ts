@@ -307,13 +307,7 @@ function setupIpcHandlers() {
     const price = snapshot?.prices?.[assetId.toUpperCase()];
     if (!price) return null;
     if (price.priceEur === null) {
-      return {
-        price: null,
-        state: "unavailable",
-        provider: price.source || "realtime",
-        fetchedAt: price.quotedAt || Date.now(),
-        reason: "Precio no disponible en snapshot realtime",
-      };
+      return null;
     }
     return {
       price: price.priceEur,
