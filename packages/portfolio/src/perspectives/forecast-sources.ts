@@ -12,10 +12,14 @@ export interface ForecastSource {
   assetId: string;                 // "bitcoin", "ethereum", etc.
   direction: ForecastDirection;
   targetPriceUsd?: number;         // precio objetivo USD (opcional)
+  targetPriceEur?: number;         // precio objetivo EUR normalizado y versionado (opcional)
   targetYear?: number;             // año del objetivo (e.g. 2025)
   confidence: number;              // 0–1 (certeza declarada por la fuente)
   publishedAt: number;             // timestamp ms
   expiresAt: number;               // timestamp ms; null = no expira
+  fxRate?: number | null;           // EUR por 1 USD usado al normalizar
+  fxRateAt?: number | null;
+  fxSource?: string | null;
   notes?: string;
 }
 

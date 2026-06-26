@@ -24,6 +24,15 @@ export type AssetTier =
   | "small_cap"        // SUI, SEI, OP, ARB…
   | "speculative";     // cualquier activo desconocido
 
+export interface ForecastDataset {
+  sources: import("./forecast-sources").ForecastSource[];
+  candidateId: string | null;
+  activatedAt?: number | null;
+  usdToEurRate: number | null;
+  fxSource: string | null;
+  fxRateAt: number | null;
+}
+
 // ─── Lotes FIFO en la simulación ─────────────────────────────────────────────
 
 export interface SimLot {
@@ -169,7 +178,7 @@ export interface SimEvent {
 
 // ─── Trazabilidad de previsiones por activo ──────────────────────────────────
 
-export type PriceModelType = "external_direct" | "external_interpolated" | "no_coverage";
+export type PriceModelType = "external_direct" | "external_interpolated" | "external_modeled" | "insufficient";
 
 export interface AssetPriceInfo {
   assetId: string;
@@ -181,6 +190,8 @@ export interface AssetPriceInfo {
   externalSourceCount: number;
   directCoverageYears: number[];
   interpolatedCoverageYears: number[];
+  modeledCoverageYears: number[];
+  insufficientYears: number[];
   lastCoveredYear: number | null;
   circulatingSupplyM: number | null;
   impliedMarketCapBnEur: number | null;
@@ -250,6 +261,7 @@ export interface ScenarioDiagnostic {
 export interface SimDiagnostics {
   engineIsNew: true;
   source: "perspectives-external-forecasts";
+  candidateId: string | null;
   engineVersion: string;
   engineBuildHash: string;
   engineGeneratedAt: number;

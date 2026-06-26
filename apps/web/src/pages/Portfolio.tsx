@@ -200,6 +200,9 @@ export function Portfolio() {
     staleTime: 0,
     refetchInterval: LIVE_COINBASE_REFRESH_MS,
     refetchIntervalInBackground: true,
+    refetchOnWindowFocus: "always",
+    refetchOnReconnect: "always",
+    refetchOnMount: "always",
   });
 
   // Real reconstruction: historical qty (from transactionLegs) × historical

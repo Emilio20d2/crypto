@@ -25,6 +25,7 @@ export type {
   PerspectivesSimulation, CurrentPosition, HistoricalLot,
   SimInput, SimCycle, SimCycleAsset, SimSaleRule, SimRebuyTier,
   SimSubstitution, SimRevision, SimOptions, TaxBand,
+  ForecastDataset,
   PriceModelType, CoverageState, ExternalPriceResult,
   ObservationRow, SourceRow, IngestionLogRow, AssetYearCoverage,
   IngestableSource, IngestResult, SeedSource, SeedObservation,

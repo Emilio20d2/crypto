@@ -8,14 +8,22 @@ import type {
   AnnualSnapshot, AnnualAssetPosition, SimEvent, ScenarioResult,
   ScenarioSummary, AssetSimSummary, SimCycle, SimCycleAsset,
   SimSaleRule, SimRebuyTier, SimSubstitution, PerspectivesSimulation,
-  ValidationResult, SimDiagnostics, AssetPriceInfo,
+  ValidationResult, SimDiagnostics, AssetPriceInfo, ForecastDataset,
 } from "./types";
 import { SIM_SCENARIOS, SCENARIO_LABELS, DEFAULT_SIM_OPTIONS } from "./types";
 import {
   buildExternalPriceMap, monthKey, getAssetTier, CIRCULATING_SUPPLY_M,
   type CoverageState,
 } from "./external-price-builder";
-import { KNOWN_FORECASTS } from "./known-forecasts";
+
+const EMPTY_FORECAST_DATASET: ForecastDataset = {
+  sources: [],
+  candidateId: null,
+  activatedAt: null,
+  usdToEurRate: null,
+  fxSource: null,
+  fxRateAt: null,
+};
 
 // ─── FIFO helpers ─────────────────────────────────────────────────────────────
 
@@ -968,7 +976,7 @@ function buildAnnualSnapshot(
   const eurcReinvestedEur = monthsOfYear.reduce((s, m) => s + m.monthEurcReinvestedEur, 0);
   const netEurcInflowEur = monthsOfYear.reduce((s, m) => s + m.monthNetEurcInflowEur, 0);
 
-  const marketGainEur = closingWealthEur - openingWealthEur - contributionsEur;
+  const marketGainEur = closingWealthEur - openingWealthEur - contributionsEur + commissionsEur;
 
   // TWR real: encadenamiento de sub-períodos mensuales.
   // Para cada mes: r_m = (cierre - apertura - aportación) / (apertura + aportación)
@@ -981,7 +989,7 @@ function buildAnnualSnapshot(
       const closing = calcMonthlyWealth(ms, prices);
       const contrib = ms.monthContributionsEur;
       const denom = prevW + contrib;
-      const gain = closing - prevW - contrib;
+      const gain = closing - prevW - contrib + ms.monthCommissionsEur;
       if (denom > 0.01) twrProd *= (1 + gain / denom);
       prevW = closing;
     }
@@ -1065,7 +1073,7 @@ function buildAnnualSnapshot(
     events,
     salesSkipReasons,
     rebuysSkipReasons,
-    forecastCoverage: yearCoverageStates.some(s => s !== "uncovered") ? "covered" : "uncovered",
+    forecastCoverage: yearCoverageStates.some(s => s !== "insufficient") ? "covered" : "uncovered",
   };
 }
 
@@ -1161,6 +1169,7 @@ function calcMaxDrawdown(monthlyWealth: number[]): number | null {
 function runScenario(
   input: SimInput,
   scenario: "conservador" | "moderado" | "base" | "favorable" | "optimista",
+  forecastDataset: ForecastDataset,
 ): ScenarioResult {
   // Build price maps for all asset IDs
   const allAssetIds = [
@@ -1179,7 +1188,7 @@ function runScenario(
   }
 
   // Construir mapas de precios a partir exclusivamente de previsiones externas verificables.
-  // Sin modelo de ciclos interno. Sin extrapolación inventada.
+  // Sin modelo de ciclos interno. Sin carry-forward.
   const externalResultsByAsset: Record<string, ReturnType<typeof buildExternalPriceMap>> = {};
   const prices: Record<string, Record<string, number>> = {};
   for (const assetId of allAssetIds) {
@@ -1192,6 +1201,8 @@ function runScenario(
         coverageByYear: {},
         directYears: [],
         interpolatedYears: [],
+        modeledYears: [],
+        insufficientYears: [],
         lastCoveredYear: null,
         sourceCount: 0,
       };
@@ -1199,7 +1210,13 @@ function runScenario(
       continue;
     }
     const result = buildExternalPriceMap(
-      assetId, currentPrice, scenario, input.now, input.horizonDate, KNOWN_FORECASTS,
+      assetId,
+      currentPrice,
+      scenario,
+      input.now,
+      input.horizonDate,
+      forecastDataset.sources,
+      { usdToEurRate: forecastDataset.usdToEurRate, fxSource: forecastDataset.fxSource },
     );
     externalResultsByAsset[assetId] = result;
     prices[assetId] = result.pricesByMonth;
@@ -1220,17 +1237,20 @@ function runScenario(
     const supplyM = CIRCULATING_SUPPLY_M[assetId.toUpperCase()] ?? null;
     const impliedMarketCapBnEur = supplyM != null && horizonPriceEur != null
       ? (horizonPriceEur * supplyM) / 1_000 : null;
-    const horizonCoverage = extResult.coverageByYear[horizonYear] ?? "uncovered";
+    const horizonCoverage = extResult.coverageByYear[horizonYear] ?? "insufficient";
     const modelType =
       horizonCoverage === "direct"        ? "external_direct" :
       horizonCoverage === "interpolated"  ? "external_interpolated" :
-                                            "no_coverage";
+      horizonCoverage === "modeled"       ? "external_modeled" :
+                                            "insufficient";
     assetPriceInfo[assetId] = {
       assetId, tier, currentPriceEur, horizonPriceEur, priceMultiple,
       modelType,
       externalSourceCount: extResult.sourceCount,
       directCoverageYears: extResult.directYears,
       interpolatedCoverageYears: extResult.interpolatedYears,
+      modeledCoverageYears: extResult.modeledYears,
+      insufficientYears: extResult.insufficientYears,
       lastCoveredYear: extResult.lastCoveredYear,
       circulatingSupplyM: supplyM,
       impliedMarketCapBnEur,
@@ -1275,7 +1295,7 @@ function runScenario(
     const monthsOfYear = byYear[year];
     // Aggregate coverage state for this year across all assets
     const yearCoverageStates: CoverageState[] = allAssetIds.map(id =>
-      externalResultsByAsset[id]?.coverageByYear[year] ?? "uncovered"
+      externalResultsByAsset[id]?.coverageByYear[year] ?? "insufficient"
     );
     const snap = buildAnnualSnapshot(year, monthsOfYear, prices, prevYearLastMonth, input, yearCoverageStates);
     annualSnapshots.push(snap);
@@ -1300,7 +1320,7 @@ function runScenario(
       const closing = calcMonthlyWealth(ms, prices);
       const contrib = ms.monthContributionsEur;
       const denom = pw + contrib;
-      const gain = closing - pw - contrib;
+      const gain = closing - pw - contrib + ms.monthCommissionsEur;
       if (denom > 0.01) twrProduct *= (1 + gain / denom);
       pw = closing;
     }
@@ -1396,7 +1416,10 @@ declare module "./types" {
 
 // ─── Punto de entrada principal ───────────────────────────────────────────────
 
-export function runPerspectivesSimulation(input: SimInput): PerspectivesSimulation {
+export function runPerspectivesSimulation(
+  input: SimInput,
+  forecastDataset: ForecastDataset = EMPTY_FORECAST_DATASET,
+): PerspectivesSimulation {
   // Each scenario must get its own copy of the cycle objects because evaluateSales
   // mutates rule.triggeredAt on the rule object in-place. Without cloning, the first
   // scenario that triggers a sale marks the rule as used for ALL subsequent scenarios.
@@ -1412,7 +1435,7 @@ export function runPerspectivesSimulation(input: SimInput): PerspectivesSimulati
         revisions:     c.revisions.map(r => ({ ...r })),
       })),
     };
-    return runScenario(localInput, scenario);
+    return runScenario(localInput, scenario, forecastDataset);
   });
 
   // El ajuste monotónico artificial ha sido eliminado.
@@ -1491,8 +1514,9 @@ export function runPerspectivesSimulation(input: SimInput): PerspectivesSimulati
   const diagnostics: SimDiagnostics = {
     engineIsNew: true,
     source: "perspectives-external-forecasts",
-    engineVersion: "perspectives-v2.2",
-    engineBuildHash: "a774336",
+    candidateId: forecastDataset.candidateId,
+    engineVersion: "perspectives-v3.0-active-dataset",
+    engineBuildHash: "realtime-perspectives-engine",
     engineGeneratedAt: Date.now(),
     negativeMonthCount,
     negativeYearCount,

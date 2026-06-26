@@ -6,9 +6,8 @@ import type { ForecastSource } from "./forecast-sources";
 import type { ObservationRow } from "./forecast-repository";
 import { observationToForecastSources } from "./forecast-repository";
 import { buildExternalPriceMap } from "./external-price-builder";
-import { KNOWN_FORECASTS } from "./known-forecasts";
 import { runPerspectivesSimulation } from "./sim-engine";
-import type { SimScenario } from "./types";
+import type { ForecastDataset, SimScenario } from "./types";
 
 const SCENARIOS: SimScenario[] = ["conservador", "moderado", "base", "favorable", "optimista"];
 
@@ -71,7 +70,6 @@ export function validateMonotonicity(
   nowMs: number,
   horizonMs: number,
 ): ValidationError | null {
-  const EUR_PER_USD = 0.92;
   const nowYear = new Date(nowMs).getFullYear();
   const horizonYear = new Date(horizonMs).getFullYear();
 
@@ -231,7 +229,7 @@ export function validateStagingObservations(
   const assetIds = [...new Set(allSources.map(f => f.assetId))];
 
   for (const assetId of assetIds) {
-    const currentEur = (currentPricesUsd[assetId.toUpperCase()] ?? 0) * 0.92;
+    const currentEur = currentPricesUsd[assetId.toUpperCase()] ?? 0;
     if (currentEur <= 0) continue;
     const monoErr = validateMonotonicity(allSources, assetId, currentEur, nowMs, horizonMs);
     if (monoErr) warnings.push(monoErr);
@@ -247,8 +245,8 @@ export function validateStagingObservations(
   };
 }
 
-// ─── Test de regresión contra KNOWN_FORECASTS ─────────────────────────────────
-// Compara resultados de simulación del candidato vs estable.
+// ─── Test de regresión entre versión activa y candidato ───────────────────────
+// Compara resultados de simulación del candidato vs versión activa real.
 // Un candidato falla si la diferencia en patrimonio final es >50% en cualquier escenario.
 
 export interface RegressionReport {
@@ -268,14 +266,24 @@ const REGRESSION_MAX_DIFF_PCT = 50;
 export function runRegressionTest(
   candidateSources: ForecastSource[],
   referenceInput: Parameters<typeof runPerspectivesSimulation>[0],
+  activeSources: ForecastSource[] = [],
+  options: Pick<ForecastDataset, "usdToEurRate" | "fxSource" | "fxRateAt"> = {
+    usdToEurRate: null,
+    fxSource: null,
+    fxRateAt: null,
+  },
 ): RegressionReport {
-  const stableResult = runPerspectivesSimulation(referenceInput);
-  const candidateResult = runPerspectivesSimulation({
-    ...referenceInput,
-    // run sim with candidate data by temporarily swapping KNOWN_FORECASTS is not possible
-    // without refactoring — instead we compare summary totals to check for large deviations
-    // The candidate's effect will be visible when the flag is enabled.
-    // For now, this regression test validates that the sim runs without errors.
+  const stableResult = runPerspectivesSimulation(referenceInput, {
+    sources: activeSources,
+    candidateId: "active",
+    activatedAt: null,
+    ...options,
+  });
+  const candidateResult = runPerspectivesSimulation(referenceInput, {
+    sources: candidateSources,
+    candidateId: "candidate",
+    activatedAt: null,
+    ...options,
   });
 
   const diffs = SCENARIOS.map(scenario => {

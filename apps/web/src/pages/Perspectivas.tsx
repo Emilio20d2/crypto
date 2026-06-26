@@ -90,7 +90,7 @@ interface AssetPriceInfo {
   currentPriceEur: number | null;
   horizonPriceEur: number | null;
   priceMultiple: number | null;
-  modelType: "external_direct" | "external_interpolated" | "no_coverage";
+  modelType: "external_direct" | "external_interpolated" | "external_modeled" | "insufficient";
   externalSourceCount: number;
   directCoverageYears: number[];
   interpolatedCoverageYears: number[];
@@ -628,7 +628,7 @@ function ScenarioComparisonTable({
 
 interface AnalystForecast {
   ticker: string; targetYear: number; scenario: string;
-  priceUsd: number; priceEur: number;
+  priceUsd: number; priceEur: number | null;
   source: string; reportTitle: string; reportUrl: string;
   publishedAt: string; reviewedAt: string; nextReviewAt: string;
 }
@@ -717,7 +717,8 @@ function AnalystForecastSection({ years, activeAssets, assetPriceInfo }: {
                   <span>Años: {assetYears.join(", ")}</span>
                   {info?.modelType === "external_direct" && <Badge variant="success">Cobertura directa</Badge>}
                   {info?.modelType === "external_interpolated" && <Badge variant="warning">Interpolado</Badge>}
-                  {info?.modelType === "no_coverage" && <Badge variant="neutral">Sin cobertura</Badge>}
+                  {info?.modelType === "external_modeled" && <Badge variant="neutral">Modelizado</Badge>}
+                  {info?.modelType === "insufficient" && <Badge variant="neutral">Sin cobertura</Badge>}
                 </div>
               </div>
 
@@ -743,10 +744,10 @@ function AnalystForecastSection({ years, activeAssets, assetPriceInfo }: {
                       return (
                         <tr key={year}>
                           <td className="font-mono text-xs font-semibold">{year}</td>
-                          <td className="num text-xs">{cons ? `${cons.priceEur.toLocaleString("es-ES")} €` : "—"}</td>
-                          <td className="num text-xs font-semibold">{base ? `${base.priceEur.toLocaleString("es-ES")} €` : "—"}</td>
-                          <td className="num text-xs">{opt ? `${opt.priceEur.toLocaleString("es-ES")} €` : "—"}</td>
-                          <td className="num text-xs text-muted-foreground">{bull ? `${bull.priceEur.toLocaleString("es-ES")} €` : "—"}</td>
+                          <td className="num text-xs">{cons?.priceEur != null ? `${cons.priceEur.toLocaleString("es-ES")} €` : "—"}</td>
+                          <td className="num text-xs font-semibold">{base?.priceEur != null ? `${base.priceEur.toLocaleString("es-ES")} €` : "—"}</td>
+                          <td className="num text-xs">{opt?.priceEur != null ? `${opt.priceEur.toLocaleString("es-ES")} €` : "—"}</td>
+                          <td className="num text-xs text-muted-foreground">{bull?.priceEur != null ? `${bull.priceEur.toLocaleString("es-ES")} €` : "—"}</td>
                         </tr>
                       );
                     })}
@@ -774,7 +775,7 @@ function AnalystForecastSection({ years, activeAssets, assetPriceInfo }: {
                         </div>
                         <div className="text-muted-foreground text-right">
                           {f.publishedAt && <span>{fmtDate(f.publishedAt)} · </span>}
-                          <span className="font-mono font-semibold text-foreground">{f.priceEur.toLocaleString("es-ES")} € ({f.scenario})</span>
+                          <span className="font-mono font-semibold text-foreground">{f.priceEur != null ? `${f.priceEur.toLocaleString("es-ES")} €` : "—"} ({f.scenario})</span>
                         </div>
                       </div>
                       {f.reportUrl && (

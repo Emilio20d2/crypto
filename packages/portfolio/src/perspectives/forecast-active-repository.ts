@@ -4,6 +4,7 @@
 // Toda activación es atómica y guarda el candidato anterior para rollback.
 
 import type { ForecastSource } from "./forecast-sources";
+import type { ForecastDataset } from "./types";
 import type { SqliteDb } from "./forecast-candidate-repository";
 
 export interface ActiveVersion {
@@ -80,18 +81,38 @@ export class ForecastActiveRepository {
   }
 
   // Lee las fuentes activas para el motor de simulación.
-  // Devuelve null si el flag está deshabilitado o no hay versión activa.
+  // Si el flag está deshabilitado pero existe versión activa, se usa esa
+  // versión validada. Si no hay versión activa, no hay fallback silencioso.
   getSourcesForEngine(): ForecastSource[] | null {
-    if (!PERSPECTIVES_EXTERNAL_FORECASTS_ENABLED) {
-      console.log("[PerspectivesSimulation] PERSPECTIVES_EXTERNAL_FORECASTS_ENABLED=false — usando KNOWN_FORECASTS");
-      return null;
-    }
     const active = this.getCurrent();
     if (!active) {
-      console.log("[PerspectivesSimulation] Sin versión activa — usando KNOWN_FORECASTS");
+      console.log("[PerspectivesSimulation] Sin version activa de previsiones");
       return null;
     }
-    console.log(`[PerspectivesSimulation] Usando versión activa candidate_id=${active.candidateId} activada=${new Date(active.activatedAt).toISOString()}`);
+    const flagState = PERSPECTIVES_EXTERNAL_FORECASTS_ENABLED ? "enabled" : "disabled-active-fallback";
+    console.log(`[PerspectivesSimulation] Usando version activa candidate_id=${active.candidateId} flag=${flagState} activada=${new Date(active.activatedAt).toISOString()}`);
     return active.sources;
+  }
+
+  getDatasetForEngine(): ForecastDataset | null {
+    const active = this.getCurrent();
+    if (!active) return null;
+    const fxRates = active.sources
+      .map(s => s.fxRate)
+      .filter((rate): rate is number => typeof rate === "number" && Number.isFinite(rate) && rate > 0);
+    const fxRateAts = active.sources
+      .map(s => s.fxRateAt)
+      .filter((ts): ts is number => typeof ts === "number" && Number.isFinite(ts) && ts > 0);
+    const fxSources = active.sources
+      .map(s => s.fxSource)
+      .filter((source): source is string => typeof source === "string" && source.length > 0);
+    return {
+      sources: active.sources,
+      candidateId: active.candidateId,
+      activatedAt: active.activatedAt,
+      usdToEurRate: fxRates.length > 0 ? fxRates[0] : null,
+      fxSource: fxSources[0] ?? null,
+      fxRateAt: fxRateAts[0] ?? null,
+    };
   }
 }

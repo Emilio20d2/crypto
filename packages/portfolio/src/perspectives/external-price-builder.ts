@@ -1,8 +1,8 @@
 // ─── Motor de precios externos — Perspectivas ────────────────────────────────
 // Fuente ÚNICA de precios para la simulación de Perspectivas.
-// Utiliza exclusivamente previsiones externas verificables (KNOWN_FORECASTS).
+// Utiliza exclusivamente previsiones externas verificables inyectadas.
 // Para meses entre dos años cubiertos: interpolación lineal.
-// Para meses más allá del último año cubierto: precio carry-forward (sin cobertura).
+// Para meses más allá del último año cubierto: extensión modelizada y marcada.
 // SIN modelo de ciclos interno. SIN extrapolación inventada.
 
 import type { SimScenario, AssetTier } from "./types";
@@ -10,20 +10,23 @@ import type { ForecastSource } from "./forecast-sources";
 
 // ─── Tipos de cobertura ──────────────────────────────────────────────────────
 
-export type CoverageState = "direct" | "interpolated" | "uncovered";
+export type CoverageState = "direct" | "interpolated" | "modeled" | "insufficient";
 
 export interface ExternalPriceResult {
   pricesByMonth: Record<string, number>;
   coverageByYear: Record<number, CoverageState>;
   directYears: number[];
   interpolatedYears: number[];
+  modeledYears: number[];
+  insufficientYears: number[];
   lastCoveredYear: number | null;
   sourceCount: number;
 }
 
-// ─── Tipo de cambio ──────────────────────────────────────────────────────────
-
-export const EUR_PER_USD = 0.92;
+export interface ExternalPriceMapOptions {
+  usdToEurRate?: number | null;
+  fxSource?: string | null;
+}
 
 // ─── Mapa de tickers de la simulación a IDs de ForecastSource ───────────────
 
@@ -133,25 +136,79 @@ export function monthKey(date: number): string {
 
 // ─── Derivación de precio por escenario desde la distribución de previsiones ─
 
-function scenarioPrice(sortedPricesEur: number[], scenario: SimScenario): number {
-  if (sortedPricesEur.length === 0) throw new Error("scenarioPrice: empty input");
-  if (sortedPricesEur.length === 1) return sortedPricesEur[0];
+interface WeightedPrice {
+  priceEur: number;
+  weight: number;
+  publisher: string;
+}
 
-  // Cuantiles ponderados: optimista ≠ máximo absoluto, conservador ≠ mínimo absoluto.
-  // Documentado en methodologyVersion "quantile-v1".
+function scenarioPrice(prices: WeightedPrice[], scenario: SimScenario): number {
+  if (prices.length === 0) throw new Error("scenarioPrice: empty input");
+  if (prices.length === 1) return prices[0].priceEur;
+
   const pctMap: Record<SimScenario, number> = {
-    conservador: 0.10,
+    conservador: 0.12,
     moderado:    0.30,
     base:        0.50,
     favorable:   0.70,
-    optimista:   0.90,
+    optimista:   0.88,
   };
-  const pct = pctMap[scenario];
-  const rawIdx = pct * (sortedPricesEur.length - 1);
-  const lo = Math.floor(rawIdx);
-  const hi = Math.min(Math.ceil(rawIdx), sortedPricesEur.length - 1);
-  const frac = rawIdx - lo;
-  return sortedPricesEur[lo] * (1 - frac) + sortedPricesEur[hi] * frac;
+  const sorted = [...prices].sort((a, b) => a.priceEur - b.priceEur);
+  const totalWeight = sorted.reduce((s, p) => s + Math.max(0.01, p.weight), 0);
+  const threshold = totalWeight * pctMap[scenario];
+  let acc = 0;
+  for (const item of sorted) {
+    acc += Math.max(0.01, item.weight);
+    if (acc >= threshold) return item.priceEur;
+  }
+  return sorted[sorted.length - 1].priceEur;
+}
+
+function sourcePriceEur(source: ForecastSource, options?: ExternalPriceMapOptions): number | null {
+  if (source.targetPriceEur != null && source.targetPriceEur > 0) return source.targetPriceEur;
+  const rate = source.fxRate ?? options?.usdToEurRate ?? null;
+  if (source.targetPriceUsd != null && source.targetPriceUsd > 0 && rate != null && rate > 0) {
+    return source.targetPriceUsd * rate;
+  }
+  return null;
+}
+
+function modeledGrowthRate(tier: AssetTier, scenario: SimScenario, yearsAfterCoverage: number): number | null {
+  if (tier === "speculative") return null;
+  const baseByTier: Record<Exclude<AssetTier, "speculative">, Record<SimScenario, number>> = {
+    store_of_value: { conservador: 0.015, moderado: 0.030, base: 0.045, favorable: 0.060, optimista: 0.080 },
+    large_cap:      { conservador: 0.010, moderado: 0.025, base: 0.040, favorable: 0.060, optimista: 0.085 },
+    mid_cap:        { conservador: -0.005, moderado: 0.020, base: 0.045, favorable: 0.075, optimista: 0.110 },
+    small_cap:      { conservador: -0.020, moderado: 0.010, base: 0.040, favorable: 0.085, optimista: 0.130 },
+  };
+  return baseByTier[tier][scenario] / (1 + yearsAfterCoverage * 0.22);
+}
+
+function modeledVolatility(tier: AssetTier): number {
+  if (tier === "store_of_value") return 0.10;
+  if (tier === "large_cap") return 0.14;
+  if (tier === "mid_cap") return 0.20;
+  if (tier === "small_cap") return 0.28;
+  return 0;
+}
+
+function modeledMonthlyPrice(anchorPrice: number, tier: AssetTier, scenario: SimScenario, monthsAfterCoverage: number): number | null {
+  const years = monthsAfterCoverage / 12;
+  const growth = modeledGrowthRate(tier, scenario, years);
+  if (growth === null) return null;
+  const phaseMap: Record<SimScenario, number> = {
+    conservador: 3.1,
+    moderado: 2.4,
+    base: 1.7,
+    favorable: 1.1,
+    optimista: 0.4,
+  };
+  const trend = Math.pow(1 + growth, years);
+  const cycle = Math.sin((monthsAfterCoverage / 18) * Math.PI * 2 + phaseMap[scenario]);
+  const contraction = Math.sin((monthsAfterCoverage / 47) * Math.PI * 2 + 0.8);
+  const volatility = modeledVolatility(tier) * Math.exp(-years / 9);
+  const cycleFactor = Math.max(0.35, 1 + volatility * cycle - volatility * 0.55 * Math.max(0, contraction));
+  return Math.max(0.000001, anchorPrice * trend * cycleFactor);
 }
 
 // ─── Constructor principal ───────────────────────────────────────────────────
@@ -163,10 +220,12 @@ export function buildExternalPriceMap(
   nowMs: number,
   horizonMs: number,
   forecasts: ForecastSource[],
+  options?: ExternalPriceMapOptions,
 ): ExternalPriceResult {
   const forecastId = TICKER_TO_FORECAST_ID[assetId.toUpperCase()];
   const currentYear = new Date(nowMs).getFullYear();
   const horizonYear = new Date(horizonMs).getFullYear();
+  const tier = getAssetTier(assetId);
 
   // Previsiones válidas: activo correcto, año futuro, no expirada
   const relevant = !forecastId
@@ -174,22 +233,26 @@ export function buildExternalPriceMap(
     : forecasts.filter(
         f =>
           f.assetId === forecastId &&
-          f.targetPriceUsd != null &&
           f.targetYear != null &&
           f.targetYear > currentYear &&
           f.expiresAt > nowMs,
       );
 
   // Agrupar por año objetivo y convertir a EUR
-  const pricesByForecastYear = new Map<number, number[]>();
-  let sourceCount = 0;
+  const pricesByForecastYear = new Map<number, WeightedPrice[]>();
+  const independentPublishers = new Set<string>();
+  const dedupe = new Set<string>();
   for (const f of relevant) {
-    if (f.targetPriceUsd == null || f.targetYear == null) continue;
-    const priceEur = f.targetPriceUsd * EUR_PER_USD;
+    if (f.targetYear == null) continue;
+    const priceEur = sourcePriceEur(f, options);
+    if (priceEur == null || priceEur <= 0) continue;
+    const dedupeKey = `${f.publisher}::${f.assetId}::${f.targetYear}::${Math.round(priceEur)}`;
+    if (dedupe.has(dedupeKey)) continue;
+    dedupe.add(dedupeKey);
     const bucket = pricesByForecastYear.get(f.targetYear) ?? [];
-    bucket.push(priceEur);
+    bucket.push({ priceEur, weight: f.confidence, publisher: f.publisher });
     pricesByForecastYear.set(f.targetYear, bucket);
-    sourceCount++;
+    independentPublishers.add(f.publisher);
   }
 
   // Años con cobertura directa (futuro)
@@ -201,6 +264,8 @@ export function buildExternalPriceMap(
   for (let y = currentYear + 1; y < (lastCoveredYear ?? currentYear); y++) {
     if (!pricesByForecastYear.has(y)) interpolatedYears.push(y);
   }
+  const modeledYears: number[] = [];
+  const insufficientYears: number[] = [];
 
   // Mapa de cobertura por año
   const coverageByYear: Record<number, CoverageState> = {};
@@ -209,8 +274,12 @@ export function buildExternalPriceMap(
       coverageByYear[year] = "direct";
     } else if (lastCoveredYear != null && year < lastCoveredYear) {
       coverageByYear[year] = "interpolated";
+    } else if (lastCoveredYear != null && year > lastCoveredYear && tier !== "speculative") {
+      coverageByYear[year] = "modeled";
+      modeledYears.push(year);
     } else {
-      coverageByYear[year] = "uncovered";
+      coverageByYear[year] = "insufficient";
+      insufficientYears.push(year);
     }
   }
 
@@ -220,8 +289,7 @@ export function buildExternalPriceMap(
     { timeMs: nowMs, priceEur: currentPriceEur },
   ];
   for (const [year, prices] of pricesByForecastYear) {
-    const sorted = [...prices].sort((a, b) => a - b);
-    const price = scenarioPrice(sorted, scenario);
+    const price = scenarioPrice(prices, scenario);
     // Anclar al 31 de diciembre del año objetivo
     anchors.push({ timeMs: new Date(year, 11, 31).getTime(), priceEur: price });
   }
@@ -234,18 +302,23 @@ export function buildExternalPriceMap(
   d.setHours(0, 0, 0, 0);
   d.setMonth(d.getMonth() + 1); // primer mes de simulación (siguiente al actual)
 
-  let lastKnownPrice = currentPriceEur;
+  const lastCoveredAnchor = lastCoveredYear != null
+    ? anchors.find(a => new Date(a.timeMs).getFullYear() === lastCoveredYear) ?? anchors[anchors.length - 1]
+    : null;
 
   while (d.getTime() <= horizonMs) {
     const year = d.getFullYear();
     const mKey = monthKey(d.getTime());
     const tMs = d.getTime();
 
-    if (coverageByYear[year] === "uncovered") {
-      // Sin cobertura externa: mantener el último precio conocido.
-      // El motor necesita un número para seguir corriendo, pero el resultado
-      // se marcará como "sin cobertura" en los snapshots anuales.
-      pricesByMonth[mKey] = lastKnownPrice;
+    if (coverageByYear[year] === "modeled" && lastCoveredAnchor) {
+      const anchorDate = new Date(lastCoveredAnchor.timeMs);
+      const monthsAfterCoverage =
+        (year - anchorDate.getFullYear()) * 12 + (d.getMonth() - anchorDate.getMonth());
+      const modeled = modeledMonthlyPrice(lastCoveredAnchor.priceEur, tier, scenario, Math.max(1, monthsAfterCoverage));
+      if (modeled != null) pricesByMonth[mKey] = modeled;
+    } else if (coverageByYear[year] === "insufficient") {
+      // Sin cobertura ni modelo defendible: no se inventa precio.
     } else {
       // Interpolación lineal entre los anclajes más próximos
       let lo = anchors[0];
@@ -264,7 +337,6 @@ export function buildExternalPriceMap(
             ((tMs - lo.timeMs) / (hi.timeMs - lo.timeMs)) *
               (hi.priceEur - lo.priceEur);
       pricesByMonth[mKey] = price;
-      lastKnownPrice = price;
     }
 
     d.setMonth(d.getMonth() + 1);
@@ -275,7 +347,9 @@ export function buildExternalPriceMap(
     coverageByYear,
     directYears,
     interpolatedYears,
+    modeledYears,
+    insufficientYears,
     lastCoveredYear,
-    sourceCount,
+    sourceCount: independentPublishers.size,
   };
 }

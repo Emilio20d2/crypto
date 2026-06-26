@@ -5,9 +5,6 @@
 
 import type { ForecastSource } from "./forecast-sources";
 
-// FX por defecto cuando la BD no tiene tasa actualizada (ECB promedio ~2025)
-const FX_USD_TO_EUR_DEFAULT = 0.92;
-
 export interface ObservationRow {
   id: string;
   source_id: string;
@@ -25,7 +22,12 @@ export interface ObservationRow {
   target_low_original: number | null;
   target_base_original: number | null;
   target_high_original: number | null;
+  target_low_eur?: number | null;
+  target_base_eur?: number | null;
+  target_high_eur?: number | null;
   fx_rate: number | null;
+  fx_rate_at?: number | null;
+  fx_source?: string | null;
   final_weight: number;
   verified: number;
   active: number;
@@ -61,11 +63,35 @@ export interface IngestionLogRow {
 // Mínimo de fuentes independientes para generar escenarios por cuantil
 export const MIN_SOURCES_FOR_QUANTILE = 3;
 
-function toUsdFactor(currency: string, fxRate: number | null): number {
+function toUsdFactor(currency: string, fxRate: number | null): number | null {
   if (currency === "USD") return 1;
-  // EUR → USD: invierte la tasa EUR/USD
-  const rate = fxRate ?? FX_USD_TO_EUR_DEFAULT;
-  return 1 / rate;
+  if (currency === "EUR" && fxRate != null && fxRate > 0) return 1 / fxRate;
+  return null;
+}
+
+function toEurFactor(currency: string, fxRate: number | null): number | null {
+  if (currency === "EUR") return 1;
+  if (currency === "USD" && fxRate != null && fxRate > 0) return fxRate;
+  return null;
+}
+
+function normalizedPrice(row: ObservationRow, original: number | null | undefined, eurValue?: number | null): { usd: number; eur: number } | null {
+  if (eurValue != null && eurValue > 0) {
+    const toUsd = toUsdFactor("EUR", row.fx_rate);
+    return {
+      eur: eurValue,
+      usd: toUsd != null ? eurValue * toUsd : eurValue,
+    };
+  }
+  if (original == null || original <= 0) return null;
+  const currency = row.original_currency.toUpperCase();
+  const toUsd = toUsdFactor(currency, row.fx_rate);
+  const toEur = toEurFactor(currency, row.fx_rate);
+  if (toUsd == null || toEur == null) return null;
+  return {
+    usd: original * toUsd,
+    eur: original * toEur,
+  };
 }
 
 export function computeFinalWeight(row: {
@@ -100,7 +126,6 @@ export function observationToForecastSources(row: ObservationRow, currentPriceUs
   if (!row.active) return [];
 
   const expiresAt = row.expires_at ?? new Date(row.target_year + 1, 0, 1).getTime();
-  const toUsd = toUsdFactor(row.original_currency, row.fx_rate);
   const weight = row.final_weight;
 
   const base: Omit<ForecastSource, "id" | "targetPriceUsd" | "direction"> = {
@@ -111,63 +136,69 @@ export function observationToForecastSources(row: ObservationRow, currentPriceUs
     confidence: weight,
     publishedAt: row.published_at,
     expiresAt,
+    fxRate: row.fx_rate,
+    fxRateAt: row.fx_rate_at ?? null,
+    fxSource: row.fx_source ?? null,
     notes: row.report_title,
   };
 
   const results: ForecastSource[] = [];
 
   if (row.target_type === "low_base_high") {
-    const baseUsd = row.target_base_original != null ? row.target_base_original * toUsd : null;
-    const lowUsd  = row.target_low_original  != null ? row.target_low_original  * toUsd : null;
-    const highUsd = row.target_high_original != null ? row.target_high_original * toUsd : null;
+    const basePrice = normalizedPrice(row, row.target_base_original, row.target_base_eur);
+    const lowPrice  = normalizedPrice(row, row.target_low_original, row.target_low_eur);
+    const highPrice = normalizedPrice(row, row.target_high_original, row.target_high_eur);
 
-    if (lowUsd != null) {
+    if (lowPrice != null) {
       results.push({
         ...base,
         id: `${row.id}_low`,
-        targetPriceUsd: lowUsd,
-        direction: currentPriceUsd ? impliedDirection(lowUsd, currentPriceUsd) : "bearish",
+        targetPriceUsd: lowPrice.usd,
+        targetPriceEur: lowPrice.eur,
+        direction: currentPriceUsd ? impliedDirection(lowPrice.usd, currentPriceUsd) : "bearish",
       });
     }
-    if (baseUsd != null) {
+    if (basePrice != null) {
       results.push({
         ...base,
         id: `${row.id}_base`,
-        targetPriceUsd: baseUsd,
-        direction: currentPriceUsd ? impliedDirection(baseUsd, currentPriceUsd) : "bullish",
+        targetPriceUsd: basePrice.usd,
+        targetPriceEur: basePrice.eur,
+        direction: currentPriceUsd ? impliedDirection(basePrice.usd, currentPriceUsd) : "bullish",
       });
     }
-    if (highUsd != null) {
+    if (highPrice != null) {
       results.push({
         ...base,
         id: `${row.id}_high`,
-        targetPriceUsd: highUsd,
-        direction: currentPriceUsd ? impliedDirection(highUsd, currentPriceUsd) : "very_bullish",
+        targetPriceUsd: highPrice.usd,
+        targetPriceEur: highPrice.eur,
+        direction: currentPriceUsd ? impliedDirection(highPrice.usd, currentPriceUsd) : "very_bullish",
       });
     }
   } else if (row.target_type === "range") {
-    const lowUsd  = row.target_low_original  != null ? row.target_low_original  * toUsd : null;
-    const highUsd = row.target_high_original != null ? row.target_high_original * toUsd : null;
-    if (lowUsd != null) {
+    const lowPrice  = normalizedPrice(row, row.target_low_original, row.target_low_eur);
+    const highPrice = normalizedPrice(row, row.target_high_original, row.target_high_eur);
+    if (lowPrice != null) {
       results.push({
-        ...base, id: `${row.id}_low`, targetPriceUsd: lowUsd,
-        direction: currentPriceUsd ? impliedDirection(lowUsd, currentPriceUsd) : "neutral",
+        ...base, id: `${row.id}_low`, targetPriceUsd: lowPrice.usd, targetPriceEur: lowPrice.eur,
+        direction: currentPriceUsd ? impliedDirection(lowPrice.usd, currentPriceUsd) : "neutral",
       });
     }
-    if (highUsd != null) {
+    if (highPrice != null) {
       results.push({
-        ...base, id: `${row.id}_high`, targetPriceUsd: highUsd,
-        direction: currentPriceUsd ? impliedDirection(highUsd, currentPriceUsd) : "bullish",
+        ...base, id: `${row.id}_high`, targetPriceUsd: highPrice.usd, targetPriceEur: highPrice.eur,
+        direction: currentPriceUsd ? impliedDirection(highPrice.usd, currentPriceUsd) : "bullish",
       });
     }
   } else {
     // "point"
     const priceUsd = (row.target_base_original ?? row.target_high_original ?? row.target_low_original);
-    if (priceUsd != null) {
-      const p = priceUsd * toUsd;
+    const price = normalizedPrice(row, priceUsd, row.target_base_eur ?? row.target_high_eur ?? row.target_low_eur);
+    if (price != null) {
       results.push({
-        ...base, id: row.id, targetPriceUsd: p,
-        direction: currentPriceUsd ? impliedDirection(p, currentPriceUsd) : "bullish",
+        ...base, id: row.id, targetPriceUsd: price.usd, targetPriceEur: price.eur,
+        direction: currentPriceUsd ? impliedDirection(price.usd, currentPriceUsd) : "bullish",
       });
     }
   }

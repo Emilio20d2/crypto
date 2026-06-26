@@ -46,6 +46,7 @@ import crypto from "crypto";
 import { eq, and, or, asc, desc, isNull, inArray } from "drizzle-orm";
 import * as fs from "fs";
 import * as http from "http";
+import { RealtimePortfolioMarketEngine } from "./realtime-portfolio-market-engine";
 
 if (app.isPackaged) {
   process.env["KEYCHAIN_HELPER_PATH"] = path.join(
@@ -299,6 +300,29 @@ function setupIpcHandlers() {
     fetchImpl: fetch,
     logger: globalMetricsLogger,
   });
+  let realtimeEngine: RealtimePortfolioMarketEngine | null = null;
+
+  function getRealtimeMarketPrice(assetId: string): SnapshotPriceResult | null {
+    const snapshot = realtimeEngine?.getCurrentSnapshot();
+    const price = snapshot?.prices?.[assetId.toUpperCase()];
+    if (!price) return null;
+    if (price.priceEur === null) {
+      return {
+        price: null,
+        state: "unavailable",
+        provider: price.source || "realtime",
+        fetchedAt: price.quotedAt || Date.now(),
+        reason: "Precio no disponible en snapshot realtime",
+      };
+    }
+    return {
+      price: price.priceEur,
+      state: price.state === "live" || price.state === "polling" ? "live" : "cached",
+      provider: price.source || "realtime",
+      fetchedAt: price.quotedAt,
+      reason: price.state === "stale" ? "Ultimo precio valido del snapshot realtime" : undefined,
+    };
+  }
 
   // --- Permission settings helpers (no live API calls) ---
   function savePermissions(perms: { canView: boolean; canTrade: boolean; canTransfer: boolean }): void {
@@ -1697,7 +1721,7 @@ function setupIpcHandlers() {
   }));
 
   ipcMain.handle("market:get-current-price", withResult(async (_, input: {assetId: string, quoteCurrency?: string}) => {
-    const priceRes = await getCurrentPriceFast(input.assetId);
+    const priceRes = getRealtimeMarketPrice(input.assetId) ?? await getCurrentPriceFast(input.assetId);
     return CurrentPriceResultSchema.parse(priceRes);
   }));
 
@@ -1720,7 +1744,8 @@ function setupIpcHandlers() {
       if (snapshot) break;
     }
 
-    const priceSettled = await Promise.resolve(getCurrentPriceFast(input.assetId)).then(
+    const realtimePrice = getRealtimeMarketPrice(input.assetId);
+    const priceSettled = await Promise.resolve(realtimePrice ?? getCurrentPriceFast(input.assetId)).then(
       (data) => ({ status: "fulfilled" as const, data }),
       () => ({ status: "rejected" as const })
     );
@@ -3142,6 +3167,7 @@ function setupIpcHandlers() {
     void syncService.syncWithErrorHandling()
       .then(() => getPortfolioService().recalculateFifo())
       .catch((error: unknown) => console.warn("[Coinbase] Sync tras orden falló:", error instanceof Error ? error.message : String(error)));
+    void realtimeEngine?.refreshNow("order-submitted");
 
     return {
       success: true,
@@ -3245,6 +3271,7 @@ function setupIpcHandlers() {
     const client = new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem);
     const syncService = new CoinbaseSyncService(syncDb, schema, client);
     const result = await syncService.syncWithErrorHandling();
+    void realtimeEngine?.refreshNow("manual-sync");
 
     // Best-effort, non-blocking — newly-imported legs get a chance at a real
     // historical-price cost basis right away without slowing down sync itself.
@@ -3501,149 +3528,26 @@ function setupIpcHandlers() {
     return await getPortfolioServiceInst().getPortfolioSnapshots(portfolioUuid);
   }));
 
-  // Overlap protection: a single active live-sync request at a time.
-  // liveSyncStartedAt enables automatic recovery when a previous request crashed before
-  // resetting the flag (10 s safety window — real requests resolve in < 5 s).
-  let liveSyncInProgress = false;
-  let liveSyncStartedAt = 0;
-  const LIVE_SYNC_STUCK_MS = 10_000;
-  let lastLiveSnapshotData: Record<string, unknown> | null = null;
+  realtimeEngine = new RealtimePortfolioMarketEngine({
+    getCoinbaseClient: () => {
+      const creds = credsMgr.getCredentials();
+      return creds ? new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem) : null;
+    },
+    getCachedPortfolioBreakdown: async (portfolioUuid: string) =>
+      await getPortfolioServiceInst().getCachedPortfolioBreakdownNoError(portfolioUuid, "EUR"),
+    getRestPrice: async (assetId: string) => await getCurrentPriceFast(assetId),
+    createWebSocket: typeof (globalThis as { WebSocket?: unknown }).WebSocket === "function"
+      ? (url: string) => new ((globalThis as { WebSocket: new (url: string) => unknown }).WebSocket)(url) as import("./realtime-portfolio-market-engine").RealtimeWebSocket
+      : undefined,
+    publish: (snapshot) => {
+      mainWindow?.webContents.send("portfolio:live-snapshot", snapshot);
+    },
+    logger: console,
+  });
+  app.once("before-quit", () => realtimeEngine?.stop());
 
   ipcMain.handle("portfolio:get-live-snapshot", withResult(async (_, portfolioUuid: string) => {
-    const callAt = Date.now();
-    if (liveSyncInProgress && (callAt - liveSyncStartedAt) < LIVE_SYNC_STUCK_MS) {
-      console.log("[CoinbaseLiveSync] skippedBecauseInProgress=true returning=cached");
-      return lastLiveSnapshotData;
-    }
-
-    liveSyncInProgress = true;
-    liveSyncStartedAt = callAt;
-    const requestedAt = callAt;
-    console.log("[CoinbaseLiveSync] start");
-
-    // finally block guarantees liveSyncInProgress is always reset — even on early return or throw.
-    try {
-      // Attempt to get FRESH balances from Coinbase accounts API (lightweight call).
-      // Falls back to cached breakdown if credentials are missing or the call times out.
-      type RawAccount = { currency: string; available: number; hold: number };
-      let rawAccounts: RawAccount[] = [];
-      let usingFallback = false;
-      let fallbackReason: string | null = null;
-
-      try {
-        const creds = credsMgr.getCredentials();
-        if (!creds) throw new Error("No credentials");
-        const client = new CoinbaseClient(creds.apiKeyName, creds.privateKeyPem);
-        const accountsRes = await Promise.race([
-          client.getAccounts(),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("Accounts API timeout (4s)")), 4000)
-          ),
-        ]);
-        rawAccounts = (accountsRes.accounts ?? [])
-          .map((a: any) => ({
-            currency: (a.currency ?? "") as string,
-            available: parseFloat(a.available_balance?.value ?? "0") || 0,
-            hold: parseFloat(a.hold?.value ?? "0") || 0,
-          }))
-          .filter((a: RawAccount) => a.currency && a.available + a.hold > 1e-10);
-      } catch (err) {
-        usingFallback = true;
-        fallbackReason = err instanceof Error ? err.message : String(err);
-        // Fall back to the cached portfolio breakdown (from last 30-s refresh)
-        const service = getPortfolioServiceInst();
-        const cached = await service.getCachedPortfolioBreakdownNoError(portfolioUuid, "EUR");
-        if (!cached || !cached.positions.length) {
-          console.log(`[CoinbaseLiveSync] aborted reason=noCache fallback=${fallbackReason}`);
-          return null;
-        }
-        rawAccounts = (cached.positions as any[]).map((p: any) => ({
-          currency: p.asset as string,
-          available: typeof p.totalBalanceCrypto === "number" ? p.totalBalanceCrypto : 0,
-          hold: 0,
-        })).filter((a: RawAccount) => a.currency && a.available > 1e-10);
-      }
-
-      const eurAccount  = rawAccounts.find(a => a.currency === "EUR");
-      const eurcAccount = rawAccounts.find(a => a.currency === "EURC");
-      const cryptoAccounts = rawAccounts.filter(a => a.currency !== "EUR" && a.currency !== "EURC");
-
-      const eurBalance  = eurAccount  ? eurAccount.available  + eurAccount.hold  : 0;
-      const eurcBalance = eurcAccount ? eurcAccount.available + eurcAccount.hold : 0;
-
-      // Fetch current prices in parallel (MarketService caches internally for ~5 s)
-      const priceResults = await Promise.all(
-        cryptoAccounts.map(async (a: RawAccount) => {
-          const r = await marketService.getCurrentPrice(a.currency);
-          const qty = a.available + a.hold;
-          const currentValueEur = r.price !== null ? qty * r.price : null;
-          return {
-            assetId: a.currency,
-            quantity: qty,
-            availableBalance: a.available,
-            holdBalance: a.hold,
-            currentPriceEur: r.price as number | null,
-            priceSource: r.provider as string,
-            priceStatus: r.state as "complete" | "fallback" | "cached" | "partial" | "unavailable",
-            currentValueEur,
-          };
-        })
-      );
-
-      const cryptoValueEur = priceResults.reduce((s, p) => s + (p.currentValueEur ?? 0), 0);
-      const receivedAt = Date.now();
-
-      // Balance version: stable hash of (currency, balance) pairs for change detection
-      const snapshotVersion = rawAccounts
-        .map(a => `${a.currency}:${(a.available + a.hold).toFixed(8)}`)
-        .sort()
-        .join("|");
-
-      const warnings: string[] = [];
-      if (usingFallback && fallbackReason) warnings.push(`Balances from cache: ${fallbackReason}`);
-      const missingPrices = priceResults.filter(p => p.currentValueEur === null).map(p => p.assetId);
-      if (missingPrices.length) warnings.push(`Missing prices: ${missingPrices.join(", ")}`);
-
-      const snapshot = {
-        requestedAt,
-        receivedAt,
-        snapshotVersion,
-        usingFallback,
-        accounts: rawAccounts.map(a => ({
-          assetId: a.currency,
-          availableBalance: a.available,
-          holdBalance: a.hold,
-          totalBalance: a.available + a.hold,
-        })),
-        positions: priceResults,
-        eurBalance,
-        eurcBalance,
-        eurcValueEur: eurcBalance,
-        cryptoValueEur,
-        totalAssetValueEur: cryptoValueEur + eurcBalance + eurBalance,
-        isComplete: missingPrices.length === 0,
-        missingPrices,
-        warnings,
-        // Legacy fields for backwards compat with existing consumers
-        timestamp: receivedAt,
-        fiat: "EUR" as const,
-        priceVersion: String(receivedAt),
-        portfolioVersion: snapshotVersion,
-      };
-
-      lastLiveSnapshotData = snapshot as unknown as Record<string, unknown>;
-
-      const durationMs = receivedAt - requestedAt;
-      const assetsWithBalance = cryptoAccounts.length;
-      const portfolioValueEur = (cryptoValueEur + eurcBalance + eurBalance).toFixed(2);
-      console.log(
-        `[CoinbaseLiveSync] completed durationMs=${durationMs} snapshotVersion=${snapshotVersion.slice(0, 40)} accountsCount=${rawAccounts.length} assetsWithBalance=${assetsWithBalance} eurBalance=${eurBalance.toFixed(2)} eurcBalance=${eurcBalance.toFixed(2)} portfolioValueEur=${portfolioValueEur} usingFallback=${usingFallback}`
-      );
-
-      return snapshot;
-    } finally {
-      liveSyncInProgress = false;
-    }
+    return await realtimeEngine!.getSnapshot(portfolioUuid);
   }));
 
   // ── contributionSchedule ────────────────────────────────────────────────────
@@ -4410,13 +4314,15 @@ function setupIpcHandlers() {
       .prepare("SELECT * FROM analyst_targets_v2 ORDER BY ticker, target_year, scenario")
       .all();
 
-    const EUR_PER_USD = 0.92;
+    const { ForecastActiveRepository } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    const sqlite = (require("@crypto-control/database") as typeof import("@crypto-control/database")).getSqlite();
+    const activeFx = sqlite ? new ForecastActiveRepository(sqlite).getDatasetForEngine()?.usdToEurRate ?? null : null;
     return rows.map(r => ({
       ticker:       r.ticker,
       targetYear:   r.target_year,
       scenario:     r.scenario,
       priceUsd:     r.price_usd,
-      priceEur:     Math.round(r.price_usd * EUR_PER_USD),
+      priceEur:     activeFx != null ? Math.round(r.price_usd * activeFx) : null,
       source:       r.source,
       reportTitle:  r.report_title ?? "",
       reportUrl:    r.report_url ?? "",
@@ -4718,7 +4624,8 @@ function setupIpcHandlers() {
   ipcMain.handle("persp2:getSimulation", withResult(async (_, input?: {
     policy?: "plan_base" | "full_strategy";
   }) => {
-    const { runPerspectivesSimulation, DEFAULT_SPANISH_TAX_BANDS } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    const { runPerspectivesSimulation, DEFAULT_SPANISH_TAX_BANDS, ForecastActiveRepository } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    const sqlite = (require("@crypto-control/database") as typeof import("@crypto-control/database")).getSqlite();
     const now = Date.now();
 
     // Read active plan + cycles
@@ -4913,9 +4820,10 @@ function setupIpcHandlers() {
     const eurcFiscalReserve = treasurySummary?.fiscalReserveBalance ?? 0;
     const eurCash = treasurySummary?.cashBalance ?? 0;
 
-    // PERSPECTIVES_EXTERNAL_FORECASTS_ENABLED = false
-    // El motor usa KNOWN_FORECASTS exclusivamente hasta que la arquitectura
-    // staging→candidate→active esté completamente validada y aprobada.
+    const activeForecastDataset = sqlite
+      ? new ForecastActiveRepository(sqlite).getDatasetForEngine()
+      : null;
+
     const simInput = {
       now,
       horizonDate,
@@ -4928,12 +4836,19 @@ function setupIpcHandlers() {
       cycles,
       options: {
         policy: (input?.policy ?? "full_strategy") as "plan_base" | "full_strategy",
-        commissionRate: 0.004,
+        commissionRate: 0,
         taxBands: DEFAULT_SPANISH_TAX_BANDS,
       },
     };
 
-    return runPerspectivesSimulation(simInput);
+    return runPerspectivesSimulation(simInput, activeForecastDataset ?? {
+      sources: [],
+      candidateId: null,
+      activatedAt: null,
+      usdToEurRate: null,
+      fxSource: null,
+      fxRateAt: null,
+    });
   }));
 
   // --- PERSPECTIVAS v3: estado de previsiones y cobertura ──────────────────────
@@ -4974,6 +4889,25 @@ function setupIpcHandlers() {
     return { observations, sources, coverage, ingestionLog };
   }));
 
+  async function getUsdToEurFxRate(): Promise<{ rate: number; source: string; at: number }> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3500);
+    try {
+      const res = await fetch("https://api.frankfurter.app/latest?from=USD&to=EUR", { signal: controller.signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as { rates?: { EUR?: number }; date?: string };
+      const rate = finiteOrNull(data.rates?.EUR);
+      if (rate === null || rate <= 0) throw new Error("USD/EUR no disponible");
+      return {
+        rate,
+        source: "frankfurter.app ECB reference",
+        at: data.date ? new Date(`${data.date}T00:00:00Z`).getTime() : Date.now(),
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   // --- PERSPECTIVAS v3: entrada manual de observación verificada ───────────────
 
   ipcMain.handle("perspectives:addObservation", withResult(async (_, obs: {
@@ -5009,7 +4943,10 @@ function setupIpcHandlers() {
     const finalWeight = qualityScore * 0.30 + freshnessScore * 0.25 + horizonScore * 0.20 +
       methodologyScore * 0.15 + independenceScore * 0.10 + (obs.verified ? 0.10 : 0);
 
-    const fxRate = 0.92; // ECB aprox; se puede actualizar posteriormente
+    const originalCurrency = (obs.originalCurrency ?? "USD").toUpperCase();
+    const fx = originalCurrency === "USD"
+      ? await getUsdToEurFxRate()
+      : { rate: 1, source: "EUR original", at: now };
 
     sqlite.prepare(`
       INSERT OR REPLACE INTO forecast_observations (
@@ -5024,9 +4961,9 @@ function setupIpcHandlers() {
       obs.reportTitle, obs.originalUrl, obs.sourceType, obs.publishedAt, now,
       obs.verified ? now : null,
       new Date(obs.targetYear + 1, 0, 1).getTime(),
-      obs.targetYear, obs.targetType, obs.originalCurrency ?? "USD",
+      obs.targetYear, obs.targetType, originalCurrency,
       obs.targetLowOriginal ?? null, obs.targetBaseOriginal ?? null, obs.targetHighOriginal ?? null,
-      fxRate, now, "ECB reference rate (approx)", obs.methodology ?? null,
+      fx.rate, fx.at, fx.source, obs.methodology ?? null,
       qualityScore, freshnessScore, horizonScore, methodologyScore, independenceScore, finalWeight,
       obs.verified ? 1 : 0, 1, "manual",
     );

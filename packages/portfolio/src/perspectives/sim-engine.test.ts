@@ -1,16 +1,35 @@
 import { describe, it, expect } from "vitest";
-import { runPerspectivesSimulation } from "./sim-engine";
+import { runPerspectivesSimulation as runPerspectivesSimulationCore } from "./sim-engine";
 import { buildExternalPriceMap, monthKey, getAssetTier } from "./external-price-builder";
 import type { SimInput, SimCycle, CurrentPosition, SimOptions } from "./types";
 import { DEFAULT_SPANISH_TAX_BANDS, DEFAULT_SIM_OPTIONS } from "./types";
 import { buildConsensus, weightSource, isExpired } from "./forecast-sources";
 import type { ForecastSource } from "./forecast-sources";
-import { KNOWN_FORECASTS } from "./known-forecasts";
+import { KNOWN_FORECASTS as RAW_KNOWN_FORECASTS } from "./known-forecasts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const NOW = new Date("2026-01-01").getTime();
 const YEAR_MS = 365.25 * 24 * 3600 * 1000;
+const KNOWN_FORECASTS: ForecastSource[] = RAW_KNOWN_FORECASTS.map(source => ({
+  ...source,
+  fxRate: 0.92,
+  fxRateAt: NOW,
+  fxSource: "test-fixture",
+}));
+
+const TEST_FORECAST_DATASET = {
+  sources: KNOWN_FORECASTS,
+  candidateId: "test-known-forecasts",
+  activatedAt: NOW,
+  usdToEurRate: 0.92,
+  fxSource: "test-fixture",
+  fxRateAt: NOW,
+};
+
+function runPerspectivesSimulation(input: SimInput) {
+  return runPerspectivesSimulationCore(input, TEST_FORECAST_DATASET);
+}
 
 function horizon(years: number): number {
   return NOW + years * YEAR_MS;
@@ -105,7 +124,7 @@ describe("motor externo — ausencia del modelo interno de ciclos", () => {
       for (const info of Object.values(s.assetPriceInfo)) {
         expect(info.modelType).not.toBe("internal_cycle_model");
         expect(info.modelType).not.toBe("analyst_consensus_adjusted");
-        expect(["external_direct", "external_interpolated", "no_coverage"]).toContain(info.modelType);
+        expect(["external_direct", "external_interpolated", "external_modeled", "insufficient"]).toContain(info.modelType);
       }
     }
   });
@@ -142,9 +161,9 @@ describe("external-price-builder: cobertura y precios", () => {
     const result = buildExternalPriceMap("SUI", 3.0, "base", NOW, horizon(5), KNOWN_FORECASTS);
     expect(result.sourceCount).toBe(0);
     expect(result.lastCoveredYear).toBeNull();
-    // Sin cobertura, todos los años son "uncovered"
+    // Sin cobertura, todos los años son "insufficient"
     for (const state of Object.values(result.coverageByYear)) {
-      expect(state).toBe("uncovered");
+      expect(state).toBe("insufficient");
     }
   });
 
@@ -179,15 +198,16 @@ describe("external-price-builder: cobertura y precios", () => {
     }
   });
 
-  it("meses fuera de cobertura usan carry-forward (no cero)", () => {
+  it("meses posteriores al último año cubierto usan extensión modelizada, no carry-forward plano", () => {
     const result = buildExternalPriceMap("BTC", 87000, "base", NOW, horizon(20), KNOWN_FORECASTS);
-    // Año 2040 debe estar sin cobertura pero no tener precio 0
-    const lastYear = new Date(horizon(20)).getFullYear();
-    const decKey = `${lastYear}-12`;
+    const keys = Object.keys(result.pricesByMonth).sort();
+    const decKey = keys[keys.length - 1];
+    const prevKey = keys[keys.length - 2];
     const price = result.pricesByMonth[decKey];
-    if (price != null) {
-      expect(price).toBeGreaterThan(0);
-    }
+    const prevPrice = result.pricesByMonth[prevKey];
+    expect(result.coverageByYear[Number(decKey.slice(0, 4))]).toBe("modeled");
+    expect(price).toBeGreaterThan(0);
+    expect(price).not.toBe(prevPrice);
   });
 
   it("getAssetTier clasifica BTC como store_of_value", () => {
@@ -227,13 +247,13 @@ describe("sim-engine: forecastCoverage en AnnualSnapshot", () => {
     }
   });
 
-  it("años sin cobertura (más allá de 2030 para BTC) se marcan como uncovered", () => {
+  it("años posteriores a cobertura directa se marcan como covered por extensión modelizada", () => {
     const input = makeInput({ horizonDate: horizon(15) }); // hasta 2041
     const result = runPerspectivesSimulation(input);
     const base = result.scenarios.find(s => s.scenario === "base")!;
     const year2040 = base.annualSnapshots.find(s => s.year === 2040);
     if (year2040) {
-      expect(year2040.forecastCoverage).toBe("uncovered");
+      expect(year2040.forecastCoverage).toBe("covered");
     }
   });
 });
@@ -505,6 +525,32 @@ describe("sim-engine: no commissions (default options)", () => {
       for (const snap of s.annualSnapshots) {
         expect(snap.commissionsEur).toBe(0);
       }
+    }
+  });
+});
+
+describe("sim-engine: control 2036-2044", () => {
+  it("no congela cierre = apertura + aportacion - comision entre 2036 y 2044", () => {
+    const input = makeInput({
+      horizonDate: new Date(2044, 11, 31, 23, 59, 59, 999).getTime(),
+      cycles: [{ ...makeCycle(), monthlyAmountEur: 500 }],
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base", commissionRate: 0.004 },
+    });
+    const result = runPerspectivesSimulation(input);
+    const finals = result.scenarios.map(s => Math.round(s.summary.finalNetWealthEur));
+    expect(new Set(finals).size).toBeGreaterThan(1);
+
+    for (const scenario of result.scenarios) {
+      const controlYears = scenario.annualSnapshots.filter(s => s.year >= 2036 && s.year <= 2044);
+      expect(controlYears.length).toBeGreaterThan(0);
+      for (const snap of controlYears) {
+        const frozenClose = snap.openingWealthEur + snap.contributionsEur - snap.commissionsEur;
+        expect(Math.abs(snap.closingWealthEur - frozenClose)).toBeGreaterThan(0.5);
+        expect(Math.abs(snap.marketGainEur + snap.commissionsEur)).toBeGreaterThan(0.5);
+      }
+      expect(Math.abs(scenario.summary.twr ?? 0)).toBeGreaterThan(0.0001);
+      const btcInfo = scenario.assetPriceInfo.BTC;
+      expect(btcInfo.modeledCoverageYears.some(year => year >= 2036 && year <= 2044)).toBe(true);
     }
   });
 });

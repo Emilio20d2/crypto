@@ -4,7 +4,7 @@ export * from "./forecast-sources";
 export { KNOWN_FORECASTS, FORECAST_ASSET_IDS } from "./known-forecasts";
 export {
   buildExternalPriceMap, monthKey, getAssetTier, CIRCULATING_SUPPLY_M,
-  type CoverageState, type ExternalPriceResult,
+  type CoverageState, type ExternalPriceResult, type ExternalPriceMapOptions,
 } from "./external-price-builder";
 export {
   observationToForecastSources, computeCoverageMatrix, computeFinalWeight,
