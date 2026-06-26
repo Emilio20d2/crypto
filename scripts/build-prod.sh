@@ -111,13 +111,22 @@ cd "$REPO_ROOT/apps/desktop"
 npx tsc 2>&1 | head -10
 cd "$REPO_ROOT"
 
-# Copiar al root dist (que electron-builder empaqueta)
-cp "$REPO_ROOT/apps/desktop/dist/main.js"    "$REPO_ROOT/dist/main.js"
-cp "$REPO_ROOT/apps/desktop/dist/preload.js" "$REPO_ROOT/dist/preload.js"
+# Copiar al root dist (que electron-builder empaqueta). Debe incluir todos los
+# módulos CommonJS que main.js require() en runtime, no solo main/preload.
+cp -R "$REPO_ROOT/apps/desktop/dist/." "$REPO_ROOT/dist/"
 
 DESKTOP_TS=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$REPO_ROOT/dist/main.js")
 echo "  dist/main.js   : $DESKTOP_TS ($(wc -c < "$REPO_ROOT/dist/main.js") bytes)"
 echo "  dist/preload.js: $(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$REPO_ROOT/dist/preload.js")"
+DESKTOP_JS_COUNT=$(find "$REPO_ROOT/dist" -maxdepth 1 -name "*.js" 2>/dev/null | wc -l | tr -d ' ')
+echo "  dist/*.js      : $DESKTOP_JS_COUNT archivos"
+
+for required_desktop_file in main.js preload.js realtime-portfolio-market-engine.js; do
+  if [ ! -f "$REPO_ROOT/dist/$required_desktop_file" ]; then
+    echo "❌ ABORT: falta dist/$required_desktop_file en el artefacto desktop"
+    exit 1
+  fi
+done
 
 # ── 7. Validar que artefactos son recientes ───────────────────────────────────
 echo ""
@@ -198,6 +207,14 @@ else
   echo "  ❌ ABORT: commit $COMMIT_SHORT NO encontrado dentro de app.asar"
   exit 1
 fi
+
+for required_desktop_file in main.js preload.js realtime-portfolio-market-engine.js; do
+  if [ ! -f "$TMP_EXTRACT/dist/$required_desktop_file" ]; then
+    echo "  ❌ ABORT: falta dist/$required_desktop_file dentro de app.asar"
+    exit 1
+  fi
+done
+echo "  ✅ Módulos desktop runtime presentes en app.asar"
 
 if grep -qF "Startup backfill" "$TMP_EXTRACT/dist/main.js"; then
   echo "  ✅ main.js correcto (startup backfill presente)"

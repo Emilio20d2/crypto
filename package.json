@@ -12,7 +12,7 @@
   },
   "main": "dist/main.js",
   "scripts": {
-    "build:desktop": "cd apps/desktop && tsc && cp dist/main.js ../../dist/main.js && cp dist/preload.js ../../dist/preload.js",
+    "build:desktop": "cd apps/desktop && tsc && cd ../.. && mkdir -p dist && cp -R apps/desktop/dist/. dist/",
     "dist:mac": "cd apps/web && npm run build && cd ../.. && npm run build:desktop && electron-builder --mac --config.directories.output=dist-packaged",
     "prod": "bash scripts/build-prod.sh"
   },
