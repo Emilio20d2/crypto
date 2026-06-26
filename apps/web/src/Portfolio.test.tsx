@@ -328,6 +328,54 @@ describe("Cartera Coinbase", () => {
     expect(screen.queryByText(/FIFO/i)).not.toBeInTheDocument();
   });
 
+  test("Coste medio usa averageEntryPrice de Coinbase antes que costBasis/cantidad", async () => {
+    const now = Date.now();
+    window.cryptoControl.coinbase.getPortfolioBreakdown = () =>
+      ok({
+        portfolio: { uuid: "portfolio-1", name: "Default", type: "default", deleted: false },
+        balances: { totalBalance: { value: 100, currency: "EUR" }, totalCryptoBalance: { value: 100, currency: "EUR" }, totalCashEquivalentBalance: null, totalFuturesBalance: null, futuresUnrealizedPnl: null, perpUnrealizedPnl: null },
+        positions: [
+          {
+            asset: "BTC",
+            assetUuid: "btc-uuid",
+            accountUuid: "btc-account",
+            totalBalanceFiat: 100,
+            totalBalanceCrypto: 1,
+            allocation: 1,
+            costBasis: { value: 80, currency: "EUR" },
+            averageEntryPrice: { value: 123, currency: "EUR" },
+            unrealizedPnl: 20,
+            fundingPnl: null,
+            availableToTradeFiat: 100,
+            availableToTradeCrypto: 1,
+            availableToTransferFiat: 100,
+            availableToTransferCrypto: 1,
+            availableToSendFiat: 100,
+            availableToSendCrypto: 1,
+            assetImageUrl: null,
+            assetColor: null,
+            isCash: false,
+            accountType: "exchange",
+            market: { productId: "BTC-EUR", price: 100, pricePercentageChange24h: 0, volume24h: null, volumePercentageChange24h: null, marketCap: null, baseName: "Bitcoin", baseDisplaySymbol: "BTC", quoteDisplaySymbol: "EUR", iconUrl: null, status: "online", tradingDisabled: false, viewOnly: false },
+            sparkline: [],
+          },
+        ],
+        capturedAt: now,
+        currency: "EUR" as const,
+        source: "coinbase" as const,
+        state: "live" as const,
+      });
+
+    renderWithQuery(<Portfolio />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Bitcoin")).toBeInTheDocument();
+    });
+    const btcCard = screen.getByText("Bitcoin").closest(".position-card");
+    expect(btcCard?.textContent).toContain("123,00");
+    expect(btcCard?.textContent).not.toContain("80,00");
+  });
+
   test("un activo con balance > 0 no desaparece aunque no tenga precio ni coste de Coinbase", async () => {
     const now = Date.now();
     window.cryptoControl.coinbase.getPortfolioBreakdown = () =>

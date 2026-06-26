@@ -89,6 +89,30 @@ function sumNumber(a: unknown, b: unknown) {
   return left + right;
 }
 
+function weightedAverageEntryPrice(existing: any, position: any, existingAmount: unknown, nextAmount: unknown) {
+  const currentAvg = existing.averageEntryPrice?.value;
+  const currentQty = typeof existingAmount === "number" && Number.isFinite(existingAmount) ? existingAmount : 0;
+  const nextAvg = position.averageEntryPrice?.value;
+  const nextQty = typeof nextAmount === "number" && Number.isFinite(nextAmount) ? nextAmount : 0;
+  let weightedSum = 0;
+  let weight = 0;
+
+  if (typeof currentAvg === "number" && Number.isFinite(currentAvg) && currentQty > 0) {
+    weightedSum += currentAvg * currentQty;
+    weight += currentQty;
+  }
+  if (typeof nextAvg === "number" && Number.isFinite(nextAvg) && nextQty > 0) {
+    weightedSum += nextAvg * nextQty;
+    weight += nextQty;
+  }
+  if (weight <= 0) return existing.averageEntryPrice ?? position.averageEntryPrice ?? null;
+
+  return {
+    value: weightedSum / weight,
+    currency: existing.averageEntryPrice?.currency || position.averageEntryPrice?.currency || "EUR",
+  };
+}
+
 function aggregatePositionsByAsset(positions: any[]) {
   const grouped = new Map<string, any>();
 
@@ -100,12 +124,15 @@ function aggregatePositionsByAsset(positions: any[]) {
         ...position,
         accountUuid: position.asset,
         costBasis: position.costBasis ? { ...position.costBasis } : null,
+        averageEntryPrice: position.averageEntryPrice ? { ...position.averageEntryPrice } : null,
       });
       continue;
     }
 
+    const existingCrypto = existing.totalBalanceCrypto;
+    const nextCrypto = position.totalBalanceCrypto;
     existing.totalBalanceFiat = sumNumber(existing.totalBalanceFiat, position.totalBalanceFiat);
-    existing.totalBalanceCrypto = sumNumber(existing.totalBalanceCrypto, position.totalBalanceCrypto);
+    existing.totalBalanceCrypto = sumNumber(existingCrypto, nextCrypto);
     existing.allocation = sumNumber(existing.allocation, position.allocation);
     existing.unrealizedPnl = sumNumber(existing.unrealizedPnl, position.unrealizedPnl);
     existing.fundingPnl = sumNumber(existing.fundingPnl, position.fundingPnl);
@@ -124,6 +151,7 @@ function aggregatePositionsByAsset(positions: any[]) {
         currency: existing.costBasis?.currency || position.costBasis?.currency || "EUR",
       };
     }
+    existing.averageEntryPrice = weightedAverageEntryPrice(existing, position, existingCrypto, nextCrypto);
 
     existing.market = existing.market?.price ? existing.market : position.market || existing.market;
     existing.sparkline = existing.sparkline?.length ? existing.sparkline : position.sparkline || [];
@@ -132,6 +160,9 @@ function aggregatePositionsByAsset(positions: any[]) {
   }
 
   return Array.from(grouped.values()).map((position) => {
+    if (typeof position.averageEntryPrice?.value === "number" && Number.isFinite(position.averageEntryPrice.value)) {
+      return position;
+    }
     const cost = position.costBasis?.value;
     const amount = position.totalBalanceCrypto;
     if (typeof cost === "number" && Number.isFinite(cost) && typeof amount === "number" && Number.isFinite(amount) && amount > 0) {

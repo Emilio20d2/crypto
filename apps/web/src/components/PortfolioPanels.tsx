@@ -39,7 +39,14 @@ function positionRoi(position: any, localCostByAsset: Record<string, number> = {
 function positionAverageCost(position: any, localCostByAsset: Record<string, number> = {}, pendingCostByAsset: Record<string, boolean> = {}) {
   const quantity = finiteNumber(position.totalBalanceCrypto);
   if (!quantity || quantity <= 0) return null;
-  // Primary: Coinbase's breakdown cost_basis ÷ live quantity — matches what Coinbase app shows.
+  // Primary: Coinbase's own average_entry_price — this is the value Coinbase
+  // shows as average cost, especially for staking/reward-adjusted positions.
+  const avgCurrency = position.averageEntryPrice?.currency;
+  const avgValue = finiteNumber(position.averageEntryPrice?.value);
+  if (avgValue !== null && avgValue > 0 && (avgCurrency === "EUR" || avgCurrency == null)) {
+    return avgValue;
+  }
+  // Fallback: Coinbase's breakdown cost_basis ÷ live quantity.
   // Accept EUR (explicit) or null/undefined currency (assumed EUR for EUR portfolios).
   const cbCurrency = position.costBasis?.currency;
   const cbValue = finiteNumber(position.costBasis?.value);
