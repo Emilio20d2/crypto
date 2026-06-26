@@ -447,19 +447,29 @@ export class RealtimePortfolioMarketEngine {
   }
 
   private async fetchBalances(portfolioUuid: string): Promise<RawAccount[]> {
+    let cachedPositions: RawAccount[] = [];
+    try {
+      const cached = await this.deps.getCachedPortfolioBreakdown(portfolioUuid);
+      cachedPositions = (cached?.positions ?? []).map(parseCachedPosition).filter((a): a is RawAccount => a !== null);
+    } catch (error) {
+      this.logger.warn("[RealtimePortfolioMarketEngine] cached breakdown failed:", error instanceof Error ? error.message : String(error));
+    }
+
     const client = this.deps.getCoinbaseClient();
     if (client) {
       try {
         const response = await withTimeout(client.getAccounts(), BALANCE_TIMEOUT_MS, "Coinbase accounts", this.deps);
         const live = (response.accounts ?? []).map(parseCoinbaseAccount).filter((a): a is RawAccount => a !== null);
-        if (live.length > 0) return live;
+        if (live.length > 0) {
+          const seen = new Set(live.map((account) => account.currency));
+          const supplemental = cachedPositions.filter((account) => !seen.has(account.currency));
+          return [...live, ...supplemental];
+        }
       } catch (error) {
         this.logger.warn("[RealtimePortfolioMarketEngine] Coinbase accounts failed:", error instanceof Error ? error.message : String(error));
       }
     }
 
-    const cached = await this.deps.getCachedPortfolioBreakdown(portfolioUuid);
-    const cachedPositions = (cached?.positions ?? []).map(parseCachedPosition).filter((a): a is RawAccount => a !== null);
     if (cachedPositions.length > 0) return cachedPositions;
     throw new Error(client ? "Coinbase accounts and cache unavailable" : "Coinbase credentials unavailable");
   }
