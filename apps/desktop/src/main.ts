@@ -227,7 +227,14 @@ function setupDatabase() {
 }
 
 function seedForecastData(): void {
-  const { SEED_FORECAST_SOURCES, SEED_FORECAST_OBSERVATIONS } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+  const {
+    SEED_FORECAST_SOURCES,
+    SEED_FORECAST_OBSERVATIONS,
+    ForecastActiveRepository,
+    ForecastCandidateRepository,
+    observationToForecastSources,
+    computeCoverageMatrix,
+  } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
   const sqlite = (require("@crypto-control/database") as typeof import("@crypto-control/database")).getSqlite();
   if (!sqlite) return;
 
@@ -264,7 +271,65 @@ function seedForecastData(): void {
       o.independence_score, o.final_weight, o.verified, o.active, o.forecast_version,
     );
   }
-  console.log(`[ForecastSeed] Fuentes: ${SEED_FORECAST_SOURCES.length} | Observaciones: ${SEED_FORECAST_OBSERVATIONS.length}`);
+
+  const activeRepo = new ForecastActiveRepository(sqlite);
+  if (activeRepo.getCurrent()) {
+    console.log(`[ForecastSeed] Fuentes: ${SEED_FORECAST_SOURCES.length} | Observaciones: ${SEED_FORECAST_OBSERVATIONS.length} | Activa existente respetada`);
+    return;
+  }
+
+  const seededRows = sqlite.prepare(`
+    SELECT
+      id, source_id, asset_id, ticker, publisher, report_title, original_url,
+      source_type, published_at, expires_at, target_year, target_type,
+      original_currency, target_low_original, target_base_original, target_high_original,
+      fx_rate, fx_rate_at, fx_source, final_weight, verified, active
+    FROM forecast_observations
+    WHERE verified = 1 AND active = 1
+    ORDER BY asset_id, target_year, publisher, id
+  `).all() as import("@crypto-control/portfolio").ObservationRow[];
+
+  const activeSources = seededRows.flatMap(row => observationToForecastSources(row));
+  if (activeSources.length === 0) {
+    console.warn(`[ForecastSeed] Fuentes: ${SEED_FORECAST_SOURCES.length} | Observaciones: ${SEED_FORECAST_OBSERVATIONS.length} | Sin fuentes verificadas para activar`);
+    return;
+  }
+
+  const candidateId = "seed-active-v1";
+  const candidateRepo = new ForecastCandidateRepository(sqlite);
+  const existingCandidate = candidateRepo.getById(candidateId);
+  if (!existingCandidate) {
+    const checkedAt = Date.now();
+    const coverage = computeCoverageMatrix(seededRows);
+    const assetCoverage = coverage.reduce<Record<string, { years: number[]; sourceCount: number }>>((acc, item) => {
+      const current = acc[item.assetId] ?? { years: [], sourceCount: 0 };
+      if (!current.years.includes(item.targetYear)) current.years.push(item.targetYear);
+      current.sourceCount = Math.max(current.sourceCount, item.sourceCount);
+      acc[item.assetId] = current;
+      return acc;
+    }, {});
+    candidateRepo.create(
+      candidateId,
+      activeSources,
+      seededRows.map(row => row.id),
+      {
+        passed: true,
+        errors: [],
+        warnings: [],
+        checkedAt,
+        observationCount: seededRows.length,
+        assetCoverage,
+      },
+      {
+        passed: true,
+        diffs: [],
+        checkedAt,
+      },
+    );
+  }
+  candidateRepo.approve(candidateId);
+  activeRepo.activate(candidateId, activeSources);
+  console.log(`[ForecastSeed] Fuentes: ${SEED_FORECAST_SOURCES.length} | Observaciones: ${SEED_FORECAST_OBSERVATIONS.length} | Activa inicial: ${candidateId} (${activeSources.length} targets)`);
 }
 
 function setupIpcHandlers() {
@@ -1094,6 +1159,7 @@ function setupIpcHandlers() {
         .where(inArray(schema.cycleRebuyTiers.cycleId, cycleIds))
         .all()
       : [];
+
     const rebuyTiers: import("@crypto-control/portfolio").SnapshotRebuyTier[] = rebuyTierRows.map(r => ({
       id: r.id,
       cycleId: r.cycleId,
@@ -4717,6 +4783,11 @@ function setupIpcHandlers() {
         .all()
       : [];
 
+    const realizedGainRows = db.select().from(schema.realizedGains)
+      .orderBy(asc(schema.realizedGains.date))
+      .all()
+      .filter(g => isInvestableAsset(g.assetId) && g.amountSold > 0 && g.saleValueEur > 0);
+
     const substitutionRows = cycleIds.length > 0
       ? db.select().from(schema.assetSubstitutions)
         .where(inArray(schema.assetSubstitutions.cycleId, cycleIds))
@@ -4760,7 +4831,11 @@ function setupIpcHandlers() {
         .map(r => ({
           id: r.id,
           assetId: r.assetId ?? null,
-          triggerType: (r.conditionType ?? "gain_multiple") as "gain_multiple" | "price_target" | "portfolio_weight",
+          triggerType: (
+            r.conditionType === "price_target" ? "price_target" :
+            r.conditionType === "gain_percentage" ? "gain_percentage" :
+            "gain_multiple"
+          ) as "gain_multiple" | "gain_percentage" | "price_target" | "portfolio_weight",
           triggerValue: r.conditionValue ?? 0,
           sellPercentage: r.sellPercentage,
           status: (r.status === "activa" ? "active" : "cancelled") as "active" | "pending" | "triggered" | "cancelled",
@@ -4773,7 +4848,14 @@ function setupIpcHandlers() {
           assetId: r.assetId ?? null,
           drawdownPercentage: r.drawdownPercentage,
           usagePercentage: r.usagePercentage,
-          referenceType: (r.referenceType === "last_sale" ? "last_sale" : r.referenceType === "cycle_peak" ? "cycle_peak" : null) as "last_sale" | "cycle_peak" | null,
+          referenceType: (
+            r.referenceType === "last_sale" || r.referenceType === "sale_price" || r.referenceType === "max_since_sale"
+              ? "last_sale"
+              : r.referenceType === "cycle_peak" || r.referenceType === "cycle_max"
+                ? "cycle_peak"
+                : null
+          ) as "last_sale" | "cycle_peak" | null,
+          referenceValue: finiteOrNull(r.referenceValue ?? null),
           status: (r.status === "activa" ? "active" : "cancelled") as "active" | "triggered" | "cancelled",
         })),
       substitutions: substitutionRows
@@ -4854,6 +4936,14 @@ function setupIpcHandlers() {
         unitAcquisitionPriceEur: l.unitAcquisitionPriceEur ?? 0,
       }));
 
+    const historicalSales = realizedGainRows.map(g => ({
+      assetId: g.assetId,
+      date: g.date,
+      quantity: g.amountSold,
+      unitPriceEur: g.saleValueEur / g.amountSold,
+      realizedGainEur: g.realizedGainEur,
+    }));
+
     const historicalCapitalEur = investablePositionIds.reduce(
       (s, id) => s + (portfolioPositions[id]?.totalInvestedEur ?? 0), 0
     );
@@ -4872,6 +4962,7 @@ function setupIpcHandlers() {
       horizonDate,
       currentPositions,
       currentLots,
+      historicalSales,
       eurcFree,
       eurcFiscalReserve,
       eurCash,

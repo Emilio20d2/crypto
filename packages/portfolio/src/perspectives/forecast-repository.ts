@@ -63,6 +63,20 @@ export interface IngestionLogRow {
 // Mínimo de fuentes independientes para generar escenarios por cuantil
 export const MIN_SOURCES_FOR_QUANTILE = 3;
 
+const VALID_SOURCE_TYPES = new Set(["analyst", "institution", "media", "model"]);
+const INSTITUTIONAL_SOURCE_TYPES = new Set(["asset_manager", "bank", "research_firm", "exchange", "foundation"]);
+
+export function normalizeForecastSourceType(sourceType: string): import("./forecast-sources").ForecastSourceType {
+  const normalized = sourceType.trim().toLowerCase();
+  if (VALID_SOURCE_TYPES.has(normalized)) {
+    return normalized as import("./forecast-sources").ForecastSourceType;
+  }
+  if (INSTITUTIONAL_SOURCE_TYPES.has(normalized)) {
+    return "institution";
+  }
+  return "institution";
+}
+
 function toUsdFactor(currency: string, fxRate: number | null): number | null {
   if (currency === "USD") return 1;
   if (currency === "EUR" && fxRate != null && fxRate > 0) return 1 / fxRate;
@@ -130,7 +144,7 @@ export function observationToForecastSources(row: ObservationRow, currentPriceUs
 
   const base: Omit<ForecastSource, "id" | "targetPriceUsd" | "direction"> = {
     publisher: row.publisher,
-    sourceType: row.source_type as import("./forecast-sources").ForecastSourceType,
+    sourceType: normalizeForecastSourceType(row.source_type),
     assetId: row.asset_id,
     targetYear: row.target_year,
     confidence: weight,

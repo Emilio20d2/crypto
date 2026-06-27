@@ -142,6 +142,7 @@ function initState(input: SimInput): MonthlyState {
       avgCostEur: pos.avgCostEur,
       peakPriceEur: pos.currentPriceEur ?? null,
       lastSalePriceEur: null,
+      lastSaleDate: null,
       totalBought: 0,
       totalSold: 0,
       totalRebuys: 0,
@@ -164,6 +165,7 @@ function initState(input: SimInput): MonthlyState {
           avgCostEur: null,
           peakPriceEur: null,
           lastSalePriceEur: null,
+          lastSaleDate: null,
           totalBought: 0,
           totalSold: 0,
           totalRebuys: 0,
@@ -175,6 +177,44 @@ function initState(input: SimInput): MonthlyState {
         };
       }
     }
+  }
+
+  const latestSalesByAsset = new Map<string, { date: number; unitPriceEur: number; quantity: number }>();
+  for (const sale of input.historicalSales ?? []) {
+    if (!sale.assetId || sale.quantity <= 0 || sale.unitPriceEur <= 0) continue;
+    const prev = latestSalesByAsset.get(sale.assetId);
+    if (!prev || sale.date > prev.date) {
+      latestSalesByAsset.set(sale.assetId, {
+        date: sale.date,
+        unitPriceEur: sale.unitPriceEur,
+        quantity: sale.quantity,
+      });
+    }
+  }
+  for (const [assetId, sale] of latestSalesByAsset) {
+    if (!assetStates[assetId]) {
+      assetStates[assetId] = {
+        assetId,
+        balance: 0,
+        lots: [],
+        avgCostEur: null,
+        peakPriceEur: null,
+        lastSalePriceEur: sale.unitPriceEur,
+        lastSaleDate: sale.date,
+        totalBought: 0,
+        totalSold: sale.quantity,
+        totalRebuys: 0,
+        goalReached: false,
+        failed: false,
+        deteriorated: false,
+        usedRebuyTierIds: new Set(),
+        usedSaleProposalIds: new Set(),
+      };
+      continue;
+    }
+    assetStates[assetId].lastSalePriceEur = sale.unitPriceEur;
+    assetStates[assetId].lastSaleDate = sale.date;
+    assetStates[assetId].totalSold += sale.quantity;
   }
 
   return {
@@ -189,12 +229,14 @@ function initState(input: SimInput): MonthlyState {
     monthRebuysEur: 0,
     monthCommissionsEur: 0,
     monthTaxEur: 0,
+    monthRealizedGainEur: 0,
     monthEurcReinvestedEur: 0,
     monthNetEurcInflowEur: 0,
     cumulativeContributionsEur: 0,
     cumulativeSalesEur: 0,
     cumulativeRebuysEur: 0,
     cumulativeTaxEur: 0,
+    cumulativeRealizedGainEur: 0,
     cumulativeCommissionsEur: 0,
   };
 }
@@ -325,6 +367,8 @@ function evaluateSales(
     let triggered = false;
     if (rule.triggerType === "gain_multiple") {
       triggered = priceEur >= avgCost * rule.triggerValue;
+    } else if (rule.triggerType === "gain_percentage") {
+      triggered = ((priceEur - avgCost) / avgCost) * 100 >= rule.triggerValue;
     } else if (rule.triggerType === "price_target") {
       triggered = priceEur >= rule.triggerValue;
     }
@@ -347,6 +391,7 @@ function evaluateSales(
     st.balance -= quantityToSell;
     st.totalSold += quantityToSell;
     st.lastSalePriceEur = priceEur;
+    st.lastSaleDate = date;
     st.avgCostEur = calcAvgCost(st.lots);
     rule.triggeredAt = date;
 
@@ -355,6 +400,7 @@ function evaluateSales(
     state.monthSalesEur += grossEur;
     state.monthCommissionsEur += commissionEur;
     state.monthTaxEur += taxEur;
+    state.monthRealizedGainEur += gainEur;
     state.monthNetEurcInflowEur += eurcEur;
 
     state.events.push({
@@ -403,11 +449,14 @@ function evaluateRebuys(
     const priceEur = prices[assetId]?.[mKey];
     if (!priceEur || priceEur <= 0) continue;
 
-    const referencePrice = tier.referenceType === "last_sale"
-      ? st.lastSalePriceEur
-      : st.peakPriceEur;
+    const configuredReference = tier.referenceValue != null && tier.referenceValue > 0
+      ? tier.referenceValue
+      : null;
+    const referencePrice = configuredReference
+      ?? (tier.referenceType === "last_sale" ? st.lastSalePriceEur : st.peakPriceEur);
 
     if (!referencePrice || referencePrice <= 0) continue;
+    if (tier.referenceType === "last_sale" && !configuredReference && !st.lastSaleDate) continue;
 
     const drawdown = (referencePrice - priceEur) / referencePrice;
     if (drawdown < tier.drawdownPercentage / 100) continue;
@@ -658,6 +707,7 @@ function simulateMonth(
     monthRebuysEur: 0,
     monthCommissionsEur: 0,
     monthTaxEur: 0,
+    monthRealizedGainEur: 0,
     monthEurcReinvestedEur: 0,
     monthNetEurcInflowEur: 0,
     assetStates: {},
@@ -735,6 +785,7 @@ function simulateMonth(
           assetId: sub.toAssetId,
           balance: 0, lots: [], avgCostEur: null,
           peakPriceEur: null, lastSalePriceEur: null,
+          lastSaleDate: null,
           totalBought: 0, totalSold: 0, totalRebuys: 0,
           goalReached: false, failed: false, deteriorated: false,
           usedRebuyTierIds: new Set(),
@@ -761,6 +812,7 @@ function simulateMonth(
       next.monthSalesEur += grossEur;
       next.monthCommissionsEur += commissionEur + commTo;
       next.monthTaxEur += taxEur;
+      next.monthRealizedGainEur += gainEur;
 
       sub.status = "executed";
 
@@ -822,6 +874,21 @@ function simulateMonth(
   if (activeCycle && localDayStart(activeCycle.startDate) <= _dayMs && (activeCycle.endDate == null || localDayStart(activeCycle.endDate) > _dayMs)) {
     const budget = activeCycle.monthlyAmountEur;
     const allocations = distributeMonthly(activeCycle, cycleAssets, budget, next.assetStates);
+    const allocatedBudget = allocations.reduce((sum, alloc) => sum + alloc.amountEur, 0);
+    const unallocatedBudget = Math.max(0, budget - allocatedBudget);
+
+    if (budget > 0) {
+      next.monthContributionsEur += budget;
+      next.events.push({
+        date,
+        type: "contribution",
+        amountEur: budget,
+        description: `Aportación mensual: ${budget.toFixed(2)} €`,
+      });
+    }
+    if (unallocatedBudget >= 0.01) {
+      next.eurCash += unallocatedBudget;
+    }
 
     for (const alloc of allocations) {
       const priceEur = prices[alloc.assetId]?.[mKey];
@@ -871,7 +938,6 @@ function simulateMonth(
       st.lots.push(newLot);
       st.avgCostEur = calcAvgCost(st.lots);
 
-      next.monthContributionsEur += alloc.amountEur;
       next.monthCommissionsEur += commissionEur;
 
       next.events.push({
@@ -895,6 +961,7 @@ function simulateMonth(
   next.cumulativeSalesEur = state.cumulativeSalesEur + next.monthSalesEur;
   next.cumulativeRebuysEur = state.cumulativeRebuysEur + next.monthRebuysEur;
   next.cumulativeTaxEur = state.cumulativeTaxEur + next.monthTaxEur;
+  next.cumulativeRealizedGainEur = state.cumulativeRealizedGainEur + next.monthRealizedGainEur;
   next.cumulativeCommissionsEur = state.cumulativeCommissionsEur + next.monthCommissionsEur;
 
   return next;
@@ -973,6 +1040,7 @@ function buildAnnualSnapshot(
   const rebuysEur = monthsOfYear.reduce((s, m) => s + m.monthRebuysEur, 0);
   const commissionsEur = monthsOfYear.reduce((s, m) => s + m.monthCommissionsEur, 0);
   const taxEur = monthsOfYear.reduce((s, m) => s + m.monthTaxEur, 0);
+  const realizedGainEur = monthsOfYear.reduce((s, m) => s + m.monthRealizedGainEur, 0);
   const eurcReinvestedEur = monthsOfYear.reduce((s, m) => s + m.monthEurcReinvestedEur, 0);
   const netEurcInflowEur = monthsOfYear.reduce((s, m) => s + m.monthNetEurcInflowEur, 0);
 
@@ -1063,6 +1131,7 @@ function buildAnnualSnapshot(
     rebuysEur,
     commissionsEur,
     taxEur,
+    realizedGainEur,
     eurcReinvestedEur,
     netEurcInflowEur,
     fiscalReserveEur: lastMonth.eurcFiscalReserve,
@@ -1384,6 +1453,8 @@ function runScenario(
     totalRebuysEur: annualSnapshots.reduce((s, a) => s + a.rebuysEur, 0),
     totalCommissionsEur: annualSnapshots.reduce((s, a) => s + a.commissionsEur, 0),
     totalTaxEur: annualSnapshots.reduce((s, a) => s + a.taxEur, 0),
+    totalRealizedGainEur: annualSnapshots.reduce((s, a) => s + a.realizedGainEur, 0),
+    totalUnrealizedGainEur: assetSummaries.reduce((s, a) => s + (a.finalValueEur != null && a.finalAvgCostEur != null ? a.finalValueEur - a.finalBalance * a.finalAvgCostEur : 0), 0),
     totalEurcReinvestedEur: annualSnapshots.reduce((s, a) => s + a.eurcReinvestedEur, 0),
     totalNetEurcInflowEur: annualSnapshots.reduce((s, a) => s + a.netEurcInflowEur, 0),
     initialEurcFreeEur: input.eurcFree,

@@ -33,7 +33,7 @@ export type {
 export {
   SIM_SCENARIOS, SCENARIO_LABELS, DEFAULT_SPANISH_TAX_BANDS, DEFAULT_SIM_OPTIONS,
   monthKey, runPerspectivesSimulation, buildExternalPriceMap,
-  observationToForecastSources, computeCoverageMatrix, computeFinalWeight,
+  observationToForecastSources, normalizeForecastSourceType, computeCoverageMatrix, computeFinalWeight,
   MIN_SOURCES_FOR_QUANTILE, ingestSource, ingestRssSource, ingestHttpSource, verifyUrl,
   SEED_FORECAST_SOURCES, SEED_FORECAST_OBSERVATIONS,
   validateStagingObservations, validateMonotonicity, runRegressionTest,

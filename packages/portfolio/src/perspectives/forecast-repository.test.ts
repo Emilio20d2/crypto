@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   observationToForecastSources, computeCoverageMatrix, computeFinalWeight,
-  MIN_SOURCES_FOR_QUANTILE, type ObservationRow,
+  normalizeForecastSourceType, MIN_SOURCES_FOR_QUANTILE, type ObservationRow,
 } from "./forecast-repository";
 import { SEED_FORECAST_OBSERVATIONS, SEED_FORECAST_SOURCES } from "./forecast-seed";
 
@@ -46,6 +46,14 @@ describe("observationToForecastSources", () => {
     expect(sources[0].targetPriceUsd).toBeCloseTo(710_000); // USD ya
     expect(sources[0].assetId).toBe("bitcoin");
     expect(sources[0].targetYear).toBe(2030);
+    expect(sources[0].sourceType).toBe("institution");
+  });
+
+  it("normaliza taxonomías externas a tipos soportados por el motor", () => {
+    expect(normalizeForecastSourceType("asset_manager")).toBe("institution");
+    expect(normalizeForecastSourceType("bank")).toBe("institution");
+    expect(normalizeForecastSourceType("research_firm")).toBe("institution");
+    expect(normalizeForecastSourceType("model")).toBe("model");
   });
 
   it("devuelve 3 ForecastSources para targetType=low_base_high", () => {

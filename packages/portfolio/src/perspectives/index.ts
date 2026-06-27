@@ -7,7 +7,7 @@ export {
   type CoverageState, type ExternalPriceResult, type ExternalPriceMapOptions,
 } from "./external-price-builder";
 export {
-  observationToForecastSources, computeCoverageMatrix, computeFinalWeight,
+  observationToForecastSources, normalizeForecastSourceType, computeCoverageMatrix, computeFinalWeight,
   MIN_SOURCES_FOR_QUANTILE,
   type ObservationRow, type SourceRow, type IngestionLogRow, type AssetYearCoverage,
 } from "./forecast-repository";

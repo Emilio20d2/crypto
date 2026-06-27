@@ -291,6 +291,61 @@ describe("sim-engine: structure", () => {
 // ─── Motor de simulación: ventas ─────────────────────────────────────────────
 
 describe("sim-engine: sales", () => {
+  it("venta configurada aplica FIFO, plusvalía y reserva fiscal separada", () => {
+    const input = makeInput({
+      currentPositions: [{ assetId: "BTC", balance: 1.0, avgCostEur: 10_000, currentPriceEur: 60_000 }],
+      currentLots: [
+        { id: "old", assetId: "BTC", date: NOW - 4 * YEAR_MS, remainingAmount: 0.5, unitAcquisitionPriceEur: 10_000 },
+        { id: "new", assetId: "BTC", date: NOW - 2 * YEAR_MS, remainingAmount: 0.5, unitAcquisitionPriceEur: 20_000 },
+      ],
+      horizonDate: horizon(1),
+      cycles: [makeCycle({
+        monthlyAmountEur: 0,
+        saleRules: [{
+          id: "sell-btc-2x",
+          assetId: "BTC",
+          triggerType: "gain_multiple",
+          triggerValue: 2,
+          sellPercentage: 50,
+          status: "active",
+          triggeredAt: null,
+        }],
+      })],
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy", commissionRate: 0 },
+    });
+    const result = runPerspectivesSimulation(input);
+    const base = result.scenarios.find(s => s.scenario === "base")!;
+    expect(base.summary.totalSalesEur).toBeGreaterThan(0);
+    expect(base.summary.totalRealizedGainEur).toBeGreaterThan(0);
+    expect(base.summary.totalTaxEur).toBeGreaterThan(0);
+    expect(base.summary.finalFiscalReserveEur).toBeGreaterThan(0);
+    expect(base.summary.finalEurcFreeEur).toBeCloseTo(base.summary.totalSalesEur - base.summary.totalTaxEur, 0);
+  });
+
+  it("venta configurada no se repite sin rearme", () => {
+    const input = makeInput({
+      currentPositions: [{ assetId: "BTC", balance: 1.0, avgCostEur: 10_000, currentPriceEur: 60_000 }],
+      currentLots: [{ id: "l1", assetId: "BTC", date: NOW - 4 * YEAR_MS, remainingAmount: 1.0, unitAcquisitionPriceEur: 10_000 }],
+      horizonDate: horizon(3),
+      cycles: [makeCycle({
+        monthlyAmountEur: 0,
+        saleRules: [{
+          id: "sell-once",
+          assetId: "BTC",
+          triggerType: "gain_percentage",
+          triggerValue: 25,
+          sellPercentage: 25,
+          status: "active",
+          triggeredAt: null,
+        }],
+      })],
+    });
+    const result = runPerspectivesSimulation(input);
+    const base = result.scenarios.find(s => s.scenario === "base")!;
+    const saleEvents = base.annualSnapshots.flatMap(s => s.events).filter(e => e.type === "sale");
+    expect(saleEvents).toHaveLength(1);
+  });
+
   it("sale generates EURC (eurcFree > 0 after sale)", () => {
     const input = makeInput({
       currentPositions: [{ assetId: "BTC", balance: 1.0, avgCostEur: 5000, currentPriceEur: 60000 }],
@@ -342,6 +397,62 @@ describe("sim-engine: sales", () => {
 // ─── Motor de simulación: recompras ─────────────────────────────────────────
 
 describe("sim-engine: rebuys", () => {
+  it("recompra con EURC usa venta previa real y no toca reserva fiscal", () => {
+    const input = makeInput({
+      now: new Date("2026-01-01").getTime(),
+      currentPositions: [{ assetId: "BTC", balance: 0.5, avgCostEur: 30_000, currentPriceEur: 60_000 }],
+      currentLots: [{ id: "l1", assetId: "BTC", date: NOW - 2 * YEAR_MS, remainingAmount: 0.5, unitAcquisitionPriceEur: 30_000 }],
+      historicalSales: [{ assetId: "BTC", date: NOW - YEAR_MS, quantity: 0.2, unitPriceEur: 100_000, realizedGainEur: 10_000 }],
+      eurcFree: 2_000,
+      eurcFiscalReserve: 500,
+      horizonDate: horizon(1),
+      cycles: [makeCycle({
+        monthlyAmountEur: 0,
+        rebuyTiers: [{
+          id: "rebuy-from-last-sale",
+          assetId: "BTC",
+          drawdownPercentage: 20,
+          usagePercentage: 50,
+          referenceType: "last_sale",
+          status: "active",
+        }],
+      })],
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy", commissionRate: 0 },
+    });
+    const result = runPerspectivesSimulation(input);
+    const base = result.scenarios.find(s => s.scenario === "base")!;
+    expect(base.summary.totalRebuysEur).toBeGreaterThan(0);
+    expect(base.summary.finalFiscalReserveEur).toBe(500);
+    expect(base.summary.finalEurcFreeEur).toBeLessThan(2_000);
+  });
+
+  it("recompra sin EURC libre no se ejecuta aunque exista venta previa", () => {
+    const input = makeInput({
+      currentPositions: [{ assetId: "BTC", balance: 0.5, avgCostEur: 30_000, currentPriceEur: 60_000 }],
+      currentLots: [{ id: "l1", assetId: "BTC", date: NOW - 2 * YEAR_MS, remainingAmount: 0.5, unitAcquisitionPriceEur: 30_000 }],
+      historicalSales: [{ assetId: "BTC", date: NOW - YEAR_MS, quantity: 0.2, unitPriceEur: 100_000 }],
+      eurcFree: 0,
+      eurcFiscalReserve: 2_000,
+      horizonDate: horizon(1),
+      cycles: [makeCycle({
+        monthlyAmountEur: 0,
+        rebuyTiers: [{
+          id: "rebuy-no-free-eurc",
+          assetId: "BTC",
+          drawdownPercentage: 20,
+          usagePercentage: 50,
+          referenceType: "last_sale",
+          status: "active",
+        }],
+      })],
+    });
+    const result = runPerspectivesSimulation(input);
+    for (const s of result.scenarios) {
+      expect(s.summary.totalRebuysEur).toBe(0);
+      expect(s.summary.finalFiscalReserveEur).toBe(2_000);
+    }
+  });
+
   it("rebuy never uses fiscal reserve", () => {
     const input = makeInput({
       eurcFree: 0,
@@ -558,6 +669,36 @@ describe("sim-engine: control 2036-2044", () => {
 // ─── Contribuciones ──────────────────────────────────────────────────────────
 
 describe("sim-engine: contributions", () => {
+  it("aportación sin precio no desaparece y queda como EURC libre", () => {
+    const input = makeInput({
+      currentPositions: [],
+      currentLots: [],
+      historicalCapitalEur: 0,
+      horizonDate: horizon(1),
+      cycles: [makeCycle({
+        monthlyAmountEur: 100,
+        assets: [{
+          id: "missing-asset",
+          assetId: "NO_PRICE",
+          allocationType: "percentage",
+          allocationValue: 100,
+          allocationPercentage: 100,
+          fixedAmountEur: null,
+          targetAmount: null,
+          targetValueEur: null,
+          startDate: NOW - YEAR_MS,
+          endDate: null,
+          status: "active",
+        }],
+      })],
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base" },
+    });
+    const result = runPerspectivesSimulation(input, { sources: [], candidateId: null, activatedAt: null, usdToEurRate: null, fxSource: null, fxRateAt: null });
+    const base = result.scenarios.find(s => s.scenario === "base")!;
+    expect(base.summary.totalContributionsEur).toBeGreaterThan(0);
+    expect(base.summary.finalEurcFreeEur).toBeCloseTo(base.summary.totalContributionsEur, 2);
+  });
+
   it("totalContributionsEur in summary matches sum of annual contributions", () => {
     const input = makeInput({ horizonDate: horizon(5) });
     const result = runPerspectivesSimulation(input);

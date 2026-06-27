@@ -54,6 +54,7 @@ export interface AssetSimState {
   avgCostEur: number | null;
   peakPriceEur: number | null;    // máximo precio visto
   lastSalePriceEur: number | null;
+  lastSaleDate: number | null;
   totalBought: number;
   totalSold: number;
   totalRebuys: number;
@@ -79,6 +80,7 @@ export interface MonthlyState {
   monthRebuysEur: number;
   monthCommissionsEur: number;
   monthTaxEur: number;
+  monthRealizedGainEur: number;
   monthEurcReinvestedEur: number;
   monthNetEurcInflowEur: number;
   // acumulados del escenario hasta este mes
@@ -86,6 +88,7 @@ export interface MonthlyState {
   cumulativeSalesEur: number;
   cumulativeRebuysEur: number;
   cumulativeTaxEur: number;
+  cumulativeRealizedGainEur: number;
   cumulativeCommissionsEur: number;
 }
 
@@ -107,6 +110,7 @@ export interface AnnualSnapshot {
   rebuysEur: number;
   commissionsEur: number;
   taxEur: number;
+  realizedGainEur: number;
   eurcReinvestedEur: number;
   netEurcInflowEur: number;
 
@@ -219,6 +223,8 @@ export interface ScenarioSummary {
   totalRebuysEur: number;
   totalCommissionsEur: number;
   totalTaxEur: number;
+  totalRealizedGainEur: number;
+  totalUnrealizedGainEur: number;
   totalEurcReinvestedEur: number;
   totalNetEurcInflowEur: number;
   initialEurcFreeEur: number;
@@ -298,6 +304,7 @@ export interface SimInput {
   // Estado actual (leído de módulos existentes, no recalculado)
   currentPositions: CurrentPosition[];
   currentLots: HistoricalLot[];
+  historicalSales?: HistoricalSale[];
   eurcFree: number;
   eurcFiscalReserve: number;
   eurCash: number;
@@ -324,6 +331,14 @@ export interface HistoricalLot {
   date: number;
   remainingAmount: number;
   unitAcquisitionPriceEur: number;
+}
+
+export interface HistoricalSale {
+  assetId: string;
+  date: number;
+  quantity: number;
+  unitPriceEur: number;
+  realizedGainEur?: number | null;
 }
 
 export interface SimCycle {
@@ -357,7 +372,7 @@ export interface SimCycleAsset {
 export interface SimSaleRule {
   id: string;
   assetId: string | null;
-  triggerType: "gain_multiple" | "price_target" | "portfolio_weight";
+  triggerType: "gain_multiple" | "gain_percentage" | "price_target" | "portfolio_weight";
   triggerValue: number;
   sellPercentage: number;  // 0..99 (never 100%)
   status: "active" | "pending" | "triggered" | "cancelled";
@@ -370,6 +385,7 @@ export interface SimRebuyTier {
   drawdownPercentage: number;   // e.g. 20 = 20% drop
   usagePercentage: number;      // % of available EURC
   referenceType: "last_sale" | "cycle_peak" | null;
+  referenceValue?: number | null;
   status: "active" | "triggered" | "cancelled";
 }
 
