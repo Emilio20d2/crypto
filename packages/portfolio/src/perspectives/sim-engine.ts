@@ -436,9 +436,9 @@ function evaluateProposedSales(
   if (options.policy !== "full_strategy") return;
 
   const tiers = [
-    { gainPct: 100, sellPct: 0.10, label: "+100%" },
-    { gainPct: 200, sellPct: 0.15, label: "+200%" },
-    { gainPct: 400, sellPct: 0.20, label: "+400%" },
+    { gainPct: 200, sellPct: 0.20, label: "+200%" },
+    { gainPct: 100, sellPct: 0.15, label: "+100%" },
+    { gainPct: 50, sellPct: 0.10, label: "+50%" },
   ];
 
   for (const [assetId, st] of Object.entries(state.assetStates)) {
@@ -593,9 +593,9 @@ function evaluateProposedRebuys(
   if (state.eurcFree < 1) return;
 
   const DEFAULT_TIERS = [
-    { drawdown: 0.15, usePct: 0.15 },
-    { drawdown: 0.25, usePct: 0.25 },
-    { drawdown: 0.40, usePct: 0.40 },
+    { drawdown: 0.40, usePct: 0.50 },
+    { drawdown: 0.25, usePct: 0.30 },
+    { drawdown: 0.15, usePct: 0.20 },
   ];
 
   const eligibleAssets = cycleAssets.filter(ca => {
