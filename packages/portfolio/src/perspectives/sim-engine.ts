@@ -424,6 +424,80 @@ function fmtEur(v: number): string {
   return v.toLocaleString("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
 }
 
+// ─── Ventas hipotéticas de escenario ─────────────────────────────────────────
+
+function evaluateProposedSales(
+  state: MonthlyState,
+  prices: Record<string, Record<string, number>>,
+  mKey: string,
+  options: SimOptions,
+  date: number,
+): void {
+  if (options.policy !== "full_strategy") return;
+
+  const tiers = [
+    { gainPct: 100, sellPct: 0.10, label: "+100%" },
+    { gainPct: 200, sellPct: 0.15, label: "+200%" },
+    { gainPct: 400, sellPct: 0.20, label: "+400%" },
+  ];
+
+  for (const [assetId, st] of Object.entries(state.assetStates)) {
+    if (st.failed || st.balance <= 0) continue;
+    const priceEur = prices[assetId]?.[mKey];
+    if (!priceEur || priceEur <= 0) continue;
+    const avgCost = st.avgCostEur;
+    if (avgCost == null || avgCost <= 0) continue;
+
+    const gainPct = ((priceEur - avgCost) / avgCost) * 100;
+    for (const tier of tiers) {
+      if (gainPct < tier.gainPct) continue;
+      const saleKey = `proposed-sale-${assetId}-${tier.gainPct}`;
+      if (st.usedSaleProposalIds.has(saleKey)) continue;
+
+      const quantityToSell = st.balance * tier.sellPct;
+      const remainingAfterSale = st.balance - quantityToSell;
+      if (quantityToSell < 0.000001 || remainingAfterSale <= 0) continue;
+
+      const { totalCostEur } = consumeFifo(st.lots, quantityToSell);
+      const grossEur = quantityToSell * priceEur;
+      const commissionEur = grossEur * options.commissionRate;
+      const netEur = grossEur - commissionEur;
+      const gainEur = netEur - totalCostEur;
+      const taxEur = calcTax(Math.max(0, gainEur), options);
+      const eurcEur = Math.max(0, netEur - taxEur);
+
+      st.balance = remainingAfterSale;
+      st.totalSold += quantityToSell;
+      st.lastSalePriceEur = priceEur;
+      st.lastSaleDate = date;
+      st.avgCostEur = calcAvgCost(st.lots);
+      st.usedSaleProposalIds.add(saleKey);
+
+      state.eurcFree += eurcEur;
+      state.eurcFiscalReserve += taxEur;
+      state.monthSalesEur += grossEur;
+      state.monthCommissionsEur += commissionEur;
+      state.monthTaxEur += taxEur;
+      state.monthRealizedGainEur += gainEur;
+      state.monthNetEurcInflowEur += eurcEur;
+
+      state.events.push({
+        date,
+        type: "sale",
+        assetId,
+        amountEur: grossEur,
+        quantity: quantityToSell,
+        priceEur,
+        gainEur,
+        taxEur,
+        description: `Venta parcial hipotética ${assetId}: tramo ${tier.label}, ${(tier.sellPct * 100).toFixed(0)}% vendido; reserva fiscal ${fmtEur(taxEur)}, EURC libre ${fmtEur(eurcEur)}`,
+      });
+
+      break;
+    }
+  }
+}
+
 // ─── Evaluación de recompras ─────────────────────────────────────────────────
 
 function evaluateRebuys(
@@ -504,7 +578,7 @@ function evaluateRebuys(
   }
 }
 
-// ─── Recompras propuestas (sin escalones configurados) ───────────────────────
+// ─── Recompras hipotéticas con EURC libre generado por ventas ────────────────
 
 function evaluateProposedRebuys(
   cycle: SimCycle,
@@ -519,9 +593,9 @@ function evaluateProposedRebuys(
   if (state.eurcFree < 1) return;
 
   const DEFAULT_TIERS = [
-    { drawdown: 0.20, usePct: 0.15 },
-    { drawdown: 0.35, usePct: 0.25 },
-    { drawdown: 0.50, usePct: 0.40 },
+    { drawdown: 0.15, usePct: 0.15 },
+    { drawdown: 0.25, usePct: 0.25 },
+    { drawdown: 0.40, usePct: 0.40 },
   ];
 
   const eligibleAssets = cycleAssets.filter(ca => {
@@ -534,14 +608,14 @@ function evaluateProposedRebuys(
     if (!st) continue;
     const priceEur = prices[ca.assetId]?.[mKey];
     if (!priceEur || priceEur <= 0) continue;
-    if (!st.peakPriceEur || st.peakPriceEur <= 0) continue;
+    if (!st.lastSalePriceEur || st.lastSalePriceEur <= 0 || !st.lastSaleDate) continue;
 
-    const drawdown = (st.peakPriceEur - priceEur) / st.peakPriceEur;
+    const drawdown = (st.lastSalePriceEur - priceEur) / st.lastSalePriceEur;
 
     for (const tier of DEFAULT_TIERS) {
       if (drawdown < tier.drawdown) continue;
 
-      const tierKey = `proposed-rebuy-${ca.assetId}-${Math.round(tier.drawdown * 100)}-peak${Math.round(st.peakPriceEur)}`;
+      const tierKey = `proposed-rebuy-${ca.assetId}-${Math.round(tier.drawdown * 100)}-sale${Math.round(st.lastSalePriceEur)}`;
       if (st.usedRebuyTierIds.has(tierKey)) continue;
 
       const eurcToUse = state.eurcFree * tier.usePct;
@@ -569,6 +643,7 @@ function evaluateProposedRebuys(
       state.eurcFree -= eurcToUse;
       state.monthRebuysEur += eurcToUse;
       state.monthCommissionsEur += commission;
+      state.monthEurcReinvestedEur += eurcToUse;
 
       state.events.push({
         date,
@@ -577,7 +652,7 @@ function evaluateProposedRebuys(
         amountEur: eurcToUse,
         quantity,
         priceEur,
-        description: `Recompra propuesta ${ca.assetId}: −${(drawdown * 100).toFixed(0)}% desde máximo (${fmtEur(eurcToUse)})`,
+        description: `Recompra hipotética ${ca.assetId}: −${(drawdown * 100).toFixed(0)}% desde venta previa; usa ${fmtEur(eurcToUse)} de EURC libre`,
       });
 
       break; // solo el primer umbral activado por mes y activo
@@ -868,6 +943,7 @@ function simulateMonth(
   if (activeCycle) {
     evaluateSales(activeCycle, next, prices, mKey, options, date);
   }
+  evaluateProposedSales(next, prices, mKey, options, date);
 
   // 6. Add monthly contribution
   const _dayMs = localDayStart(date);
@@ -954,6 +1030,7 @@ function simulateMonth(
   // 7. Evaluate rebuys (configured tiers only — no generic tiers)
   if (activeCycle) {
     evaluateRebuys(activeCycle, next, prices, mKey, options, date);
+    evaluateProposedRebuys(activeCycle, next, prices, mKey, options, date, cycleAssets);
   }
 
   // 8. Accumulators

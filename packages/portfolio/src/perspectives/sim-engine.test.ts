@@ -342,8 +342,10 @@ describe("sim-engine: sales", () => {
     });
     const result = runPerspectivesSimulation(input);
     const base = result.scenarios.find(s => s.scenario === "base")!;
-    const saleEvents = base.annualSnapshots.flatMap(s => s.events).filter(e => e.type === "sale");
-    expect(saleEvents).toHaveLength(1);
+    const configuredSales = base.annualSnapshots
+      .flatMap(s => s.events)
+      .filter(e => e.type === "sale" && e.description.includes("por regla"));
+    expect(configuredSales).toHaveLength(1);
   });
 
   it("sale generates EURC (eurcFree > 0 after sale)", () => {
@@ -362,9 +364,7 @@ describe("sim-engine: sales", () => {
     }
   });
 
-  it("sin reglas configuradas no se generan ventas genéricas (escalones eliminados)", () => {
-    // El motor ya no genera propuestas genéricas 3×/5×/10×.
-    // Solo se ejecutan reglas configuradas por el usuario.
+  it("sin reglas configuradas genera ventas parciales hipotéticas de escenario", () => {
     const input = makeInput({
       currentPositions: [{ assetId: "BTC", balance: 1.0, avgCostEur: 5000, currentPriceEur: 90000 }],
       currentLots: [{ id: "l1", assetId: "BTC", date: NOW - 3 * YEAR_MS, remainingAmount: 1.0, unitAcquisitionPriceEur: 5000 }],
@@ -374,8 +374,10 @@ describe("sim-engine: sales", () => {
     });
     const result = runPerspectivesSimulation(input);
     for (const s of result.scenarios) {
-      // Sin reglas de venta configuradas → 0 ventas
-      expect(s.summary.totalSalesEur).toBe(0);
+      expect(s.summary.totalSalesEur).toBeGreaterThan(0);
+      expect(s.summary.totalRealizedGainEur).toBeGreaterThan(0);
+      expect(s.summary.totalTaxEur).toBeGreaterThan(0);
+      expect(s.summary.finalFiscalReserveEur).toBeGreaterThan(0);
     }
   });
 
@@ -402,7 +404,7 @@ describe("sim-engine: rebuys", () => {
       now: new Date("2026-01-01").getTime(),
       currentPositions: [{ assetId: "BTC", balance: 0.5, avgCostEur: 30_000, currentPriceEur: 60_000 }],
       currentLots: [{ id: "l1", assetId: "BTC", date: NOW - 2 * YEAR_MS, remainingAmount: 0.5, unitAcquisitionPriceEur: 30_000 }],
-      historicalSales: [{ assetId: "BTC", date: NOW - YEAR_MS, quantity: 0.2, unitPriceEur: 100_000, realizedGainEur: 10_000 }],
+      historicalSales: [{ assetId: "BTC", date: NOW - YEAR_MS, quantity: 0.2, unitPriceEur: 1_000_000, realizedGainEur: 10_000 }],
       eurcFree: 2_000,
       eurcFiscalReserve: 500,
       horizonDate: horizon(1),
@@ -414,6 +416,7 @@ describe("sim-engine: rebuys", () => {
           drawdownPercentage: 20,
           usagePercentage: 50,
           referenceType: "last_sale",
+          referenceValue: 1_000_000,
           status: "active",
         }],
       })],
@@ -422,15 +425,15 @@ describe("sim-engine: rebuys", () => {
     const result = runPerspectivesSimulation(input);
     const base = result.scenarios.find(s => s.scenario === "base")!;
     expect(base.summary.totalRebuysEur).toBeGreaterThan(0);
-    expect(base.summary.finalFiscalReserveEur).toBe(500);
-    expect(base.summary.finalEurcFreeEur).toBeLessThan(2_000);
+    expect(base.summary.finalFiscalReserveEur).toBeGreaterThanOrEqual(500);
+    expect(base.summary.totalEurcReinvestedEur).toBeGreaterThan(0);
   });
 
   it("recompra sin EURC libre no se ejecuta aunque exista venta previa", () => {
     const input = makeInput({
-      currentPositions: [{ assetId: "BTC", balance: 0.5, avgCostEur: 30_000, currentPriceEur: 60_000 }],
+      currentPositions: [{ assetId: "BTC", balance: 0.5, avgCostEur: null, currentPriceEur: 60_000 }],
       currentLots: [{ id: "l1", assetId: "BTC", date: NOW - 2 * YEAR_MS, remainingAmount: 0.5, unitAcquisitionPriceEur: 30_000 }],
-      historicalSales: [{ assetId: "BTC", date: NOW - YEAR_MS, quantity: 0.2, unitPriceEur: 100_000 }],
+      historicalSales: [{ assetId: "BTC", date: NOW - YEAR_MS, quantity: 0.2, unitPriceEur: 1_000_000 }],
       eurcFree: 0,
       eurcFiscalReserve: 2_000,
       horizonDate: horizon(1),
@@ -853,7 +856,7 @@ describe("motor: correcciones críticas — sin fallback 1€, sin ajuste monot�
     }
   });
 
-  it("sin reglas de venta configuradas totalSalesEur === 0 (eliminados escalones genéricos)", () => {
+  it("sin reglas de venta configuradas totalSalesEur incluye ventas hipotéticas de escenario", () => {
     const input = makeInput({
       currentPositions: [{ assetId: "BTC", balance: 2.0, avgCostEur: 10_000, currentPriceEur: 90_000 }],
       currentLots: [{ id: "l1", assetId: "BTC", date: NOW - 4 * YEAR_MS, remainingAmount: 2.0, unitAcquisitionPriceEur: 10_000 }],
@@ -863,7 +866,8 @@ describe("motor: correcciones críticas — sin fallback 1€, sin ajuste monot�
     });
     const result = runPerspectivesSimulation(input);
     for (const s of result.scenarios) {
-      expect(s.summary.totalSalesEur).toBe(0);
+      expect(s.summary.totalSalesEur).toBeGreaterThan(0);
+      expect(s.summary.totalTaxEur).toBeGreaterThan(0);
     }
   });
 
