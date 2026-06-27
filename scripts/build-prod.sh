@@ -61,7 +61,7 @@ echo ""
 echo "→ Compilando paquetes compartidos…"
 for pkg in packages/core packages/database packages/market-data packages/coinbase-sync packages/portfolio; do
   if [ -f "$REPO_ROOT/$pkg/tsconfig.json" ]; then
-    (cd "$REPO_ROOT/$pkg" && npx tsc --noEmit 2>&1 | head -5 || true)
+    (cd "$REPO_ROOT/$pkg" && npx tsc 2>&1 | head -20)
   fi
 done
 echo "  OK"
