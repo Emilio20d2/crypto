@@ -135,11 +135,13 @@ function initState(input: SimInput): MonthlyState {
       });
     }
 
+    const avgCostFromLots = calcAvgCost(historicalLots);
+
     assetStates[pos.assetId] = {
       assetId: pos.assetId,
       balance: pos.balance,
       lots: historicalLots,
-      avgCostEur: pos.avgCostEur,
+      avgCostEur: pos.avgCostEur ?? avgCostFromLots,
       peakPriceEur: pos.currentPriceEur ?? null,
       lastSalePriceEur: null,
       lastSaleDate: null,
