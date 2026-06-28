@@ -157,14 +157,16 @@ describe("external-price-builder: cobertura y precios", () => {
     }
   });
 
-  it("activo sin cobertura (SUI) — lastCoveredYear es null y sourceCount es 0", () => {
+  it("activo sin cobertura externa (SUI) usa modelo explícito, no carry-forward", () => {
     const result = buildExternalPriceMap("SUI", 3.0, "base", NOW, horizon(5), KNOWN_FORECASTS);
     expect(result.sourceCount).toBe(0);
     expect(result.lastCoveredYear).toBeNull();
-    // Sin cobertura, todos los años son "insufficient"
     for (const state of Object.values(result.coverageByYear)) {
-      expect(state).toBe("insufficient");
+      expect(state).toBe("modeled");
     }
+    const prices = Object.values(result.pricesByMonth);
+    expect(prices.length).toBeGreaterThan(12);
+    expect(new Set(prices.map(price => price.toFixed(8))).size).toBeGreaterThan(6);
   });
 
   it("BTC con cobertura ARK 2030 — tiene años interpolados entre 2026 y 2030", () => {

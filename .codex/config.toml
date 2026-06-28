@@ -1,0 +1,36 @@
+# Local Codex configuration for Crypto Control.
+# This file intentionally avoids legacy `sandbox_mode` and `:danger-full-access`.
+
+permission_profile = ":workspace"
+
+[features]
+goals = true
+hooks = true
+
+# Required local permission policy for this repository:
+# - Base profile: `:workspace`.
+# - Writable roots only:
+#   - `/Users/macmini/Developer/crypto-realtime-perspectives`
+#   - `:slash_tmp`
+#   - `:tmpdir`
+# - Protected paths:
+#   - `**/.env`, `**/.env.*`
+#   - `**/*secret*`, `**/*token*`, `**/*credential*`, `**/*credentials*`
+#   - `**/*.key`, `**/*.pem`, `**/*.p12`, `**/*.pfx`, `**/*.crt`, `**/*.cer`
+# - Network allowlist only:
+#   - `github.com`
+#   - `registry.npmjs.org`
+#   - `api.coinbase.com`
+#   - `api.exchange.coinbase.com`
+#   - `advanced-trade-ws.coinbase.com`
+#   - `api.coingecko.com`
+#   - `assets.coingecko.com`
+#   - `min-api.cryptocompare.com`
+#   - `api.alternative.me`
+#   - `api.coinlore.net`
+#   - `api.coinpaprika.com`
+#   - `api.frankfurter.app`
+#
+# Codex CLI 0.142.2 rejects active local `[permissions]` tables in this file.
+# Keep the active config loadable; enforce the policy through the session
+# permission profile until Codex supports repository-local permission blocks.

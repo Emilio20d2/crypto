@@ -22,6 +22,10 @@ export interface ActiveRow {
   previous_candidate_id: string | null;
 }
 
+function isEmbeddedSeedCandidate(candidateId: string): boolean {
+  return candidateId.startsWith("seed-");
+}
+
 // Feature flag — permanece false hasta que la arquitectura completa esté validada.
 // Cambiar a true requiere: validación, regresión, aprobación manual y tests verdes.
 export const PERSPECTIVES_EXTERNAL_FORECASTS_ENABLED = false;
@@ -63,12 +67,24 @@ export class ForecastActiveRepository {
     console.log(`[ForecastActivation] Versión activada: candidate_id=${candidateId} previous=${current?.candidateId ?? 'ninguna'}`);
   }
 
+  activateApprovedCandidate(candidateId: string): void {
+    const candidate = this.sqlite.prepare(
+      `SELECT id, snapshot_json, status FROM forecast_versions_candidate WHERE id = ?`
+    ).get(candidateId) as { id: string; snapshot_json: string; status: string } | undefined;
+    if (!candidate) throw new Error(`[ForecastActivation] Candidato no encontrado: ${candidateId}`);
+    if (candidate.status !== "approved") {
+      throw new Error(`[ForecastActivation] Candidato no aprobado: ${candidateId} status=${candidate.status}`);
+    }
+    this.activate(candidate.id, JSON.parse(candidate.snapshot_json) as ForecastSource[]);
+  }
+
   // Rollback a la versión anterior (intercambia candidate_id y previous_candidate_id).
-  rollback(previousSources: ForecastSource[]): void {
+  rollback(previousSources?: ForecastSource[]): void {
     const current = this.getCurrent();
     if (!current?.previousCandidateId) {
       throw new Error("[ForecastActivation] No hay versión anterior para rollback");
     }
+    const sources = previousSources ?? this.getCandidateSources(current.previousCandidateId);
     this.sqlite.prepare(`
       UPDATE forecast_versions_active
       SET candidate_id = previous_candidate_id,
@@ -76,8 +92,18 @@ export class ForecastActiveRepository {
           snapshot_json = ?,
           previous_candidate_id = candidate_id
       WHERE id = 'current'
-    `).run(Date.now(), JSON.stringify(previousSources));
+    `).run(Date.now(), JSON.stringify(sources));
     console.log(`[ForecastActivation] Rollback a candidate_id=${current.previousCandidateId}`);
+  }
+
+  private getCandidateSources(candidateId: string): ForecastSource[] {
+    const row = this.sqlite.prepare(
+      `SELECT snapshot_json FROM forecast_versions_candidate WHERE id = ?`
+    ).get(candidateId) as { snapshot_json: string } | undefined;
+    if (!row) {
+      throw new Error(`[ForecastActivation] Snapshot anterior no encontrado: ${candidateId}`);
+    }
+    return JSON.parse(row.snapshot_json) as ForecastSource[];
   }
 
   // Lee las fuentes activas para el motor de simulación.
@@ -89,6 +115,10 @@ export class ForecastActiveRepository {
       console.log("[PerspectivesSimulation] Sin version activa de previsiones");
       return null;
     }
+    if (isEmbeddedSeedCandidate(active.candidateId)) {
+      console.warn(`[PerspectivesSimulation] Version activa embebida ignorada candidate_id=${active.candidateId}`);
+      return null;
+    }
     const flagState = PERSPECTIVES_EXTERNAL_FORECASTS_ENABLED ? "enabled" : "disabled-active-fallback";
     console.log(`[PerspectivesSimulation] Usando version activa candidate_id=${active.candidateId} flag=${flagState} activada=${new Date(active.activatedAt).toISOString()}`);
     return active.sources;
@@ -97,6 +127,10 @@ export class ForecastActiveRepository {
   getDatasetForEngine(): ForecastDataset | null {
     const active = this.getCurrent();
     if (!active) return null;
+    if (isEmbeddedSeedCandidate(active.candidateId)) {
+      console.warn(`[PerspectivesSimulation] Dataset embebido ignorado candidate_id=${active.candidateId}`);
+      return null;
+    }
     const fxRates = active.sources
       .map(s => s.fxRate)
       .filter((rate): rate is number => typeof rate === "number" && Number.isFinite(rate) && rate > 0);

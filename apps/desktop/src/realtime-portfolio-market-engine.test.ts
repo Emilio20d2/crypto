@@ -104,6 +104,7 @@ describe("RealtimePortfolioMarketEngine", () => {
 
     expect(ctx.intervals.some((timer) => timer.ms === 5_000)).toBe(true);
     const snapshot = ctx.published[0];
+    expect(snapshot.publishedAt).toBe(snapshot.receivedAt);
     expect(snapshot.eurBalance).toBe(5);
     expect(snapshot.eurcBalance).toBe(3);
     expect(snapshot.cryptoValueEur).toBe(6);
@@ -134,6 +135,38 @@ describe("RealtimePortfolioMarketEngine", () => {
       expect.objectContaining({ quantity: 0.25, valueEur: 500 }),
     );
     expect(snapshot.totalAssetValueEur).toBe(514);
+  });
+
+  test("usa precio derivado del breakdown cacheado cuando REST no devuelve un activo con saldo Coinbase", async () => {
+    const ctx = makeDeps({
+      getCoinbaseClient: () => ({
+        getAccounts: async () => ({
+          accounts: [
+            { uuid: "sui-account", currency: "SUI", available_balance: { value: "100" } },
+          ],
+        }),
+      }),
+      getCachedPortfolioBreakdown: async () => ({
+        positions: [
+          { asset: "SUI", totalBalanceCrypto: 100, totalBalanceFiat: 60, isCash: false },
+        ],
+      }),
+      getRestPrice: async () => ({ price: null, state: "unavailable", provider: "none", fetchedAt: 1_782_475_000_000 }),
+    });
+    const engine = new RealtimePortfolioMarketEngine(ctx.deps);
+
+    engine.start("portfolio-1");
+    await waitForPublished(ctx.published);
+
+    const snapshot = ctx.published[0];
+    expect(snapshot.complete).toBe(true);
+    expect(snapshot.missingPrices).toEqual([]);
+    expect(snapshot.prices.SUI).toEqual(expect.objectContaining({
+      priceEur: 0.6,
+      source: "portfolio-cache",
+      state: "stale",
+    }));
+    expect(snapshot.totalAssetValueEur).toBe(60);
   });
 
   test("evita peticiones simultaneas y registra ticks omitidos", async () => {

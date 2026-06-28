@@ -32,7 +32,23 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
       getHistoricalSeries: (i?: unknown) => ipc("portfolio:get-historical-series", i),
       backfillCostBasis:   () => ipc("portfolio:backfillCostBasis"),
       getLiveSnapshot:     (uuid: unknown) => ipc("portfolio:get-live-snapshot", uuid),
-      onLiveSnapshot:      () => () => {},
+      onLiveSnapshot:      (callback: unknown) => {
+        if (typeof callback !== "function" || typeof EventSource === "undefined") return () => {};
+        const emit = callback as (snapshot: unknown) => void;
+        const source = new EventSource(`${API_BASE}/api/live-snapshot`);
+        const onSnapshot = (event: MessageEvent<string>) => {
+          try {
+            emit(JSON.parse(event.data));
+          } catch {
+            // Ignore malformed stream events; the next snapshot will replace it.
+          }
+        };
+        source.addEventListener("snapshot", onSnapshot);
+        return () => {
+          source.removeEventListener("snapshot", onSnapshot);
+          source.close();
+        };
+      },
     },
     diagnostics: {
       getReport: () => ipc("diagnostics:getReport"),

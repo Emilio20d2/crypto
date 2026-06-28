@@ -174,13 +174,22 @@ describe("arquitectura: regresión — motor produce resultados estables", () =>
     }
   });
 
-  it("conservador ≤ moderado ≤ base ≤ favorable ≤ optimista", () => {
+  it("los cinco escenarios son finitos, trazables y no se corrigen manualmente", () => {
     const result = runPerspectivesSimulation(makeSimInput());
-    const wealth = (sc: string) => result.scenarios.find(s => s.scenario === sc)!.summary.finalNetWealthEur;
-    expect(wealth("conservador")).toBeLessThanOrEqual(wealth("moderado") + 1);
-    expect(wealth("moderado")).toBeLessThanOrEqual(wealth("base") + 1);
-    expect(wealth("base")).toBeLessThanOrEqual(wealth("favorable") + 1);
-    expect(wealth("favorable")).toBeLessThanOrEqual(wealth("optimista") + 1);
+    expect(result.scenarios.map(s => s.scenario)).toEqual([
+      "conservador",
+      "moderado",
+      "base",
+      "favorable",
+      "optimista",
+    ]);
+    for (const scenario of result.scenarios) {
+      expect(Number.isFinite(scenario.summary.finalNetWealthEur)).toBe(true);
+      expect(scenario.summary.finalNetWealthEur).toBeGreaterThan(0);
+    }
+    const base = result.scenarios.find(s => s.scenario === "base")!.summary.finalNetWealthEur;
+    const opt = result.scenarios.find(s => s.scenario === "optimista")!.summary.finalNetWealthEur;
+    expect(opt).toBeGreaterThanOrEqual(base - 1);
   });
 });
 
@@ -233,7 +242,7 @@ describe("arquitectura: aislamiento por activo", () => {
     expect(Number.isFinite(optW)).toBe(true);
   });
 
-  it("aislamiento SUI — sin previsiones externas SUI usa precio plano", () => {
+  it("aislamiento SUI — sin previsiones externas usa extensión modelizada, no precio plano", () => {
     const suiOnly = makeSimInput({
       currentPositions: [{ assetId: "SUI", balance: 100, avgCostEur: 1.5, currentPriceEur: 3.0 }],
       currentLots: [{ id: "l3", assetId: "SUI", date: NOW - YEAR_MS, remainingAmount: 100, unitAcquisitionPriceEur: 1.5 }],
@@ -250,14 +259,19 @@ describe("arquitectura: aislamiento por activo", () => {
       }],
     });
     const result = runPerspectivesSimulation(suiOnly);
-    // SUI sin cobertura: todos los escenarios usan precio plano (actual)
     for (const scenario of result.scenarios) {
       expect(Number.isFinite(scenario.summary.finalNetWealthEur)).toBe(true);
+      const suiInfo = scenario.assetPriceInfo.SUI;
+      expect(suiInfo.externalSourceCount).toBe(0);
+      expect(suiInfo.modelType).toBe("external_modeled");
+      expect(suiInfo.modeledCoverageYears.length).toBeGreaterThan(0);
+      expect(suiInfo.lastCoveredYear).toBeNull();
+      expect(suiInfo.horizonPriceEur).not.toBeNull();
+      expect(suiInfo.horizonPriceEur).not.toBeCloseTo(3.0, 6);
     }
-    // Sin previsiones, todos los escenarios SUI deberían ser iguales
     const vals = result.scenarios.map(s => s.summary.finalNetWealthEur);
-    const allEqual = vals.every(v => Math.abs(v - vals[0]) < 1);
-    expect(allEqual).toBe(true);
+    const uniqueRoundedValues = new Set(vals.map(v => Math.round(v)));
+    expect(uniqueRoundedValues.size).toBeGreaterThan(1);
   });
 });
 
@@ -311,10 +325,19 @@ describe("arquitectura: candidate repository", () => {
 
 describe("arquitectura: activación y rollback", () => {
   let db: SqliteDb;
+  let candidateRepo: ForecastCandidateRepository;
   let activeRepo: ForecastActiveRepository;
+  const mockValidation = {
+    passed: true, errors: [], warnings: [], checkedAt: NOW,
+    observationCount: 3, assetCoverage: {},
+  };
+  const mockRegression = {
+    passed: true, diffs: [], checkedAt: NOW,
+  };
 
   beforeEach(() => {
     db = makeMemoryDb();
+    candidateRepo = new ForecastCandidateRepository(db);
     activeRepo = new ForecastActiveRepository(db);
   });
 
@@ -344,6 +367,30 @@ describe("arquitectura: activación y rollback", () => {
     expect(current!.previousCandidateId).toBe("cand-1");
   });
 
+  it("ignora versiones activas embebidas seed-* en el motor productivo", () => {
+    activeRepo.activate("seed-active-v1", KNOWN_FORECASTS.slice(0, 2));
+
+    expect(activeRepo.getCurrent()?.candidateId).toBe("seed-active-v1");
+    expect(activeRepo.getSourcesForEngine()).toBeNull();
+    expect(activeRepo.getDatasetForEngine()).toBeNull();
+  });
+
+  it("activateApprovedCandidate solo activa candidatos aprobados", () => {
+    candidateRepo.create("approved-1", KNOWN_FORECASTS.slice(0, 1), ["obs-1"], mockValidation, mockRegression);
+    candidateRepo.create(
+      "pending-1",
+      KNOWN_FORECASTS.slice(0, 2),
+      ["obs-2"],
+      { ...mockValidation, passed: false, errors: [{ code: "TEST", message: "error" }] },
+      mockRegression,
+    );
+
+    expect(() => activeRepo.activateApprovedCandidate("pending-1")).toThrow(/no aprobado/);
+    activeRepo.activateApprovedCandidate("approved-1");
+
+    expect(activeRepo.getCurrent()?.candidateId).toBe("approved-1");
+  });
+
   it("rollback restaura la versión anterior", () => {
     const v1Sources = KNOWN_FORECASTS.slice(0, 1);
     const v2Sources = KNOWN_FORECASTS.slice(0, 2);
@@ -353,6 +400,20 @@ describe("arquitectura: activación y rollback", () => {
     const current = activeRepo.getCurrent();
     expect(current!.candidateId).toBe("cand-1");
     expect(current!.sources).toHaveLength(1);
+  });
+
+  it("rollback sin fuentes externas restaura el snapshot desde forecast_versions_candidate", () => {
+    candidateRepo.create("cand-1", KNOWN_FORECASTS.slice(0, 1), ["obs-1"], mockValidation, mockRegression);
+    candidateRepo.create("cand-2", KNOWN_FORECASTS.slice(0, 2), ["obs-1", "obs-2"], mockValidation, mockRegression);
+    activeRepo.activateApprovedCandidate("cand-1");
+    activeRepo.activateApprovedCandidate("cand-2");
+
+    activeRepo.rollback();
+
+    const current = activeRepo.getCurrent();
+    expect(current!.candidateId).toBe("cand-1");
+    expect(current!.sources).toHaveLength(1);
+    expect(current!.previousCandidateId).toBe("cand-2");
   });
 
   it("rollback sin versión previa lanza error", () => {

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import { Activity } from "lucide-react";
 import { AssetDetailHeader } from "../components/AssetDetailHeader";
@@ -124,6 +124,7 @@ export function AssetDetail() {
     }),
     enabled: !!requestAssetId,
     staleTime: 15_000,
+    placeholderData: keepPreviousData,
     refetchInterval: historyRefreshMs(period),
     refetchIntervalInBackground: true,
     refetchOnMount: "always",

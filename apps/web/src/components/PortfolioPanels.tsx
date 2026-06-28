@@ -88,7 +88,7 @@ function positionCurrentPrice(position: any) {
 }
 
 function priceSourceLabel(position: any, portfolioState?: string) {
-  if (portfolioState === "cached") return "Ultimo valido";
+  if (portfolioState === "cached") return "Caché";
   const status = typeof position.market?.status === "string" ? position.market.status : "";
   if (status.startsWith("fallback:")) {
     const provider = status.replace("fallback:", "").trim();

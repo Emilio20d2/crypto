@@ -229,16 +229,12 @@ function setupDatabase() {
 function seedForecastData(): void {
   const {
     SEED_FORECAST_SOURCES,
-    SEED_FORECAST_OBSERVATIONS,
-    ForecastActiveRepository,
-    ForecastCandidateRepository,
-    observationToForecastSources,
-    computeCoverageMatrix,
   } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
   const sqlite = (require("@crypto-control/database") as typeof import("@crypto-control/database")).getSqlite();
   if (!sqlite) return;
 
-  // Sembramos fuentes (INSERT OR IGNORE para no sobrescribir actualizaciones del usuario)
+  // Sembramos solo el catálogo de fuentes. Las observaciones y versiones activas
+  // deben proceder del flujo staging -> candidate -> active, no de datos embebidos.
   const insertSource = sqlite.prepare(`
     INSERT OR IGNORE INTO forecast_sources (id, name, category, base_url, rss_url, method,
       check_frequency_hours, status, priority, subscription_required, notes)
@@ -249,87 +245,7 @@ function seedForecastData(): void {
       s.method, s.check_frequency_hours, s.priority, s.subscription_required, s.notes ?? null);
   }
 
-  // Sembramos observaciones (INSERT OR IGNORE)
-  const insertObs = sqlite.prepare(`
-    INSERT OR IGNORE INTO forecast_observations (
-      id, source_id, asset_id, ticker, publisher, author, report_title, original_url,
-      source_type, published_at, retrieved_at, verified_at, expires_at, target_year, target_type,
-      original_currency, target_low_original, target_base_original, target_high_original,
-      fx_rate, fx_rate_at, fx_source, methodology, quality_score, freshness_score,
-      horizon_score, methodology_score, independence_score, final_weight, verified, active,
-      forecast_version
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `);
-  for (const o of SEED_FORECAST_OBSERVATIONS) {
-    insertObs.run(
-      o.id, o.source_id, o.asset_id, o.ticker, o.publisher, o.author ?? null,
-      o.report_title, o.original_url, o.source_type, o.published_at, o.retrieved_at,
-      o.verified_at, o.expires_at, o.target_year, o.target_type, o.original_currency,
-      o.target_low_original ?? null, o.target_base_original ?? null, o.target_high_original ?? null,
-      o.fx_rate, o.fx_rate_at, o.fx_source, o.methodology,
-      o.quality_score, o.freshness_score, o.horizon_score, o.methodology_score,
-      o.independence_score, o.final_weight, o.verified, o.active, o.forecast_version,
-    );
-  }
-
-  const activeRepo = new ForecastActiveRepository(sqlite);
-  if (activeRepo.getCurrent()) {
-    console.log(`[ForecastSeed] Fuentes: ${SEED_FORECAST_SOURCES.length} | Observaciones: ${SEED_FORECAST_OBSERVATIONS.length} | Activa existente respetada`);
-    return;
-  }
-
-  const seededRows = sqlite.prepare(`
-    SELECT
-      id, source_id, asset_id, ticker, publisher, report_title, original_url,
-      source_type, published_at, expires_at, target_year, target_type,
-      original_currency, target_low_original, target_base_original, target_high_original,
-      fx_rate, fx_rate_at, fx_source, final_weight, verified, active
-    FROM forecast_observations
-    WHERE verified = 1 AND active = 1
-    ORDER BY asset_id, target_year, publisher, id
-  `).all() as import("@crypto-control/portfolio").ObservationRow[];
-
-  const activeSources = seededRows.flatMap(row => observationToForecastSources(row));
-  if (activeSources.length === 0) {
-    console.warn(`[ForecastSeed] Fuentes: ${SEED_FORECAST_SOURCES.length} | Observaciones: ${SEED_FORECAST_OBSERVATIONS.length} | Sin fuentes verificadas para activar`);
-    return;
-  }
-
-  const candidateId = "seed-active-v1";
-  const candidateRepo = new ForecastCandidateRepository(sqlite);
-  const existingCandidate = candidateRepo.getById(candidateId);
-  if (!existingCandidate) {
-    const checkedAt = Date.now();
-    const coverage = computeCoverageMatrix(seededRows);
-    const assetCoverage = coverage.reduce<Record<string, { years: number[]; sourceCount: number }>>((acc, item) => {
-      const current = acc[item.assetId] ?? { years: [], sourceCount: 0 };
-      if (!current.years.includes(item.targetYear)) current.years.push(item.targetYear);
-      current.sourceCount = Math.max(current.sourceCount, item.sourceCount);
-      acc[item.assetId] = current;
-      return acc;
-    }, {});
-    candidateRepo.create(
-      candidateId,
-      activeSources,
-      seededRows.map(row => row.id),
-      {
-        passed: true,
-        errors: [],
-        warnings: [],
-        checkedAt,
-        observationCount: seededRows.length,
-        assetCoverage,
-      },
-      {
-        passed: true,
-        diffs: [],
-        checkedAt,
-      },
-    );
-  }
-  candidateRepo.approve(candidateId);
-  activeRepo.activate(candidateId, activeSources);
-  console.log(`[ForecastSeed] Fuentes: ${SEED_FORECAST_SOURCES.length} | Observaciones: ${SEED_FORECAST_OBSERVATIONS.length} | Activa inicial: ${candidateId} (${activeSources.length} targets)`);
+  console.log(`[ForecastSeed] Catálogo de fuentes inicializado: ${SEED_FORECAST_SOURCES.length}. No se activan previsiones embebidas.`);
 }
 
 function setupIpcHandlers() {
@@ -379,7 +295,7 @@ function setupIpcHandlers() {
       state: price.state === "live" || price.state === "polling" ? "live" : "cached",
       provider: price.source || "realtime",
       fetchedAt: price.quotedAt,
-      reason: price.state === "stale" ? "Ultimo precio valido del snapshot realtime" : undefined,
+      reason: price.state === "stale" ? "Caché local del snapshot realtime" : undefined,
     };
   }
 
@@ -503,6 +419,50 @@ function setupIpcHandlers() {
     httpDispatch.set(channel, (...args: unknown[]) => Promise.resolve(listener(null, ...args)));
     return _origHandle(channel as any, listener as any);
   };
+
+  const CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, HEAD, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+  };
+
+  type LiveSnapshot = import("./realtime-portfolio-market-engine").RealtimePortfolioSnapshot;
+  const liveSnapshotHttpClients = new Set<http.ServerResponse>();
+  let lastPublishedLiveSnapshot: LiveSnapshot | null = null;
+
+  function writeLiveSnapshotEvent(res: http.ServerResponse, snapshot: LiveSnapshot): void {
+    res.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
+  }
+
+  function publishLiveSnapshot(snapshot: LiveSnapshot): void {
+    lastPublishedLiveSnapshot = snapshot;
+    mainWindow?.webContents.send("portfolio:live-snapshot", snapshot);
+    for (const client of [...liveSnapshotHttpClients]) {
+      try {
+        writeLiveSnapshotEvent(client, snapshot);
+      } catch {
+        liveSnapshotHttpClients.delete(client);
+        try { client.end(); } catch { /* ignore closed SSE clients */ }
+      }
+    }
+  }
+
+  function attachLiveSnapshotStream(req: http.IncomingMessage, res: http.ServerResponse): void {
+    res.writeHead(200, {
+      ...CORS_HEADERS,
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    liveSnapshotHttpClients.add(res);
+    res.write(": connected\n\n");
+    if (lastPublishedLiveSnapshot) writeLiveSnapshotEvent(res, lastPublishedLiveSnapshot);
+    req.on("close", () => {
+      liveSnapshotHttpClients.delete(res);
+      try { res.end(); } catch { /* ignore closed SSE clients */ }
+    });
+  }
 
   // Helper to wrap IPC handlers with Result<T> — error shape matches core Result type
   const withResult = <T extends unknown[], R>(fn: (...args: T) => Promise<R>) => async (...args: T) => {
@@ -858,7 +818,7 @@ function setupIpcHandlers() {
       state: "cached",
       provider: cached.provider,
       fetchedAt: cached.fetchedAt,
-      reason: "Ultimo dato valido en cache",
+      reason: "Caché local",
     };
   }
 
@@ -921,6 +881,8 @@ function setupIpcHandlers() {
     return seconds !== null ? seconds * 1000 : null;
   }
 
+  const historicalRefreshRequests = new Map<string, Promise<void>>();
+
   async function getCurrentPriceFast(assetId: string): Promise<SnapshotPriceResult> {
     const meta = getAssetMetadata(assetId);
     const quoteCurrency = meta?.quoteCurrency ?? "EUR";
@@ -932,7 +894,7 @@ function setupIpcHandlers() {
           state: "cached",
           provider: cached.provider,
           fetchedAt: cached.fetchedAt,
-          reason: "Ultimo precio valido en cache",
+          reason: "Caché local",
         }
       : null;
 
@@ -962,8 +924,13 @@ function setupIpcHandlers() {
     }
   }
 
-  async function getCachedHistoricalResult(assetId: string, period: string, quoteCurrency: string, reason?: string) {
-    const cached = await marketCache.getHistoricalPrices(assetId, quoteCurrency, period, { allowStale: true }).catch(() => null);
+  async function getCachedHistoricalResult(
+    assetId: string,
+    period: string,
+    quoteCurrency: string,
+    options?: { allowStale?: boolean; cacheStatus?: "fresh" | "stale"; reason?: string },
+  ) {
+    const cached = await marketCache.getHistoricalPrices(assetId, quoteCurrency, period, { allowStale: options?.allowStale }).catch(() => null);
     const points = cached ? sanitizePoints(cached) : [];
     if (points.length < 2) return null;
     const provider = points.find((point) => point.source)?.source ?? "cache";
@@ -974,12 +941,46 @@ function setupIpcHandlers() {
       actualInterval: "auto",
       fetchedAt: Date.now(),
       isCached: true,
-      cacheStatus: "stale" as const,
-      reason: reason ? `Ultimo historico valido en cache: ${reason}` : "Ultimo historico valido en cache",
+      cacheStatus: options?.cacheStatus ?? "stale" as const,
+      reason: options?.reason ? `Caché histórico: ${options.reason}` : "Caché histórico",
     };
   }
 
+  function refreshHistoricalPricesInBackground(assetId: string, period: string): void {
+    const key = `${assetId.toUpperCase()}:EUR:${period}`;
+    if (historicalRefreshRequests.has(key)) return;
+
+    const request = (async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), marketHistoryTimeoutMs(period));
+      try {
+        await marketService.getHistoricalPrices(assetId, period, controller.signal);
+      } catch (error) {
+        console.warn(`[Market] Background historical refresh failed for ${assetId} ${period}:`, error instanceof Error ? error.message : String(error));
+      } finally {
+        clearTimeout(timeout);
+      }
+    })().finally(() => {
+      historicalRefreshRequests.delete(key);
+    });
+
+    historicalRefreshRequests.set(key, request);
+  }
+
   async function getHistoricalPricesFast(assetId: string, period: string, quoteCurrency = "EUR") {
+    const fresh = await getCachedHistoricalResult(assetId, period, quoteCurrency, { cacheStatus: "fresh" });
+    if (fresh) return fresh;
+
+    const stale = await getCachedHistoricalResult(assetId, period, quoteCurrency, {
+      allowStale: true,
+      cacheStatus: "stale",
+      reason: "actualizando en segundo plano",
+    });
+    if (stale) {
+      refreshHistoricalPricesInBackground(assetId, period);
+      return stale;
+    }
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), marketHistoryTimeoutMs(period));
     try {
@@ -992,7 +993,11 @@ function setupIpcHandlers() {
         };
       }
 
-      const cached = await getCachedHistoricalResult(assetId, period, quoteCurrency, "La fuente devolvio puntos insuficientes");
+      const cached = await getCachedHistoricalResult(assetId, period, quoteCurrency, {
+        allowStale: true,
+        cacheStatus: "stale",
+        reason: "La fuente devolvio puntos insuficientes",
+      });
       if (cached) return cached;
       return {
         ...result,
@@ -1001,7 +1006,11 @@ function setupIpcHandlers() {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const cached = await getCachedHistoricalResult(assetId, period, quoteCurrency, message);
+      const cached = await getCachedHistoricalResult(assetId, period, quoteCurrency, {
+        allowStale: true,
+        cacheStatus: "stale",
+        reason: message,
+      });
       if (cached) return cached;
       console.warn(`[Market] Historico no disponible para ${assetId} ${period}:`, message);
       return {
@@ -3649,11 +3658,14 @@ function setupIpcHandlers() {
     getRestPrice: async (assetId: string) => await getCurrentPriceFast(assetId),
     createWebSocket: createRealtimeWebSocket,
     publish: (snapshot) => {
-      mainWindow?.webContents.send("portfolio:live-snapshot", snapshot);
+      publishLiveSnapshot(snapshot);
     },
     logger: console,
   });
   app.once("before-quit", () => realtimeEngine?.stop());
+  app.on("browser-window-focus", () => {
+    void realtimeEngine?.refreshNow("window-focus");
+  });
 
   ipcMain.handle("portfolio:get-live-snapshot", withResult(async (_, portfolioUuid: string) => {
     return await realtimeEngine!.getSnapshot(portfolioUuid);
@@ -4990,7 +5002,7 @@ function setupIpcHandlers() {
   ipcMain.handle("perspectives:getForecastStatus", withResult(async () => {
     const { computeCoverageMatrix } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
     const sqlite = (require("@crypto-control/database") as typeof import("@crypto-control/database")).getSqlite();
-    if (!sqlite) return { observations: [], sources: [], coverage: [], ingestionLog: [] };
+    if (!sqlite) return { observations: [], staging: [], sources: [], coverage: [], ingestionLog: [] };
 
     const now = Date.now();
     type ObsRow = { id: string; source_id: string; asset_id: string; ticker: string; publisher: string;
@@ -5006,6 +5018,14 @@ function setupIpcHandlers() {
        FROM forecast_observations ORDER BY asset_id, target_year, published_at DESC`
     ).all() as ObsRow[];
 
+    const staging = sqlite.prepare(
+      `SELECT id, source_id, asset_id, ticker, publisher, report_title, original_url, source_type,
+              published_at, retrieved_at, verified_at, expires_at, target_year, target_type, original_currency,
+              target_low_original, target_base_original, target_high_original, fx_rate, fx_rate_at, fx_source,
+              final_weight, verified, status, validation_errors_json, staged_at
+       FROM forecast_observations_staging ORDER BY staged_at DESC`
+    ).all();
+
     const sources = sqlite.prepare(
       `SELECT id, name, category, base_url, rss_url, method, check_frequency_hours,
               last_checked_at, last_success_at, consecutive_errors, status, priority, subscription_required, notes
@@ -5020,7 +5040,7 @@ function setupIpcHandlers() {
        WHERE checked_at > ? ORDER BY checked_at DESC LIMIT 50`
     ).all(now - 7 * 24 * 3600 * 1000);
 
-    return { observations, sources, coverage, ingestionLog };
+    return { observations, staging, sources, coverage, ingestionLog };
   }));
 
   async function getUsdToEurFxRate(): Promise<{ rate: number; source: string; at: number }> {
@@ -5083,12 +5103,13 @@ function setupIpcHandlers() {
       : { rate: 1, source: "EUR original", at: now };
 
     sqlite.prepare(`
-      INSERT OR REPLACE INTO forecast_observations (
+      INSERT OR REPLACE INTO forecast_observations_staging (
         id, source_id, asset_id, ticker, publisher, author, report_title, original_url,
         source_type, published_at, retrieved_at, verified_at, expires_at, target_year, target_type,
         original_currency, target_low_original, target_base_original, target_high_original,
         fx_rate, fx_rate_at, fx_source, methodology, quality_score, freshness_score,
-        horizon_score, methodology_score, independence_score, final_weight, verified, active, forecast_version
+        horizon_score, methodology_score, independence_score, final_weight, verified, status,
+        validation_errors_json, staged_at
       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       id, obs.sourceId, obs.assetId, obs.ticker, obs.publisher, obs.author ?? null,
@@ -5099,11 +5120,11 @@ function setupIpcHandlers() {
       obs.targetLowOriginal ?? null, obs.targetBaseOriginal ?? null, obs.targetHighOriginal ?? null,
       fx.rate, fx.at, fx.source, obs.methodology ?? null,
       qualityScore, freshnessScore, horizonScore, methodologyScore, independenceScore, finalWeight,
-      obs.verified ? 1 : 0, 1, "manual",
+      obs.verified ? 1 : 0, "pending", null, now,
     );
 
-    console.log(`[ForecastIngestion] manual_entry asset=${obs.assetId} year=${obs.targetYear} publisher="${obs.publisher}"`);
-    return { id, verified: urlCheck.reachable };
+    console.log(`[ForecastIngestion] manual_staging_entry asset=${obs.assetId} year=${obs.targetYear} publisher="${obs.publisher}"`);
+    return { id, verified: urlCheck.reachable, status: "staging" };
   }));
 
   // --- PERSPECTIVAS v3: ingestión manual de fuentes RSS ────────────────────────
@@ -5690,11 +5711,6 @@ function setupIpcHandlers() {
   // (Tailscale) to load the UI and share the same backend and SQLite DB
   // without needing a separate "vite preview" server running.
   const HTTP_PORT = 3001;
-  const CORS_HEADERS = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-  };
 
   const webDistPath = app.isPackaged
     ? path.join(process.resourcesPath, "web/dist")
@@ -5742,20 +5758,33 @@ function setupIpcHandlers() {
   }
 
   const apiServer = http.createServer((req, res) => {
+    const requestPath = (req.url || "/").split("?")[0];
+
     if (req.method === "OPTIONS") {
       res.writeHead(200, CORS_HEADERS);
       res.end();
       return;
     }
 
+    if (req.method === "GET" && requestPath === "/api/live-snapshot") {
+      attachLiveSnapshotStream(req, res);
+      return;
+    }
+
+    if (req.method === "HEAD" && requestPath === "/api/live-snapshot") {
+      res.writeHead(200, CORS_HEADERS);
+      res.end();
+      return;
+    }
+
     if (req.method === "GET" || req.method === "HEAD") {
-      if (req.url !== "/api/ipc") {
+      if (requestPath !== "/api/ipc") {
         serveStaticFile(req, res);
         return;
       }
     }
 
-    if (req.method !== "POST" || req.url !== "/api/ipc") {
+    if (req.method !== "POST" || requestPath !== "/api/ipc") {
       res.writeHead(404, CORS_HEADERS);
       res.end();
       return;
@@ -5789,7 +5818,13 @@ function setupIpcHandlers() {
   apiServer.listen(HTTP_PORT, "0.0.0.0", () => {
     console.log(`[HTTP] API bridge on port ${HTTP_PORT}`);
   });
-  app.on("will-quit", () => apiServer.close());
+  app.on("will-quit", () => {
+    for (const client of [...liveSnapshotHttpClients]) {
+      liveSnapshotHttpClients.delete(client);
+      try { client.end(); } catch { /* ignore closed SSE clients */ }
+    }
+    apiServer.close();
+  });
 
   // ── Motor central de señales estratégicas ─────────────────────────────────
   // Una señal es la fuente de verdad para una acción (compra/venta/recompra).

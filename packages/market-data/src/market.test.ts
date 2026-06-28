@@ -245,7 +245,7 @@ describe("Market Providers y Resiliencia", () => {
     const result = await marketService.getCurrentPrice("BTC");
 
     expect(result).toMatchObject({ price: 47_000, state: "cached", provider: "coingecko" });
-    expect(result.reason).toMatch(/Último dato válido/);
+    expect(result.reason).toMatch(/Caché local/);
   });
 
   test("MarketService - usa último histórico válido en caché si todas las fuentes fallan", async () => {

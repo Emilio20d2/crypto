@@ -196,15 +196,8 @@ function modeledMonthlyPrice(anchorPrice: number, tier: AssetTier, scenario: Sim
   const years = monthsAfterCoverage / 12;
   const growth = modeledGrowthRate(tier, scenario, years);
   if (growth === null) return null;
-  const phaseMap: Record<SimScenario, number> = {
-    conservador: 3.1,
-    moderado: 2.4,
-    base: 1.7,
-    favorable: 1.1,
-    optimista: 0.4,
-  };
   const trend = Math.pow(1 + growth, years);
-  const cycle = Math.sin((monthsAfterCoverage / 18) * Math.PI * 2 + phaseMap[scenario]);
+  const cycle = Math.sin((monthsAfterCoverage / 18) * Math.PI * 2 + 1.7);
   const contraction = Math.sin((monthsAfterCoverage / 47) * Math.PI * 2 + 0.8);
   const volatility = modeledVolatility(tier) * Math.exp(-years / 9);
   const cycleFactor = Math.max(0.35, 1 + volatility * cycle - volatility * 0.55 * Math.max(0, contraction));
@@ -274,7 +267,10 @@ export function buildExternalPriceMap(
       coverageByYear[year] = "direct";
     } else if (lastCoveredYear != null && year < lastCoveredYear) {
       coverageByYear[year] = "interpolated";
-    } else if (lastCoveredYear != null && year > lastCoveredYear && tier !== "speculative") {
+    } else if (
+      tier !== "speculative" &&
+      ((lastCoveredYear != null && year > lastCoveredYear) || lastCoveredYear == null)
+    ) {
       coverageByYear[year] = "modeled";
       modeledYears.push(year);
     } else {
@@ -304,7 +300,9 @@ export function buildExternalPriceMap(
 
   const lastCoveredAnchor = lastCoveredYear != null
     ? anchors.find(a => new Date(a.timeMs).getFullYear() === lastCoveredYear) ?? anchors[anchors.length - 1]
-    : null;
+    : tier !== "speculative"
+      ? anchors[0]
+      : null;
 
   while (d.getTime() <= horizonMs) {
     const year = d.getFullYear();

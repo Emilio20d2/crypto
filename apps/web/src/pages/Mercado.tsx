@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQueries, useQuery } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "../components/Button";
@@ -61,11 +61,11 @@ function historyToChart(points: { time: number; value: number; source?: string; 
 
 function sourceLabelFor(provider?: string | null, isCached?: boolean, cacheStatus?: string) {
   if (!provider || provider === "coinbase" || provider === "local") return undefined;
-  const prefix = isCached || cacheStatus === "stale" ? "Último dato válido" : "Datos";
+  const prefix = isCached || cacheStatus === "stale" ? "Caché" : "Datos";
   if (provider === "coingecko") return `${prefix} vía CoinGecko`;
   if (provider === "cryptocompare") return `${prefix} vía CryptoCompare`;
-  if (provider === "cache") return "Último dato válido";
-  return isCached || cacheStatus === "stale" ? "Último dato válido de fuente alternativa" : "Fuente alternativa";
+  if (provider === "cache") return "Caché";
+  return isCached || cacheStatus === "stale" ? "Caché de fuente alternativa" : "Fuente alternativa";
 }
 
 export function Mercado() {
@@ -188,6 +188,7 @@ export function Mercado() {
     }),
     enabled: !!selectedAsset,
     staleTime: 15_000,
+    placeholderData: keepPreviousData,
     refetchInterval: historyRefreshMs(period),
     refetchIntervalInBackground: true,
     refetchOnMount: "always",

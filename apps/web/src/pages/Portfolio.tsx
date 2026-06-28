@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Wallet } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "../components/Button";
@@ -250,6 +250,7 @@ export function Portfolio() {
     queryKey: ["portfolio", "historical-series", period],
     queryFn: () => window.cryptoControl.portfolio.getHistoricalSeries({ period }),
     staleTime: CHART_SHORT_STALE_MS,
+    placeholderData: keepPreviousData,
     refetchInterval: chartRefreshMs(period),
     refetchIntervalInBackground: false,
   });

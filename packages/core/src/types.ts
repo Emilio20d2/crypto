@@ -180,6 +180,7 @@ export interface CatalogAsset {
 export interface PortfolioLiveSnapshot {
   requestedAt: number;
   receivedAt: number;
+  publishedAt?: number;
   marketTimestamp?: number;
   snapshotVersion: string;
   balanceVersion?: string;

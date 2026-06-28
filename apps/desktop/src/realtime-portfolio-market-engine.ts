@@ -40,6 +40,7 @@ export interface RealtimePosition {
 export interface RealtimePortfolioSnapshot {
   requestedAt: number;
   receivedAt: number;
+  publishedAt: number;
   marketTimestamp: number;
   snapshotVersion: string;
   balanceVersion: string;
@@ -125,6 +126,7 @@ interface RawAccount {
   hold: number;
   total: number;
   source: "coinbase" | "cache";
+  cachedPriceEur?: number | null;
 }
 
 interface LivePriceEntry extends RealtimePrice {
@@ -220,6 +222,9 @@ function parseCachedPosition(position: unknown): RawAccount | null {
     hold: 0,
     total,
     source: "cache",
+    cachedPriceEur: asset.toUpperCase() !== "EUR" && asset.toUpperCase() !== "EURC" && fiatBalance != null && cryptoBalance > 0
+      ? fiatBalance / cryptoBalance
+      : null,
   };
 }
 
@@ -267,6 +272,7 @@ export class RealtimePortfolioMarketEngine {
   private lastValidSnapshot: RealtimePortfolioSnapshot | null = null;
   private skippedTicks = 0;
   private livePrices = new Map<string, LivePriceEntry>();
+  private cachedBreakdownPrices = new Map<string, RealtimePrice>();
   private subscribedProducts = new Set<string>();
   private ws: RealtimeWebSocket | null = null;
   private wsState: RealtimePortfolioSnapshot["socket"]["state"] = "idle";
@@ -395,6 +401,7 @@ export class RealtimePortfolioMarketEngine {
     const balanceVersion = stableVersion(balances.map((b) => `${b.assetId}:${b.available.toFixed(12)}:${b.hold.toFixed(12)}`));
     const priceVersion = stableVersion(Object.values(prices).map((p) => `${p.assetId}:${p.priceEur ?? "null"}:${p.quotedAt}:${p.state}`));
     const receivedAt = this.now();
+    const publishedAt = receivedAt;
     const marketTimestamp = Math.max(0, ...Object.values(prices).map((p) => p.quotedAt));
     const snapshotVersion = `${balanceVersion}::${priceVersion}`;
     const priceStates = Object.values(prices).map((p) => p.state);
@@ -404,6 +411,7 @@ export class RealtimePortfolioMarketEngine {
     const snapshot: RealtimePortfolioSnapshot = {
       requestedAt,
       receivedAt,
+      publishedAt,
       marketTimestamp,
       snapshotVersion,
       balanceVersion,
@@ -451,6 +459,7 @@ export class RealtimePortfolioMarketEngine {
     try {
       const cached = await this.deps.getCachedPortfolioBreakdown(portfolioUuid);
       cachedPositions = (cached?.positions ?? []).map(parseCachedPosition).filter((a): a is RawAccount => a !== null);
+      this.updateCachedBreakdownPrices(cachedPositions);
     } catch (error) {
       this.logger.warn("[RealtimePortfolioMarketEngine] cached breakdown failed:", error instanceof Error ? error.message : String(error));
     }
@@ -508,6 +517,11 @@ export class RealtimePortfolioMarketEngine {
       return { ...live, state: "stale", source: live.source || "last-valid" };
     }
 
+    const cachedBreakdownPrice = this.cachedBreakdownPrices.get(assetId.toUpperCase());
+    if (cachedBreakdownPrice && cachedBreakdownPrice.priceEur !== null && now - cachedBreakdownPrice.quotedAt <= LAST_PRICE_TTL_MS) {
+      return { ...cachedBreakdownPrice, state: "stale" };
+    }
+
     return {
       assetId: assetId.toUpperCase(),
       productId: productIdFor(assetId, "EUR"),
@@ -520,6 +534,27 @@ export class RealtimePortfolioMarketEngine {
       quotedAt: now,
       state: "unavailable",
     };
+  }
+
+  private updateCachedBreakdownPrices(accounts: RawAccount[]): void {
+    const now = this.now();
+    for (const account of accounts) {
+      if (account.currency === "EUR" || account.currency === "EURC") continue;
+      const cachedPrice = finiteNumber(account.cachedPriceEur);
+      if (cachedPrice === null || cachedPrice <= 0) continue;
+      this.cachedBreakdownPrices.set(account.currency, {
+        assetId: account.currency,
+        productId: productIdFor(account.currency, "EUR"),
+        priceEur: cachedPrice,
+        originalPrice: cachedPrice,
+        originalCurrency: "EUR",
+        fxRate: null,
+        fxSource: null,
+        source: "portfolio-cache",
+        quotedAt: now,
+        state: "stale",
+      });
+    }
   }
 
   private ensureSocketSubscriptions(assetIds: string[]): void {

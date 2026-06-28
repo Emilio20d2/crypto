@@ -153,7 +153,7 @@ export class MarketService {
         state: "cached",
         provider: cached.provider,
         fetchedAt: cached.fetchedAt,
-        reason: lastError ? `Último dato válido en caché: ${lastError}` : "Último dato válido en caché",
+        reason: lastError ? `Caché local: ${lastError}` : "Caché local",
       };
     }
 
