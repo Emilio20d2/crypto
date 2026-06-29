@@ -819,6 +819,60 @@ describe("sim-engine: annual metrics", () => {
   });
 });
 
+// ─── Revisión estratégica anual ──────────────────────────────────────────────
+
+describe("sim-engine: AnnualStrategyReview", () => {
+  it("emite una revisión anual por cada snapshot anual", () => {
+    const input = makeInput({ horizonDate: horizon(5) });
+    const result = runPerspectivesSimulation(input);
+    for (const s of result.scenarios) {
+      expect(s.annualStrategyReviews.length).toBe(s.annualSnapshots.length);
+      expect(s.annualStrategyReviews.map(r => r.year)).toEqual(s.annualSnapshots.map(a => a.year));
+    }
+  });
+
+  it("registra decisiones mensuales explícitas sin información futura", () => {
+    const input = makeInput({ horizonDate: horizon(3) });
+    const result = runPerspectivesSimulation(input);
+    const base = result.scenarios.find(s => s.scenario === "base")!;
+    for (const review of base.annualStrategyReviews) {
+      expect(review.monthCount).toBeGreaterThan(0);
+      expect(review.monthlyDecisions.length).toBe(review.monthCount);
+      for (const monthly of review.monthlyDecisions) {
+        expect(monthly.decisions.length).toBeGreaterThan(0);
+        expect(monthly.usesFutureInformation).toBe(false);
+        expect(monthly.evaluatedAssetIds).toContain("BTC");
+      }
+    }
+  });
+
+  it("deja constancia de oportunidades evaluadas y descartadas", () => {
+    const input = makeInput({
+      horizonDate: horizon(3),
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base" },
+    });
+    const result = runPerspectivesSimulation(input);
+    const base = result.scenarios.find(s => s.scenario === "base")!;
+    for (const review of base.annualStrategyReviews) {
+      expect(review.saleEvaluations).toBeGreaterThan(0);
+      expect(review.discardedDecisionCount).toBeGreaterThan(0);
+      expect(review.topReasonsNotToAct.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("mantiene conciliación anual de patrimonio y EURC", () => {
+    const input = makeInput({ eurcFree: 250, horizonDate: horizon(4) });
+    const result = runPerspectivesSimulation(input);
+    for (const s of result.scenarios) {
+      for (const review of s.annualStrategyReviews) {
+        expect(Math.abs(review.reconciliation.wealthDiffEur)).toBeLessThanOrEqual(review.reconciliation.toleranceEur + 0.001);
+        expect(Math.abs(review.reconciliation.eurcDiffEur)).toBeLessThanOrEqual(review.reconciliation.toleranceEur + 0.001);
+        expect(review.reconciliation.passed).toBe(true);
+      }
+    }
+  });
+});
+
 // ─── EURC invariants ─────────────────────────────────────────────────────────
 
 describe("sim-engine: EURC invariants", () => {

@@ -9,7 +9,7 @@ import type {
   ScenarioSummary, AssetSimSummary, SimCycle, SimCycleAsset,
   SimSaleRule, SimRebuyTier, SimSubstitution, PerspectivesSimulation,
   ValidationResult, SimDiagnostics, AssetPriceInfo, ForecastDataset,
-  SimulationStrategyMode,
+  SimulationStrategyMode, AnnualStrategyReview, MonthlyDecisionType,
 } from "./types";
 import { SIM_SCENARIOS, SCENARIO_LABELS, DEFAULT_SIM_OPTIONS } from "./types";
 import {
@@ -1366,6 +1366,175 @@ function buildAnnualSnapshot(
   };
 }
 
+function buildAnnualStrategyReview(ctx: {
+  year: number;
+  monthsOfYear: MonthlyState[];
+  annualSnapshot: AnnualSnapshot;
+  prices: Record<string, Record<string, number>>;
+  marketRegimes: Record<string, Record<string, MarketRegime>>;
+  lastMonthPrevYear: MonthlyState | null;
+  simInput: SimInput;
+  twrCumulativeToYear: number | null;
+  xirrToYear: number | null;
+  maxDrawdownPct: number | null;
+}): AnnualStrategyReview {
+  const firstMonth = ctx.monthsOfYear[0];
+  const lastMonth = ctx.monthsOfYear[ctx.monthsOfYear.length - 1];
+  const openingState = ctx.lastMonthPrevYear ?? firstMonth;
+  const openingUnitsByAsset: Record<string, number> = {};
+  const closingUnitsByAsset: Record<string, number> = {};
+
+  for (const [assetId, st] of Object.entries(openingState.assetStates)) {
+    openingUnitsByAsset[assetId] = st.balance;
+  }
+  for (const [assetId, st] of Object.entries(lastMonth.assetStates)) {
+    closingUnitsByAsset[assetId] = st.balance;
+  }
+
+  const regimeCounts: Record<string, number> = {};
+  const allDiscardedReasons: string[] = [];
+  let saleEvaluations = 0;
+  let rebuyEvaluations = 0;
+
+  const monthlyDecisions = ctx.monthsOfYear.map((ms) => {
+    const mKey = monthKey(ms.monthDate);
+    const decisions = new Set<MonthlyDecisionType>();
+    const discardedReasons: string[] = [];
+    const evaluatedAssetIds: string[] = [];
+    const executedEvents = ms.events.filter(e =>
+      e.type === "sale" || e.type === "rebuy" || e.type === "reinvestment" || e.type === "substitution" || e.type === "purchase"
+    );
+
+    if (ms.monthContributionsEur > 0) decisions.add("CONTINUE_PLAN_BUYING");
+    if (ms.monthSalesEur > 0) decisions.add("EXECUTE_PARTIAL_SALE");
+    if (ms.monthRebuysEur > 0) decisions.add("EXECUTE_PARTIAL_REBUY");
+    if (ms.monthEurcReinvestedEur > 0) decisions.add("REALLOCATE_IF_ALLOWED");
+    if (ms.eurcFree > 0.01) decisions.add("KEEP_EURC_LIQUIDITY");
+
+    for (const [assetId, st] of Object.entries(ms.assetStates)) {
+      if (!st || st.balance <= 0 || st.failed) continue;
+      evaluatedAssetIds.push(assetId);
+      const regime = ctx.marketRegimes[assetId]?.[mKey] ?? "INSUFFICIENT_DATA";
+      regimeCounts[regime] = (regimeCounts[regime] ?? 0) + 1;
+      const priceEur = ctx.prices[assetId]?.[mKey] ?? null;
+      const avgCost = st.avgCostEur;
+
+      if (regime === "EUPHORIA" || regime === "DISTRIBUTION") {
+        decisions.add("PREPARE_PARTIAL_SALE");
+      }
+      if (regime === "CORRECTION" || regime === "CAPITULATION" || regime === "ACCUMULATION") {
+        decisions.add("PREPARE_REBUY");
+      }
+      if (regime === "BEAR_MARKET" || regime === "CORRECTION") {
+        decisions.add("WAIT_FOR_STABILIZATION");
+      }
+      if (regime === "INSUFFICIENT_DATA") {
+        decisions.add("HOLD");
+        discardedReasons.push(`${assetId}: datos insuficientes para venta o recompra tactica`);
+      }
+
+      if (priceEur != null && avgCost != null && avgCost > 0) {
+        const multiple = priceEur / avgCost;
+        if (multiple < 3) {
+          discardedReasons.push(`${assetId}: venta descartada, multiplicador ${multiple.toFixed(2)}x inferior al umbral tactico`);
+        } else if (ms.monthSalesEur <= 0) {
+          discardedReasons.push(`${assetId}: venta evaluada, sin regla activa ejecutable en este mes`);
+        }
+      }
+
+      if (ms.eurcFree <= 0.01) {
+        discardedReasons.push(`${assetId}: recompra descartada, sin EURC operativo procedente de ventas previas`);
+      } else if (ms.monthRebuysEur <= 0) {
+        discardedReasons.push(`${assetId}: recompra evaluada, se conserva EURC hasta estabilizacion o mejor zona`);
+      }
+    }
+
+    if (decisions.has("PREPARE_REBUY") && !decisions.has("EXECUTE_PARTIAL_REBUY")) {
+      decisions.add("WAIT_FOR_STABILIZATION");
+    }
+    if (decisions.size === 0) decisions.add("HOLD");
+
+    saleEvaluations += evaluatedAssetIds.length;
+    if (ms.eurcFree > 0.01) rebuyEvaluations += evaluatedAssetIds.length;
+    allDiscardedReasons.push(...discardedReasons);
+
+    return {
+      month: mKey,
+      decisions: [...decisions],
+      executedEvents,
+      discardedReasons,
+      eurcOperatingLiquidityEur: ms.eurcFree,
+      fiscalReserveEur: ms.eurcFiscalReserve,
+      evaluatedAssetIds,
+      usesFutureInformation: false as const,
+    };
+  });
+
+  const sortedRegimes = Object.entries(regimeCounts).sort((a, b) => b[1] - a[1]);
+  const topReasons = Object.entries(
+    allDiscardedReasons.reduce<Record<string, number>>((acc, reason) => {
+      acc[reason] = (acc[reason] ?? 0) + 1;
+      return acc;
+    }, {}),
+  )
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([reason, count]) => count > 1 ? `${reason} (${count} meses)` : reason);
+
+  const openingEurc = ctx.lastMonthPrevYear?.eurcFree ?? ctx.simInput.eurcFree;
+  const wealthExpected =
+    ctx.annualSnapshot.openingWealthEur +
+    ctx.annualSnapshot.contributionsEur +
+    ctx.annualSnapshot.marketGainEur -
+    ctx.annualSnapshot.commissionsEur;
+  const wealthDiffEur = ctx.annualSnapshot.closingWealthEur - wealthExpected;
+  const eurcExpected = openingEurc + ctx.annualSnapshot.netEurcInflowEur - ctx.annualSnapshot.rebuysEur;
+  const eurcDiffEur = ctx.annualSnapshot.eurcFreeEur - eurcExpected;
+  const toleranceEur = 0.01;
+
+  return {
+    year: ctx.year,
+    monthCount: ctx.monthsOfYear.length,
+    monthlyDecisions,
+    openingWealthEur: ctx.annualSnapshot.openingWealthEur,
+    externalContributionsEur: ctx.annualSnapshot.contributionsEur,
+    planPurchasesEur: ctx.annualSnapshot.externalPurchasesEur,
+    tacticalPurchasesEur: 0,
+    partialSalesEur: ctx.annualSnapshot.salesEur,
+    realizedGainEur: ctx.annualSnapshot.realizedGainEur,
+    taxGeneratedEur: ctx.annualSnapshot.taxEur,
+    eurcGeneratedEur: ctx.annualSnapshot.netEurcInflowEur,
+    rebuysEur: ctx.annualSnapshot.rebuysEur,
+    reinvestedCapitalEur: ctx.annualSnapshot.reinvestedCapitalEur,
+    finalEurcEur: ctx.annualSnapshot.eurcFreeEur,
+    finalFiscalReserveEur: ctx.annualSnapshot.fiscalReserveEur,
+    openingUnitsByAsset,
+    closingUnitsByAsset,
+    marketGainEur: ctx.annualSnapshot.marketGainEur,
+    closingGrossEur: ctx.annualSnapshot.closingGrossEur,
+    closingNetEur: ctx.annualSnapshot.closingWealthEur,
+    cumulativeProfitEur: ctx.annualSnapshot.netProfitEur,
+    twrYear: ctx.annualSnapshot.annualReturnPct == null ? null : ctx.annualSnapshot.annualReturnPct / 100,
+    twrCumulative: ctx.twrCumulativeToYear,
+    xirrToYear: ctx.xirrToYear,
+    maxDrawdownPct: ctx.maxDrawdownPct,
+    predominantRegime: sortedRegimes[0]?.[0] ?? null,
+    executedDecisionCount: monthlyDecisions.reduce((sum, m) => sum + m.executedEvents.length, 0),
+    discardedDecisionCount: allDiscardedReasons.length,
+    saleEvaluations,
+    rebuyEvaluations,
+    monthsInEurc: ctx.monthsOfYear.filter(m => m.eurcFree > 0.01).length,
+    averageEurcEur: ctx.monthsOfYear.reduce((sum, m) => sum + m.eurcFree, 0) / ctx.monthsOfYear.length,
+    topReasonsNotToAct: topReasons,
+    reconciliation: {
+      wealthDiffEur,
+      eurcDiffEur,
+      toleranceEur,
+      passed: Math.abs(wealthDiffEur) <= toleranceEur && Math.abs(eurcDiffEur) <= toleranceEur,
+    },
+  };
+}
+
 // ─── XIRR simplificado ───────────────────────────────────────────────────────
 
 function calcXirr(
@@ -1608,6 +1777,46 @@ function runScenario(
     prevYearLastMonth = monthsOfYear[monthsOfYear.length - 1];
   }
 
+  const initialWealthForAnnualReviews = input.currentPositions.reduce(
+    (s, p) => s + p.balance * (p.currentPriceEur ?? 0), 0
+  ) + input.eurcFree + input.eurCash;
+  const annualStrategyReviews: AnnualStrategyReview[] = [];
+  let reviewPrevYearLastMonth: MonthlyState | null = null;
+  let reviewTwrProduct = 1.0;
+  for (const snap of annualSnapshots) {
+    const monthsOfYear = byYear[snap.year] ?? [];
+    reviewTwrProduct *= 1 + ((snap.annualReturnPct ?? 0) / 100);
+    const monthsToYear = allMonthlyStates
+      .filter(({ year }) => year <= snap.year)
+      .map(({ state: ms }) => ms);
+    const contributionsToYear = monthsToYear
+      .filter(ms => ms.monthContributionsEur > 0)
+      .map(ms => ({
+        date: Math.max(input.now, ms.monthDate),
+        amount: ms.monthContributionsEur,
+      }));
+    const wealthSeriesToYear = [initialWealthForAnnualReviews, ...monthsToYear.map(ms => calcWealth(ms, monthKey(ms.monthDate)))];
+    annualStrategyReviews.push(buildAnnualStrategyReview({
+      year: snap.year,
+      monthsOfYear,
+      annualSnapshot: snap,
+      prices,
+      marketRegimes,
+      lastMonthPrevYear: reviewPrevYearLastMonth,
+      simInput: input,
+      twrCumulativeToYear: reviewTwrProduct - 1,
+      xirrToYear: calcXirr(
+        initialWealthForAnnualReviews,
+        contributionsToYear,
+        snap.closingWealthEur,
+        monthsOfYear[monthsOfYear.length - 1]?.monthDate ?? input.horizonDate,
+        input.now,
+      ),
+      maxDrawdownPct: calcMaxDrawdown(wealthSeriesToYear),
+    }));
+    reviewPrevYearLastMonth = monthsOfYear[monthsOfYear.length - 1] ?? reviewPrevYearLastMonth;
+  }
+
   // Summary
   const lastSnap = annualSnapshots[annualSnapshots.length - 1];
 
@@ -1777,6 +1986,7 @@ function runScenario(
     scenario,
     label: SCENARIO_LABELS[scenario],
     annualSnapshots,
+    annualStrategyReviews,
     summary,
     assetPriceInfo,
     marketDiagnostics,

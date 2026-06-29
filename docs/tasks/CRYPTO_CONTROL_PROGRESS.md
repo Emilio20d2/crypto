@@ -643,3 +643,40 @@ Pruebas tras retirar el motor antiguo:
 - App instalada abierta — OK, `:3001` activo.
 - Base real tras abrir app final: `PRAGMA integrity_check` — OK; `profit_harvest_cycles=0`.
 - Playwright contra app instalada final en desktop y móvil — OK.
+
+Actualización 2026-06-29 — Ampliación bloqueante de revisión año a año
+
+Nueva ampliación recibida
+
+Adjunto leído completo:
+
+- `AMPLIACIÓN BLOQUEANTE — EVALUACIÓN AÑO POR AÑO DE COMPRAS, VENTAS, LIQUIDEZ Y RECOMPRAS`.
+
+Cambios realizados
+
+- Añadidos tipos productivos `MonthlyDecisionType`, `MonthlyStrategyDecision` y `AnnualStrategyReview` en `packages/portfolio/src/perspectives/types.ts`.
+- `ScenarioResult` ahora expone `annualStrategyReviews` junto a `annualSnapshots`.
+- Añadido `buildAnnualStrategyReview()` en `packages/portfolio/src/perspectives/sim-engine.ts`.
+- Cada año de cada escenario resume las decisiones mensuales cronológicas desde los `MonthlyState` ya simulados.
+- Cada mes emite decisiones explícitas: continuar compras del plan, mantener, preparar venta, ejecutar venta, conservar EURC, preparar recompra, ejecutar recompra, esperar estabilización y redistribuir si procede.
+- Cada revisión anual incluye patrimonio inicial/final, aportaciones externas, compras del plan, ventas, ganancia realizada, fiscalidad, EURC generado/final, recompras, capital reinvertido, unidades iniciales/finales por activo, resultado de mercado, TWR anual/acumulado, XIRR hasta el año, drawdown, régimen predominante, decisiones ejecutadas y descartadas.
+- Se registran oportunidades evaluadas y motivos de descarte por mes; ya no queda un año sin explicación salvo que no exista posición evaluable.
+- Se marca explícitamente `usesFutureInformation: false` en cada decisión mensual.
+- Añadida conciliación anual de patrimonio y EURC en `AnnualStrategyReview.reconciliation`.
+
+Pruebas ejecutadas
+
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix packages/portfolio test -- src/perspectives/sim-engine.test.ts` — OK, 74 tests.
+- `npm --prefix packages/portfolio run test && npm --prefix packages/portfolio run build` — OK, 18 archivos / 384 tests.
+- `npm --prefix apps/web run typecheck && npm --prefix apps/web run test && npm --prefix apps/web run build` — OK, 12 archivos / 143 tests.
+- `npm --prefix apps/desktop run typecheck && npm --prefix apps/desktop run build` — OK.
+- `npm --prefix packages/core run typecheck && npm --prefix packages/core run build` — OK.
+- `npm --prefix packages/database run typecheck && npm --prefix packages/database run test && npm --prefix packages/database run build` — OK, 5 archivos / 25 tests.
+- `npm --prefix packages/market-data run typecheck && npm --prefix packages/market-data run test && npm --prefix packages/market-data run build` — OK, 5 archivos / 49 tests.
+- `npm --prefix packages/coinbase-sync run typecheck && npm --prefix packages/coinbase-sync run test && npm --prefix packages/coinbase-sync run build` — OK, 5 archivos / 62 tests.
+
+Pendiente de este bloque antes de otro DMG
+
+- Reinstalar DMG solo si se solicita nueva release con esta ampliación.
+- Validar en app instalada que la UI sigue usando `persp2:getSimulation` y no vuelve a exponer el motor antiguo.

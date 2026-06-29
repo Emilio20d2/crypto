@@ -238,11 +238,79 @@ export interface ScenarioResult {
   scenario: SimScenario;
   label: string;
   annualSnapshots: AnnualSnapshot[];
+  annualStrategyReviews: AnnualStrategyReview[];
   summary: ScenarioSummary;
   assetPriceInfo: Record<string, AssetPriceInfo>;
   marketDiagnostics?: {
     negativeMonths: number;
     regimeCounts: Record<string, number>;
+  };
+}
+
+export type MonthlyDecisionType =
+  | "CONTINUE_PLAN_BUYING"
+  | "REDUCE_NEW_BUYS"
+  | "PAUSE_TACTICAL_BUYS"
+  | "HOLD"
+  | "PREPARE_PARTIAL_SALE"
+  | "EXECUTE_PARTIAL_SALE"
+  | "KEEP_EURC_LIQUIDITY"
+  | "PREPARE_REBUY"
+  | "EXECUTE_PARTIAL_REBUY"
+  | "WAIT_FOR_STABILIZATION"
+  | "CANCEL_REBUY_THESIS"
+  | "REALLOCATE_IF_ALLOWED";
+
+export interface MonthlyStrategyDecision {
+  month: string;
+  decisions: MonthlyDecisionType[];
+  executedEvents: SimEvent[];
+  discardedReasons: string[];
+  eurcOperatingLiquidityEur: number;
+  fiscalReserveEur: number;
+  evaluatedAssetIds: string[];
+  usesFutureInformation: false;
+}
+
+export interface AnnualStrategyReview {
+  year: number;
+  monthCount: number;
+  monthlyDecisions: MonthlyStrategyDecision[];
+  openingWealthEur: number;
+  externalContributionsEur: number;
+  planPurchasesEur: number;
+  tacticalPurchasesEur: number;
+  partialSalesEur: number;
+  realizedGainEur: number;
+  taxGeneratedEur: number;
+  eurcGeneratedEur: number;
+  rebuysEur: number;
+  reinvestedCapitalEur: number;
+  finalEurcEur: number;
+  finalFiscalReserveEur: number;
+  openingUnitsByAsset: Record<string, number>;
+  closingUnitsByAsset: Record<string, number>;
+  marketGainEur: number;
+  closingGrossEur: number;
+  closingNetEur: number;
+  cumulativeProfitEur: number;
+  twrYear: number | null;
+  twrCumulative: number | null;
+  xirrToYear: number | null;
+  maxDrawdownPct: number | null;
+  predominantRegime: string | null;
+  executedDecisionCount: number;
+  discardedDecisionCount: number;
+  saleEvaluations: number;
+  rebuyEvaluations: number;
+  monthsInEurc: number;
+  averageEurcEur: number;
+  topReasonsNotToAct: string[];
+  reconciliation: {
+    wealthDiffEur: number;
+    eurcDiffEur: number;
+    toleranceEur: number;
+    passed: boolean;
   };
 }
 
