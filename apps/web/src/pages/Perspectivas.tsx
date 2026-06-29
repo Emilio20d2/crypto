@@ -53,6 +53,12 @@ interface AnnualSnapshot {
   taxEur: number;
   eurcReinvestedEur: number;
   netEurcInflowEur: number;
+  currentInvestedCapitalEur?: number;
+  openCostBasisEur?: number;
+  externalContributionsCumulativeEur?: number;
+  reinvestedCapitalCumulativeEur?: number;
+  deployedCapitalCumulativeEur?: number;
+  netProfitEur?: number;
   fiscalReserveEur: number;
   eurcFreeEur: number;
   eurCashEur: number;
@@ -1204,7 +1210,16 @@ export function Perspectivas() {
   }
 
   const sum = activeScenario.summary;
-  const beneficioNetoEur = sum.netProfitEur ?? (sum.finalNetWealthEur - sum.initialWealthEur - sum.totalContributionsEur);
+  const displayWealthEur = selectedSnap?.closingWealthEur ?? sum.finalNetWealthEur;
+  const displayGrossWealthEur = selectedSnap?.closingGrossEur ?? sum.grossWealthEur ?? (sum.finalNetWealthEur + sum.finalFiscalReserveEur);
+  const displayExternalCapitalEur = selectedSnap?.externalContributionsCumulativeEur ?? sum.externalContributionsEur ?? (sum.initialWealthEur + sum.totalContributionsEur);
+  const displayInvestedCapitalEur = selectedSnap?.currentInvestedCapitalEur ?? sum.currentInvestedCapitalEur ?? 0;
+  const displayReinvestedCapitalEur = selectedSnap?.reinvestedCapitalCumulativeEur ?? sum.reinvestedCapitalEur ?? 0;
+  const displayDeployedCapitalEur = selectedSnap?.deployedCapitalCumulativeEur ?? sum.cumulativeDeployedCapitalEur ?? 0;
+  const displayOpenCostBasisEur = selectedSnap?.openCostBasisEur ?? sum.openCostBasisEur ?? 0;
+  const displayFiscalReserveEur = selectedSnap?.fiscalReserveEur ?? sum.finalFiscalReserveEur;
+  const displayEurcOperatingEur = selectedSnap?.eurcFreeEur ?? sum.eurcOperatingLiquidityEur ?? sum.finalEurcFreeEur;
+  const beneficioNetoEur = selectedSnap?.netProfitEur ?? sum.netProfitEur ?? (displayWealthEur - displayExternalCapitalEur);
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -1245,11 +1260,11 @@ export function Perspectivas() {
         <div className="persp-hero">
           <div className="persp-hero-main">
             <div className="persp-hero-label">Patrimonio neto estimado</div>
-            <div className="persp-hero-value">{fmt(sum.finalNetWealthEur)}</div>
+            <div className="persp-hero-value">{fmt(displayWealthEur)}</div>
             <div className="persp-hero-meta">
               <span>{SCENARIO_LABELS[selectedScenario]}</span>
               <span aria-hidden="true">·</span>
-              <span>Plan {simData.startYear}–{simData.endYear}</span>
+              <span>Proyección hasta {effectiveYear ?? simData.endYear}</span>
             </div>
           </div>
           <div className="persp-hero-metrics">
@@ -1259,16 +1274,16 @@ export function Perspectivas() {
             </div>
             <div className="persp-hero-metric">
               <span>Aportaciones externas</span>
-              <strong>{fmt(sum.externalContributionsEur ?? (sum.initialWealthEur + sum.totalContributionsEur))}</strong>
+              <strong>{fmt(displayExternalCapitalEur)}</strong>
             </div>
             <div className="persp-hero-metric">
               <span>Beneficio neto estimado</span>
               <strong className={beneficioNetoEur >= 0 ? "pos" : "neg"}>{fmtSign(beneficioNetoEur)}</strong>
             </div>
-            {sum.finalFiscalReserveEur > 0 && (
+            {displayFiscalReserveEur > 0 && (
               <div className="persp-hero-metric">
                 <span>Patrimonio bruto</span>
-                <strong>{fmt(sum.finalNetWealthEur + sum.finalFiscalReserveEur)}</strong>
+                <strong>{fmt(displayGrossWealthEur)}</strong>
               </div>
             )}
           </div>
@@ -1308,19 +1323,19 @@ export function Perspectivas() {
               </div>
               <div className="persp-group-row">
                 <span>Capital invertido actual</span>
-                <strong>{fmt(sum.currentInvestedCapitalEur ?? 0)}</strong>
+                <strong>{fmt(displayInvestedCapitalEur)}</strong>
               </div>
               <div className="persp-group-row">
                 <span>Capital reinvertido</span>
-                <strong>{(sum.reinvestedCapitalEur ?? 0) > 0 ? fmt(sum.reinvestedCapitalEur ?? 0) : "—"}</strong>
+                <strong>{displayReinvestedCapitalEur > 0 ? fmt(displayReinvestedCapitalEur) : "—"}</strong>
               </div>
               <div className="persp-group-row">
                 <span>Capital desplegado</span>
-                <strong>{fmt(sum.cumulativeDeployedCapitalEur ?? 0)}</strong>
+                <strong>{fmt(displayDeployedCapitalEur)}</strong>
               </div>
               <div className="persp-group-row">
                 <span>Coste posiciones abiertas</span>
-                <strong>{fmt(sum.openCostBasisEur ?? 0)}</strong>
+                <strong>{fmt(displayOpenCostBasisEur)}</strong>
               </div>
             </div>
           </div>
@@ -1370,11 +1385,11 @@ export function Perspectivas() {
               </div>
               <div className="persp-group-row">
                 <span>Reserva fiscal final</span>
-                <strong className={sum.finalFiscalReserveEur > 0 ? "warn" : ""}>{sum.finalFiscalReserveEur > 0 ? fmt(sum.finalFiscalReserveEur) : "—"}</strong>
+                <strong className={displayFiscalReserveEur > 0 ? "warn" : ""}>{displayFiscalReserveEur > 0 ? fmt(displayFiscalReserveEur) : "—"}</strong>
               </div>
               <div className="persp-group-row">
                 <span>EURC operativo</span>
-                <strong>{(sum.eurcOperatingLiquidityEur ?? sum.finalEurcFreeEur) > 0 ? fmt(sum.eurcOperatingLiquidityEur ?? sum.finalEurcFreeEur) : "—"}</strong>
+                <strong>{displayEurcOperatingEur > 0 ? fmt(displayEurcOperatingEur) : "—"}</strong>
               </div>
               <div className="persp-group-row">
                 <span>EURC de seguridad</span>

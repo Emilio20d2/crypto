@@ -288,6 +288,37 @@ Pruebas ejecutadas en esta fase
 - Instalación final en `/Applications/Crypto Control.app` — OK.
 - Verificación IPC instalada `persp2:getSimulation` — OK: `source = market-regime-engine+active-forecast-anchors`, `engineVersion = perspectives-v4.0-market-regimes`, `marketRegimeEngine = true`, cinco escenarios presentes, `realisticCycleValidation = passed`.
 
+Actualización 2026-06-29 — Tarea maestra bloqueante de reconstrucción total
+
+Nueva tarea recibida
+
+Adjuntos duplicados leídos y comparados:
+
+- `eddd7b2b-fa77-407b-ab34-83fcd5e61020/pasted-text.txt`
+- `dff945be-48d6-4bed-b15b-71d01dd0d57a/pasted-text.txt`
+
+Ambos tienen el mismo SHA-256: `9820df46ab33d1788af8e966b1ab19c199816ae4b81019b6e483bd2a3f0c131c`.
+
+Congelación del estado anterior
+
+- Evidencia guardada en `docs/tasks/evidence/perspectives-before-rebuild-20260629-225034/`.
+- JSON completo de app instalada: `persp2-getSimulation-full.json` (`971K`).
+- Resumen de escenarios: `scenario-summary.json`.
+- Captura actual: `perspectivas-before-screen.png`.
+- Estado Git: `git-state.txt`.
+- Procesos de app instalada: `app-processes.txt`.
+- DB real verificada con `PRAGMA integrity_check = ok`.
+- Extractos guardados de plan, ciclos, activos de inversión, lotes, realized gains, transacciones, legs, previsiones activas, fuentes, snapshots Coinbase y posiciones Coinbase.
+
+Diagnóstico del antes
+
+- Commit de trabajo antes de esta tarea: `f6fad0fe7253bb52bd5a33a868ae52148dfe425b`.
+- Motor instalado: `perspectives-v4.0-market-regimes`.
+- Candidate activo: `verified-active-1782499645854`.
+- Orden observado en app instalada antes de esta reconstrucción: Conservador `157.478,93`, Moderado `142.933,68`, Base `156.052,32`, Favorable `130.568,09`, Optimista `166.697,85`.
+- Orden inválido reproducido: Moderado < Conservador, Favorable < Base.
+- Causa técnica principal confirmada: cada escenario genera su propia trayectoria estocástica; el azar puede dominar la semántica de escenario.
+
 Actualización 2026-06-29 — Corrección contable de capital y EURC
 
 Nueva ampliación recibida

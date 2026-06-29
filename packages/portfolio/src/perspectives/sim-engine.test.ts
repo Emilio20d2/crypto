@@ -282,6 +282,14 @@ describe("market-regime-engine: trayectorias mensuales no lineales", () => {
     expect(result.diagnostics.perScenario.find(s => s.scenario === "base")?.isStrictlyMonotonic).toBe(false);
     expect(Object.keys(base?.marketDiagnostics?.regimeCounts ?? {}).length).toBeGreaterThan(3);
   });
+
+  it("declara inválido cualquier orden de escenarios incoherente", () => {
+    const input = makeInput({ horizonDate: horizon(18) });
+    const result = runPerspectivesSimulation(input);
+    const order = result.diagnostics.scenarioOrder.map(entry => entry.finalNetWealthEur);
+    const isOrdered = order.every((value, index) => index === 0 || value >= order[index - 1]);
+    expect(result.diagnostics.scenarioValidationStatus).toBe(isOrdered ? "valid_order" : "invalid_order");
+  });
 });
 
 // ─── Motor de precios externos — buildExternalPriceMap ───────────────────────

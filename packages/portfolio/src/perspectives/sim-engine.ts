@@ -31,6 +31,15 @@ const EMPTY_FORECAST_DATASET: ForecastDataset = {
   fxRateAt: null,
 };
 
+function stableSeed(text: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
 // ─── FIFO helpers ─────────────────────────────────────────────────────────────
 
 function consumeFifo(
@@ -1500,6 +1509,7 @@ function runScenario(
       nowMs: input.now,
       horizonMs: input.horizonDate,
       anchorPricesByMonth: result.pricesByMonth,
+      seed: stableSeed(`${assetId}:${input.now}:${input.horizonDate}:shared-market-path-v1`),
     });
     externalResultsByAsset[assetId] = result;
     marketPathsByAsset[assetId] = marketPath;
@@ -1870,6 +1880,13 @@ export function runPerspectivesSimulation(
     (basePerSc?.maxDrawdownPct ?? 0) > 0.05 &&
     !basePerSc?.isStrictlyMonotonic
   ) ? "passed" : "failed";
+  const scenarioOrder = results.map(r => ({
+    scenario: r.scenario,
+    finalNetWealthEur: r.summary.finalNetWealthEur,
+  }));
+  const scenarioValidationStatus = scenarioOrder.every((entry, index, arr) =>
+    index === 0 || entry.finalNetWealthEur >= arr[index - 1].finalNetWealthEur
+  ) ? "valid_order" : "invalid_order";
 
   const diagnostics: SimDiagnostics = {
     engineIsNew: true,
@@ -1884,6 +1901,8 @@ export function runPerspectivesSimulation(
     maxDrawdownPct,
     hasBearPeriods: negativeYearCount > 0 || (maxDrawdownPct !== null && maxDrawdownPct > 0.05),
     realisticCycleValidation,
+    scenarioValidationStatus,
+    scenarioOrder,
     perScenario,
   };
 

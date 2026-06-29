@@ -336,6 +336,8 @@ export interface SimDiagnostics {
   maxDrawdownPct: number | null;
   hasBearPeriods: boolean;
   realisticCycleValidation: "passed" | "failed";
+  scenarioValidationStatus: "valid_order" | "invalid_order";
+  scenarioOrder: Array<{ scenario: SimScenario; finalNetWealthEur: number }>;
   perScenario: ScenarioDiagnostic[];
 }
 
