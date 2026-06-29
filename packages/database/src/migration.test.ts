@@ -49,6 +49,7 @@ describe("Database Migration & Integrity", () => {
     expect(tableNames).toContain("treasury_movements");
     expect(tableNames).toContain("fiscal_reserve_movements");
     expect(tableNames).toContain("cycle_liquidity_allocations");
+    expect(tableNames).toContain("profit_harvest_cycles");
 
     // Verificamos las nuevas columnas en transaction_legs
     const columnsInfo = sqlite.pragma("table_info('transaction_legs')") as { name: string }[];
@@ -70,6 +71,12 @@ describe("Database Migration & Integrity", () => {
     expect(investmentAssetColumns).toContain("target_value_eur");
     expect(investmentAssetColumns).toContain("target_portfolio_percentage");
     expect(investmentAssetColumns).toContain("status");
+
+    const harvestColumns = (sqlite.pragma("table_info('profit_harvest_cycles')") as { name: string }[]).map(c => c.name);
+    expect(harvestColumns).toContain("simulation_only");
+    expect(harvestColumns).toContain("requires_user_confirmation");
+    expect(harvestColumns).toContain("eurc_fiscal_reserve_eur");
+    expect(harvestColumns).toContain("eurc_operational_eur");
     
     closeDatabase();
   });

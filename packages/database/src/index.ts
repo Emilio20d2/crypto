@@ -4,3 +4,4 @@ export * from "./portfolio-repository";
 export * from "./market-cache-repository";
 export * from "./sentiment-repository";
 export * from "./treasury-repository";
+export * from "./profit-harvest-repository";

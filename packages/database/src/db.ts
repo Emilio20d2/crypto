@@ -357,6 +357,50 @@ export function ensureEssentialTables(): void {
     CREATE INDEX IF NOT EXISTS idx_strategic_signals_asset ON strategic_signals (asset_id);
     CREATE INDEX IF NOT EXISTS idx_strategic_signals_detected ON strategic_signals (detected_at);
 
+    CREATE TABLE IF NOT EXISTS profit_harvest_cycles (
+      id TEXT PRIMARY KEY NOT NULL,
+      asset_id TEXT NOT NULL,
+      cycle_id TEXT,
+      plan_id TEXT,
+      opened_at INTEGER NOT NULL,
+      closed_at INTEGER,
+      status TEXT NOT NULL DEFAULT 'proposed',
+      strategy_mode TEXT NOT NULL,
+      strategy_source TEXT NOT NULL,
+      simulation_only INTEGER NOT NULL DEFAULT 1,
+      requires_user_confirmation INTEGER NOT NULL DEFAULT 1,
+      lots_affected_json TEXT NOT NULL DEFAULT '[]',
+      units_sold REAL NOT NULL,
+      sell_price_eur REAL NOT NULL,
+      gross_sale_eur REAL NOT NULL,
+      acquisition_cost_eur REAL NOT NULL,
+      realized_gain_eur REAL NOT NULL,
+      tax_eur REAL NOT NULL,
+      costs_eur REAL NOT NULL,
+      eurc_fiscal_reserve_eur REAL NOT NULL,
+      eurc_operational_eur REAL NOT NULL,
+      reason TEXT NOT NULL,
+      positive_signals_json TEXT NOT NULL DEFAULT '[]',
+      negative_signals_json TEXT NOT NULL DEFAULT '[]',
+      break_even_rebuy_price_eur REAL NOT NULL,
+      minimum_drop_pct REAL NOT NULL,
+      target_zone_json TEXT NOT NULL,
+      rebuys_json TEXT NOT NULL DEFAULT '[]',
+      units_rebought REAL NOT NULL DEFAULT 0,
+      additional_units REAL NOT NULL DEFAULT 0,
+      result_vs_hold_eur REAL NOT NULL DEFAULT 0,
+      expires_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (asset_id) REFERENCES assets(id),
+      FOREIGN KEY (cycle_id) REFERENCES investment_cycles(id) ON DELETE SET NULL,
+      FOREIGN KEY (plan_id) REFERENCES investment_plans(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_profit_harvest_asset ON profit_harvest_cycles (asset_id);
+    CREATE INDEX IF NOT EXISTS idx_profit_harvest_cycle ON profit_harvest_cycles (cycle_id);
+    CREATE INDEX IF NOT EXISTS idx_profit_harvest_status ON profit_harvest_cycles (status);
+    CREATE INDEX IF NOT EXISTS idx_profit_harvest_opened ON profit_harvest_cycles (opened_at);
+
     -- Analyst forecast targets from real public reports
     -- Primary key includes targetYear so multiple years can coexist per asset/scenario
     CREATE TABLE IF NOT EXISTS analyst_targets_v2 (

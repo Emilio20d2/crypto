@@ -168,7 +168,6 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
       updateGoal:             (id: unknown, data: unknown) => ipc("perspectives:updateGoal", id, data),
       deleteGoal:             (id: unknown) =>               ipc("perspectives:deleteGoal", id),
       getConsolidatedSnapshot: () =>                         ipc("perspectives:getConsolidatedSnapshot"),
-      getProjection:          (input?: unknown) =>           ipc("perspectives:getProjection", input),
       getAnalystForecasts:    () =>                          ipc("perspectives:getAnalystForecasts"),
     },
     signals: {

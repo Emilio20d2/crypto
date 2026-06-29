@@ -587,6 +587,50 @@ export const strategicSignals = sqliteTable("strategic_signals", {
   };
 });
 
+export const profitHarvestCycles = sqliteTable("profit_harvest_cycles", {
+  id: text("id").primaryKey(),
+  assetId: text("asset_id").notNull().references(() => assets.id),
+  cycleId: text("cycle_id").references(() => investmentCycles.id, { onDelete: "set null" }),
+  planId: text("plan_id").references(() => investmentPlans.id, { onDelete: "set null" }),
+  openedAt: integer("opened_at").notNull(),
+  closedAt: integer("closed_at"),
+  status: text("status").notNull().default("proposed"),
+  strategyMode: text("strategy_mode").notNull(),
+  strategySource: text("strategy_source").notNull(),
+  simulationOnly: integer("simulation_only").notNull().default(1),
+  requiresUserConfirmation: integer("requires_user_confirmation").notNull().default(1),
+  lotsAffectedJson: text("lots_affected_json").notNull().default("[]"),
+  unitsSold: real("units_sold").notNull(),
+  sellPriceEur: real("sell_price_eur").notNull(),
+  grossSaleEur: real("gross_sale_eur").notNull(),
+  acquisitionCostEur: real("acquisition_cost_eur").notNull(),
+  realizedGainEur: real("realized_gain_eur").notNull(),
+  taxEur: real("tax_eur").notNull(),
+  costsEur: real("costs_eur").notNull(),
+  eurcFiscalReserveEur: real("eurc_fiscal_reserve_eur").notNull(),
+  eurcOperationalEur: real("eurc_operational_eur").notNull(),
+  reason: text("reason").notNull(),
+  positiveSignalsJson: text("positive_signals_json").notNull().default("[]"),
+  negativeSignalsJson: text("negative_signals_json").notNull().default("[]"),
+  breakEvenRebuyPriceEur: real("break_even_rebuy_price_eur").notNull(),
+  minimumDropPct: real("minimum_drop_pct").notNull(),
+  targetZoneJson: text("target_zone_json").notNull(),
+  rebuysJson: text("rebuys_json").notNull().default("[]"),
+  unitsRebought: real("units_rebought").notNull().default(0),
+  additionalUnits: real("additional_units").notNull().default(0),
+  resultVsHoldEur: real("result_vs_hold_eur").notNull().default(0),
+  expiresAt: integer("expires_at"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => {
+  return {
+    idxProfitHarvestAsset: index("idx_profit_harvest_asset").on(table.assetId),
+    idxProfitHarvestCycle: index("idx_profit_harvest_cycle").on(table.cycleId),
+    idxProfitHarvestStatus: index("idx_profit_harvest_status").on(table.status),
+    idxProfitHarvestOpened: index("idx_profit_harvest_opened").on(table.openedAt),
+  };
+});
+
 // ─── Motor de Perspectivas — fuentes registradas ──────────────────────────────
 
 export const forecastSources = sqliteTable("forecast_sources", {

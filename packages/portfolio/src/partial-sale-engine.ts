@@ -2,7 +2,7 @@
 // Evaluates configurable rules against real position/price data and produces previews.
 // NEVER executes sales automatically.
 
-import { SPANISH_FISCAL_CONFIG_2024 } from "./projection-engine/types";
+import { SPANISH_FISCAL_CONFIG_2024 } from "./fiscal-config";
 
 export type PartialSaleConditionType =
   | "price_target"

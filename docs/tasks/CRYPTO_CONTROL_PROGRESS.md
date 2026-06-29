@@ -364,3 +364,92 @@ DMG e instalación
 - App copiada a `/Applications/Crypto Control.app` — OK.
 - Primera apertura instalada — OK, proceso escuchando en `:3001`.
 - Segunda apertura instalada — OK, proceso escuchando en `:3001` y sirviendo HTML.
+
+Cierre de pendientes posteriores
+
+Dependencias instaladas:
+
+- `playwright` añadido como dependencia de desarrollo.
+- `npx playwright install chromium` — OK, Chromium/Headless Shell/FFmpeg descargados en la caché local de Playwright.
+- `npm audit` tras instalar informa 14 vulnerabilidades transitivas existentes; no se ejecutó `npm audit fix --force` para evitar cambios de dependencias no solicitados y potencialmente rupturistas.
+
+Persistencia `ProfitHarvestCycle`:
+
+- `packages/database/src/schema.ts`: añadida tabla `profit_harvest_cycles`.
+- `packages/database/src/db.ts`: añadida creación defensiva `CREATE TABLE IF NOT EXISTS profit_harvest_cycles`.
+- `packages/database/drizzle/0018_profit_harvest_cycles.sql`: añadida migración aditiva.
+- `packages/database/drizzle/meta/_journal.json`: registrada migración `0018_profit_harvest_cycles`.
+- `packages/database/src/profit-harvest-repository.ts`: añadido repositorio `DatabaseProfitHarvestRepository`.
+- `packages/database/src/profit-harvest-repository.test.ts`: añadidos tests que verifican persistencia sin crear `transactions` ni `realized_gains`.
+- `packages/database/src/migration.test.ts`: actualizado para exigir `profit_harvest_cycles`.
+
+Pruebas y builds tras persistencia:
+
+- `npm --prefix packages/database run typecheck && npm --prefix packages/database run test` — OK, 5 archivos / 25 tests.
+- `npm --prefix packages/portfolio run typecheck && npm --prefix packages/portfolio run test -- src/profit-harvest-cycle.test.ts` — OK.
+- `npm --prefix packages/core run typecheck && npm --prefix packages/core run build` — OK.
+- `npm --prefix packages/portfolio run test && npm --prefix packages/portfolio run build` — OK, 22 archivos / 460 tests.
+- `npm --prefix packages/market-data run typecheck && npm --prefix packages/market-data run test && npm --prefix packages/market-data run build` — OK, 5 archivos / 49 tests.
+- `npm --prefix packages/database run build && npm --prefix packages/coinbase-sync run typecheck && npm --prefix packages/coinbase-sync run test && npm --prefix packages/coinbase-sync run build` — OK, coinbase-sync 5 archivos / 62 tests.
+- `npm --prefix apps/web run lint && npm --prefix apps/web run typecheck && npm --prefix apps/web run test && npm --prefix apps/web run build` — OK, 12 archivos / 143 tests.
+- `npm --prefix apps/desktop run typecheck && npm --prefix apps/desktop run build` — OK.
+
+Validación Playwright:
+
+- Vite local `http://127.0.0.1:5173/#/perspectivas` con Playwright Chromium — OK en desktop y móvil.
+- App instalada `http://127.0.0.1:3001/#/perspectivas` con Playwright Chromium — OK en desktop y móvil.
+- Comprobado que existen los cinco escenarios y textos `Operaciones reales`, `Ventas simuladas`, `Recompras simuladas` y `Confirmación`.
+
+Backup e instalación posterior:
+
+- Copia previa a la migración real: `/Users/macmini/Library/Application Support/Crypto Control Nueva/backups-codex-20260629-124853/`.
+- `PRAGMA integrity_check` sobre copia — OK.
+- SHA-256 copia principal: `5822866d10e2693d0fe0fb99a54f8d290af2c9ac2b713bb114b2e22640dd36e7`.
+- Nuevo DMG generado con `npm run dist:mac` — OK.
+- SHA-256 nuevo DMG: `4b49ff0f79d0e9b5e51b46e2711e935b046d7bac9dc333a5db6de06fde53b192`.
+- App reinstalada en `/Applications/Crypto Control.app` — OK.
+- Primera apertura tras migración — OK, `:3001` activo.
+- Base real tras abrir app: tabla `profit_harvest_cycles` existe, `PRAGMA integrity_check` — OK.
+- Contadores después de migración: `transactions=78`, `realized_gains=18`, `profit_harvest_cycles=0`.
+- Segunda apertura tras migración — OK, `:3001` activo, `PRAGMA integrity_check` — OK.
+
+Corrección posterior por motor antiguo de Perspectivas
+
+Hallazgo:
+
+- `apps/desktop/src/main.ts` todavía exponía `perspectives:getProjection`, que ejecutaba `runAllScenarios` del `projection-engine` antiguo.
+- La página principal usaba `persp2:getSimulation`, pero el motor viejo seguía alcanzable por IPC/API y podía producir resultados distintos.
+
+Cambios aplicados:
+
+- Retirado el handler productivo `perspectives:getProjection` de `apps/desktop/src/main.ts`.
+- Retirado `getProjection` del preload Electron, de la API web HTTP y del contrato `FullCryptoControlAPI`.
+- Actualizados tests/mocks para exigir que `getProjection` no exista y que Perspectivas use `persp2:getSimulation`.
+- Eliminada la función auxiliar no usada `getProjectionDynamicFactors` del main process.
+- Retirado `packages/portfolio/src/projection-engine` y su `dist` generado para que el motor antiguo no quede empaquetado.
+- Movida la configuración fiscal compartida a `packages/portfolio/src/fiscal-config.ts`.
+- Movidos los tipos de snapshot consolidado a `packages/portfolio/src/plan-snapshot.ts`.
+
+Evidencia:
+
+- Búsqueda productiva: no quedan usos de `projection-engine`, `runProjection`, `runAllScenarios`, `compareScenarios`, `validateWealthFloor`, `validateScenarioOrdering`, `buildContributionLedger` ni `perspectives:getProjection` en `packages/portfolio/src`, `packages/portfolio/dist`, `apps/desktop`, `apps/web` o `packages/core`.
+
+Pruebas tras retirar el motor antiguo:
+
+- `npm --prefix apps/desktop run typecheck && npm --prefix apps/desktop run build` — OK.
+- `npm --prefix apps/web run typecheck && npm --prefix apps/web run test -- src/lib/setupApi.test.ts src/PlanInversion.test.tsx` — OK, 43 tests.
+- `npm --prefix packages/core run typecheck && npm --prefix packages/core run build` — OK.
+- `npm --prefix apps/web run lint && npm --prefix apps/web run test && npm --prefix apps/web run build` — OK, 12 archivos / 143 tests.
+- `npm --prefix packages/portfolio run typecheck && npm --prefix packages/portfolio run test && npm --prefix packages/portfolio run build` — OK, 18 archivos / 372 tests.
+- `npm --prefix packages/database run typecheck && npm --prefix packages/database run test && npm --prefix packages/database run build` — OK, 5 archivos / 25 tests.
+- `npm --prefix packages/core run typecheck && npm --prefix packages/core run build` — OK.
+- `npm --prefix packages/market-data run typecheck && npm --prefix packages/market-data run test && npm --prefix packages/market-data run build` — OK, 5 archivos / 49 tests.
+- `npm --prefix packages/coinbase-sync run typecheck && npm --prefix packages/coinbase-sync run test && npm --prefix packages/coinbase-sync run build` — OK, 5 archivos / 62 tests.
+- Backup previo final: `/Users/macmini/Library/Application Support/Crypto Control Nueva/backups-codex-20260629-130536/`, `PRAGMA integrity_check` — OK.
+- SHA-256 backup principal final: `ce9a639f321a41ea17c7dc31a511b7f44825d48bc996e6f53211cfa2dd639e2c`.
+- DMG final regenerado e instalado — OK.
+- SHA-256 DMG final: `6394de25874f9851839fca10464127d003d8ccc101624f6f701af5a13f189a46`.
+- `app.asar` final extraído y auditado: no contiene `projection-engine`, `runProjection`, `runAllScenarios`, `compareScenarios`, `validateWealthFloor`, `validateScenarioOrdering`, `buildContributionLedger` ni `perspectives:getProjection`.
+- App instalada abierta — OK, `:3001` activo.
+- Base real tras abrir app final: `PRAGMA integrity_check` — OK; `profit_harvest_cycles=0`.
+- Playwright contra app instalada final en desktop y móvil — OK.

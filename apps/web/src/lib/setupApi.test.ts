@@ -43,21 +43,22 @@ describe("setupApi HTTP fallback", () => {
     vi.restoreAllMocks();
   });
 
-  test("expone Perspectivas y handlers avanzados igual que preload", async () => {
+  test("expone Perspectivas solo mediante el motor mensual productivo", async () => {
     await import("./setupApi");
 
-    expect(typeof window.cryptoControl.perspectives.getProjection).toBe("function");
+    expect((window.cryptoControl.perspectives as any).getProjection).toBeUndefined();
+    expect(typeof window.cryptoControl.persp2.getSimulation).toBe("function");
     expect(typeof window.cryptoControl.perspectives.getConsolidatedSnapshot).toBe("function");
     expect(typeof window.cryptoControl.partialSaleRules.evaluate).toBe("function");
     expect(typeof window.cryptoControl.rebuyTiers.evaluate).toBe("function");
     expect(typeof window.cryptoControl.planMonitoring.getSummary).toBe("function");
 
-    await window.cryptoControl.perspectives.getProjection({ horizonYears: 5 });
+    await window.cryptoControl.persp2.getSimulation({ policy: "full_strategy" });
 
     const [, init] = vi.mocked(globalThis.fetch).mock.calls[0];
     expect(JSON.parse(String(init?.body))).toEqual({
-      channel: "perspectives:getProjection",
-      args: [{ horizonYears: 5 }],
+      channel: "persp2:getSimulation",
+      args: [{ policy: "full_strategy" }],
     });
   });
 

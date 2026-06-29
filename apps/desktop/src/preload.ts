@@ -164,7 +164,6 @@ const cryptoControl = {
     updateGoal:  (id: string, data: unknown)                       => ipcRenderer.invoke("perspectives:updateGoal", id, data),
     deleteGoal:  (id: string)                                      => ipcRenderer.invoke("perspectives:deleteGoal", id),
     getConsolidatedSnapshot: ()                                    => ipcRenderer.invoke("perspectives:getConsolidatedSnapshot"),
-    getProjection:           (input?: unknown)                     => ipcRenderer.invoke("perspectives:getProjection", input),
     getAnalystForecasts:     ()                                    => ipcRenderer.invoke("perspectives:getAnalystForecasts"),
     getForecastStatus:       ()                                    => ipcRenderer.invoke("perspectives:getForecastStatus"),
     addObservation:          (obs: unknown)                        => ipcRenderer.invoke("perspectives:addObservation", obs),
