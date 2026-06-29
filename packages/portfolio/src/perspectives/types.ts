@@ -186,6 +186,14 @@ export type SimEventType =
 export interface SimEvent {
   date: number;
   type: SimEventType;
+  origin:
+    | "REAL"
+    | "USER_RULE"
+    | "INTELLIGENT_STRATEGY"
+    | "HYBRID"
+    | "PLAN_PURCHASE"
+    | "INTERNAL_REALLOCATION"
+    | "SYSTEM";
   assetId?: string;
   amountEur?: number;
   quantity?: number;
@@ -290,6 +298,8 @@ export interface ScenarioSummary {
   finalFiscalReserveEur: number;
   xirr: number | null;
   twr: number | null;
+  twrCumulative: number | null;
+  twrAnnualized: number | null;
   maxDrawdownPct: number | null;
   assetSummaries: AssetSimSummary[];
 }

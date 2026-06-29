@@ -118,6 +118,8 @@ interface ScenarioSummary {
   finalFiscalReserveEur: number;
   xirr: number | null;
   twr: number | null;
+  twrCumulative?: number | null;
+  twrAnnualized?: number | null;
   maxDrawdownPct: number | null;
 }
 
@@ -1297,8 +1299,14 @@ export function Perspectivas() {
             <div className="persp-group-rows">
               {sum.twr != null && (
                 <div className="persp-group-row">
+                  <span>TWR anualizado</span>
+                  <strong className={sum.twr >= 0 ? "pos" : "neg"}>{fmtAnnualPct((sum.twrAnnualized ?? sum.twr) * 100)}</strong>
+                </div>
+              )}
+              {sum.twrCumulative != null && (
+                <div className="persp-group-row">
                   <span>TWR acumulado</span>
-                  <strong className={sum.twr >= 0 ? "pos" : "neg"}>{fmtAnnualPct(sum.twr * 100)}</strong>
+                  <strong className={sum.twrCumulative >= 0 ? "pos" : "neg"}>{fmtPct(sum.twrCumulative)}</strong>
                 </div>
               )}
               <div className="persp-group-row">

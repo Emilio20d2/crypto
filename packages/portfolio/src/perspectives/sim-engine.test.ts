@@ -290,6 +290,12 @@ describe("market-regime-engine: trayectorias mensuales no lineales", () => {
     const isOrdered = order.every((value, index) => index === 0 || value >= order[index - 1]);
     expect(result.diagnostics.scenarioValidationStatus).toBe(isOrdered ? "valid_order" : "invalid_order");
   });
+
+  it("no clasifica operaciones productivas inspeccionando textos de descripción", async () => {
+    const fs = await import("node:fs/promises");
+    const source = await fs.readFile(new URL("./sim-engine.ts", import.meta.url), "utf8");
+    expect(source).not.toContain("description.includes");
+  });
 });
 
 // ─── Motor de precios externos — buildExternalPriceMap ───────────────────────
@@ -647,6 +653,8 @@ describe("sim-engine: rebuys", () => {
       6,
     );
     const rebuyEvent = base.annualSnapshots.flatMap(s => s.events).find(e => e.type === "rebuy");
+    const saleOrRebuyEvents = base.annualSnapshots.flatMap(s => s.events).filter(e => e.type === "sale" || e.type === "rebuy");
+    expect(saleOrRebuyEvents.every(e => e.origin === "USER_RULE" || e.origin === "INTELLIGENT_STRATEGY")).toBe(true);
     expect(rebuyEvent?.eurcUsedEur).toBeGreaterThan(0);
     expect(rebuyEvent?.costBasisEur).toBe(rebuyEvent?.eurcUsedEur);
     expect(rebuyEvent?.eurcOrigin).toBe("operating_liquidity");

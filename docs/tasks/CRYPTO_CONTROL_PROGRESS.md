@@ -340,6 +340,38 @@ Limitación pendiente explícita
 
 Esta fase corrige el fallo visible de orden y horizonte seleccionado, pero todavía no completa toda la tarea maestra: faltan el motor Monte Carlo real de al menos 1.000 trayectorias ejecutadas por modo, bolsas EURC por venta, ProfitHarvestCycle productivo completo, fiscalidad anual acumulativa, XIRR mensual real, doble entrada completa y conexión real de analistas/medios como factores probabilísticos. No debe considerarse cierre definitivo de la tarea maestra completa.
 
+Actualización posterior — Origen estructurado y métricas de rentabilidad
+
+Cambios realizados:
+
+- `SimEvent` incorpora `origin` estructurado: `REAL`, `USER_RULE`, `INTELLIGENT_STRATEGY`, `HYBRID`, `PLAN_PURCHASE`, `INTERNAL_REALLOCATION`, `SYSTEM`.
+- Los acumulados de ventas/recompras por modo dejan de depender de `description.includes()`.
+- Añadida prueba de guardia que prohíbe `description.includes` en el motor de Perspectivas.
+- XIRR usa aportaciones externas mensuales reales desde `allMonthlyStates`, no aportaciones agrupadas el 1 de julio.
+- El resumen devuelve `twrCumulative` y `twrAnnualized` separados; `twr` se mantiene como compatibilidad con el anualizado.
+- La UI etiqueta `TWR anualizado` y muestra `TWR acumulado` aparte.
+
+Validación instalada:
+
+- DMG probado: `dist-packaged/Crypto Control-0.1.0-arm64.dmg`.
+- SHA-256 probado: `578f0f042620d1860f20017faf6877ffad17e3cd87ffcab06ac32557997086ed`.
+- IPC real `persp2:getSimulation`: `scenarioValidationStatus = valid_order`.
+- IPC real confirma eventos con `origin = INTELLIGENT_STRATEGY` en ventas simuladas.
+- IPC real confirma `twrCumulative` y `twrAnnualized` presentes.
+
+Pruebas ejecutadas:
+
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix packages/portfolio test -- src/perspectives/sim-engine.test.ts` — OK, 70 tests.
+- `npm --prefix packages/portfolio test` — OK, 18 files / 380 tests.
+- `npm --prefix apps/web run typecheck` — OK.
+- `npm --prefix apps/web run lint` — OK.
+- `npm --prefix apps/web test` — OK, 12 files / 143 tests.
+- `npm --prefix packages/portfolio run build` — OK.
+- `npm --prefix apps/web run build` — OK.
+- `npm run build:desktop` — OK.
+- `npm run dist:mac` — OK.
+
 Actualización 2026-06-29 — Corrección contable de capital y EURC
 
 Nueva ampliación recibida

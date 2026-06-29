@@ -453,6 +453,7 @@ function evaluateSales(
     state.events.push({
       date,
       type: "sale",
+      origin: "USER_RULE",
       assetId,
       amountEur: grossEur,
       quantity: quantityToSell,
@@ -559,6 +560,7 @@ function evaluateProposedSales(
       state.events.push({
         date,
         type: "sale",
+        origin: "INTELLIGENT_STRATEGY",
         assetId,
         amountEur: grossEur,
         quantity: quantityToSell,
@@ -646,6 +648,7 @@ function evaluateRebuys(
     state.events.push({
       date,
       type: "rebuy",
+      origin: "USER_RULE",
       assetId,
       amountEur: eurcToUse,
       quantity,
@@ -738,6 +741,7 @@ function evaluateProposedRebuys(
       state.events.push({
         date,
         type: "rebuy",
+        origin: "INTELLIGENT_STRATEGY",
         assetId: ca.assetId,
         amountEur: eurcToUse,
         quantity,
@@ -853,6 +857,7 @@ function reinvestResidual(
     state.events.push({
       date,
       type: "reinvestment",
+      origin: "INTERNAL_REALLOCATION",
       amountEur: spent,
       description: `Reinversión EURC residual: ${spent.toFixed(2)} € entre ${eligible.length} activos`,
     });
@@ -997,6 +1002,7 @@ function simulateMonth(
 
       next.events.push({
         date, type: "substitution",
+        origin: "INTERNAL_REALLOCATION",
         assetId: sub.fromAssetId,
         amountEur: grossEur,
         description: `Sustitución: ${sub.fromAssetId} → ${sub.toAssetId}`,
@@ -1029,6 +1035,7 @@ function simulateMonth(
         st.avgCostEur = null;
         next.events.push({
           date, type: "asset_failed",
+          origin: "SYSTEM",
           assetId, amountEur: lostValue,
           description: `${assetId}: activo fallido (−${(drawdownFromPeak * 100).toFixed(0)}% desde máximo)`,
         });
@@ -1036,6 +1043,7 @@ function simulateMonth(
         st.deteriorated = true;
         next.events.push({
           date, type: "asset_deteriorated",
+          origin: "SYSTEM",
           assetId,
           description: `${assetId}: deterioro severo (−${(drawdownFromPeak * 100).toFixed(0)}% desde máximo), suspendidas compras`,
         });
@@ -1065,6 +1073,7 @@ function simulateMonth(
       next.events.push({
         date,
         type: "contribution",
+        origin: "PLAN_PURCHASE",
         amountEur: budget,
         description: `Aportación mensual: ${budget.toFixed(2)} €`,
       });
@@ -1096,6 +1105,7 @@ function simulateMonth(
         st.goalReached = true;
         next.events.push({
           date, type: "goal_reached",
+          origin: "SYSTEM",
           assetId: alloc.assetId,
           description: `Objetivo alcanzado para ${alloc.assetId}`,
         });
@@ -1127,6 +1137,7 @@ function simulateMonth(
 
       next.events.push({
         date, type: "purchase",
+        origin: "PLAN_PURCHASE",
         assetId: alloc.assetId,
         amountEur: alloc.amountEur,
         quantity,
@@ -1623,14 +1634,15 @@ function runScenario(
   const twrAnnual = allMonthlyStates.length > 0
     ? Math.pow(twrProduct, 12 / allMonthlyStates.length) - 1
     : null;
+  const twrCumulative = allMonthlyStates.length > 0 ? twrProduct - 1 : null;
 
-  // XIRR contributions: aprox. a mitad de año para representar DCA mensual.
-  // Clampeado a input.now para que el primer año parcial no genere t<0.
-  const contributions = annualSnapshots
-    .filter(s => s.contributionsEur > 0)
-    .map(s => ({
-      date: Math.max(input.now, new Date(s.year, 6, 1).getTime()),
-      amount: s.contributionsEur,
+  // XIRR usa solo flujos externos con su fecha mensual real.
+  // Ventas, recompras, EURC y redistribuciones internas no son flujos externos.
+  const contributions = allMonthlyStates
+    .filter(({ state: ms }) => ms.monthContributionsEur > 0)
+    .map(({ state: ms }) => ({
+      date: Math.max(input.now, ms.monthDate),
+      amount: ms.monthContributionsEur,
     }));
 
   const xirr = calcXirr(
@@ -1706,22 +1718,22 @@ function runScenario(
     realizedRebuysEur: 0,
     realizedTaxEur: 0,
     simulatedUserRuleSalesEur: resolveStrategyMode(options) === "USER_RULES" || resolveStrategyMode(options) === "HYBRID"
-      ? annualSnapshots.reduce((s, a) => s + a.events.filter(e => e.type === "sale" && e.description.includes("por regla")).reduce((sum, e) => sum + (e.amountEur ?? 0), 0), 0)
+      ? annualSnapshots.reduce((s, a) => s + a.events.filter(e => e.type === "sale" && e.origin === "USER_RULE").reduce((sum, e) => sum + (e.amountEur ?? 0), 0), 0)
       : 0,
     simulatedUserRuleRebuysEur: resolveStrategyMode(options) === "USER_RULES" || resolveStrategyMode(options) === "HYBRID"
-      ? annualSnapshots.reduce((s, a) => s + a.events.filter(e => e.type === "rebuy" && !e.description.includes("hipotética")).reduce((sum, e) => sum + (e.amountEur ?? 0), 0), 0)
+      ? annualSnapshots.reduce((s, a) => s + a.events.filter(e => e.type === "rebuy" && e.origin === "USER_RULE").reduce((sum, e) => sum + (e.amountEur ?? 0), 0), 0)
       : 0,
     simulatedUserRuleTaxEur: resolveStrategyMode(options) === "USER_RULES" || resolveStrategyMode(options) === "HYBRID"
-      ? annualSnapshots.reduce((s, a) => s + a.events.filter(e => e.type === "sale" && e.description.includes("por regla")).reduce((sum, e) => sum + (e.taxEur ?? 0), 0), 0)
+      ? annualSnapshots.reduce((s, a) => s + a.events.filter(e => e.type === "sale" && e.origin === "USER_RULE").reduce((sum, e) => sum + (e.taxEur ?? 0), 0), 0)
       : 0,
     simulatedStrategicSalesEur: resolveStrategyMode(options) === "INTELLIGENT_STRATEGY" || resolveStrategyMode(options) === "HYBRID"
-      ? annualSnapshots.reduce((s, a) => s + a.events.filter(e => e.type === "sale" && e.description.includes("hipotética")).reduce((sum, e) => sum + (e.amountEur ?? 0), 0), 0)
+      ? annualSnapshots.reduce((s, a) => s + a.events.filter(e => e.type === "sale" && e.origin === "INTELLIGENT_STRATEGY").reduce((sum, e) => sum + (e.amountEur ?? 0), 0), 0)
       : 0,
     simulatedStrategicRebuysEur: resolveStrategyMode(options) === "INTELLIGENT_STRATEGY" || resolveStrategyMode(options) === "HYBRID"
-      ? annualSnapshots.reduce((s, a) => s + a.events.filter(e => e.type === "rebuy" && e.description.includes("hipotética")).reduce((sum, e) => sum + (e.amountEur ?? 0), 0), 0)
+      ? annualSnapshots.reduce((s, a) => s + a.events.filter(e => e.type === "rebuy" && e.origin === "INTELLIGENT_STRATEGY").reduce((sum, e) => sum + (e.amountEur ?? 0), 0), 0)
       : 0,
     simulatedStrategicTaxEur: resolveStrategyMode(options) === "INTELLIGENT_STRATEGY" || resolveStrategyMode(options) === "HYBRID"
-      ? annualSnapshots.reduce((s, a) => s + a.events.filter(e => e.type === "sale" && e.description.includes("hipotética")).reduce((sum, e) => sum + (e.taxEur ?? 0), 0), 0)
+      ? annualSnapshots.reduce((s, a) => s + a.events.filter(e => e.type === "sale" && e.origin === "INTELLIGENT_STRATEGY").reduce((sum, e) => sum + (e.taxEur ?? 0), 0), 0)
       : 0,
     proposedSalesEur: annualSnapshots.reduce((s, a) => s + a.salesEur, 0),
     proposedRebuysEur: annualSnapshots.reduce((s, a) => s + a.rebuysEur, 0),
@@ -1744,6 +1756,8 @@ function runScenario(
     finalFiscalReserveEur: lastSnap?.fiscalReserveEur ?? 0,
     xirr,
     twr: twrAnnual,
+    twrCumulative,
+    twrAnnualized: twrAnnual,
     maxDrawdownPct: maxDD,
     assetSummaries,
   };
