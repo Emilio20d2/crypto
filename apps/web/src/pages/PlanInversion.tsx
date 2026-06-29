@@ -138,6 +138,7 @@ const ASSET_HEALTH_LABEL: Record<AssetHealthResult["status"], string> = {
   riesgo_elevado: "Riesgo elevado",
   salida_recomendada: "Salida recomendada",
   retirado: "Retirado",
+  insufficient_data: "Datos insuficientes",
 };
 
 const ASSET_HEALTH_BADGE: Record<AssetHealthResult["status"], string> = {
@@ -146,6 +147,7 @@ const ASSET_HEALTH_BADGE: Record<AssetHealthResult["status"], string> = {
   riesgo_elevado: "badge-danger",
   salida_recomendada: "badge-danger",
   retirado: "",
+  insufficient_data: "badge-warning",
 };
 
 const ASSET_TREND_LABEL: Record<NonNullable<AssetHealthResult["tendencia"]>, string> = {

@@ -27,9 +27,12 @@ describe("assessAssetHealth", () => {
     expect(result.status).toBe("retirado");
   });
 
-  test("sin datos de sentimiento: activo por defecto, nunca se inventa deterioro", () => {
+  test("sin datos de sentimiento: marca datos insuficientes y no genera recomendación positiva", () => {
     const result = assessAssetHealth({ assetSentiment: null, isRetiredFromStrategy: false });
-    expect(result.status).toBe("activo");
+    expect(result.status).toBe("insufficient_data");
+    expect(result.riesgoNivel).toBe("moderado");
+    expect(result.estadoEstrategico).toBe("vigilancia");
+    expect(result.strongEntrySignal).toBe(false);
     expect(result.signalsUnavailable).toContain("Sentimiento del activo (momentum/tendencia/volatilidad)");
   });
 

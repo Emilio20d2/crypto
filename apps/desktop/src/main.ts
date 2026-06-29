@@ -4744,6 +4744,7 @@ function setupIpcHandlers() {
 
   ipcMain.handle("persp2:getSimulation", withResult(async (_, input?: {
     policy?: "plan_base" | "full_strategy";
+    strategyMode?: "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID";
   }) => {
     const { runPerspectivesSimulation, DEFAULT_SPANISH_TAX_BANDS, ForecastActiveRepository } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
     const sqlite = (require("@crypto-control/database") as typeof import("@crypto-control/database")).getSqlite();
@@ -4982,6 +4983,7 @@ function setupIpcHandlers() {
       cycles,
       options: {
         policy: (input?.policy ?? "full_strategy") as "plan_base" | "full_strategy",
+        strategyMode: input?.strategyMode,
         commissionRate: 0,
         taxBands: DEFAULT_SPANISH_TAX_BANDS,
       },

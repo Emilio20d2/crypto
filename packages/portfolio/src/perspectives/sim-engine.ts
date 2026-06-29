@@ -9,6 +9,7 @@ import type {
   ScenarioSummary, AssetSimSummary, SimCycle, SimCycleAsset,
   SimSaleRule, SimRebuyTier, SimSubstitution, PerspectivesSimulation,
   ValidationResult, SimDiagnostics, AssetPriceInfo, ForecastDataset,
+  SimulationStrategyMode,
 } from "./types";
 import { SIM_SCENARIOS, SCENARIO_LABELS, DEFAULT_SIM_OPTIONS } from "./types";
 import {
@@ -426,6 +427,18 @@ function fmtEur(v: number): string {
   return v.toLocaleString("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
 }
 
+function resolveStrategyMode(options: SimOptions): SimulationStrategyMode {
+  if (options.strategyMode) return options.strategyMode;
+  return options.policy === "plan_base" ? "PASSIVE" : "INTELLIGENT_STRATEGY";
+}
+
+function strategySource(mode: SimulationStrategyMode): ScenarioSummary["strategySource"] {
+  if (mode === "PASSIVE") return "none";
+  if (mode === "USER_RULES") return "user_rules";
+  if (mode === "HYBRID") return "hybrid";
+  return "intelligent_engine";
+}
+
 // ─── Ventas hipotéticas de escenario ─────────────────────────────────────────
 
 function evaluateProposedSales(
@@ -435,7 +448,8 @@ function evaluateProposedSales(
   options: SimOptions,
   date: number,
 ): void {
-  if (options.policy !== "full_strategy") return;
+  const mode = resolveStrategyMode(options);
+  if (mode !== "INTELLIGENT_STRATEGY" && mode !== "HYBRID") return;
 
   const tiers = [
     { gainPct: 200, sellPct: 0.20, label: "+200%" },
@@ -511,7 +525,8 @@ function evaluateRebuys(
   date: number,
 ): void {
   if (state.eurcFree < 0.5) return;
-  if (options.policy === "plan_base") return;
+  const mode = resolveStrategyMode(options);
+  if (mode === "PASSIVE") return;
 
   for (const tier of cycle.rebuyTiers) {
     if (tier.status !== "active") continue;
@@ -591,7 +606,8 @@ function evaluateProposedRebuys(
   date: number,
   cycleAssets: SimCycleAsset[],
 ): void {
-  if (options.policy !== "full_strategy") return;
+  const mode = resolveStrategyMode(options);
+  if (mode !== "INTELLIGENT_STRATEGY" && mode !== "HYBRID") return;
   if (state.eurcFree < 1) return;
 
   const DEFAULT_TIERS = [
@@ -942,10 +958,13 @@ function simulateMonth(
   }
 
   // 5. Evaluate sales (partial, before adding new capital)
+  const strategyMode = resolveStrategyMode(options);
   if (activeCycle) {
     evaluateSales(activeCycle, next, prices, mKey, options, date);
   }
-  evaluateProposedSales(next, prices, mKey, options, date);
+  if (strategyMode === "INTELLIGENT_STRATEGY" || strategyMode === "HYBRID") {
+    evaluateProposedSales(next, prices, mKey, options, date);
+  }
 
   // 6. Add monthly contribution
   const _dayMs = localDayStart(date);
@@ -1032,7 +1051,9 @@ function simulateMonth(
   // 7. Evaluate rebuys (configured tiers only — no generic tiers)
   if (activeCycle) {
     evaluateRebuys(activeCycle, next, prices, mKey, options, date);
-    evaluateProposedRebuys(activeCycle, next, prices, mKey, options, date, cycleAssets);
+    if (strategyMode === "INTELLIGENT_STRATEGY" || strategyMode === "HYBRID") {
+      evaluateProposedRebuys(activeCycle, next, prices, mKey, options, date, cycleAssets);
+    }
   }
 
   // 8. Accumulators
@@ -1523,11 +1544,44 @@ function runScenario(
 
   const summary: ScenarioSummary = {
     scenario,
+    strategyEnabled: resolveStrategyMode(options) !== "PASSIVE",
+    strategyMode: resolveStrategyMode(options),
+    strategySource: strategySource(resolveStrategyMode(options)),
+    simulationOnly: true,
+    requiresUserConfirmation: true,
     initialWealthEur: initialWealth,
     finalNetWealthEur: lastSnap?.closingWealthEur ?? initialWealth,
     totalContributionsEur: annualSnapshots.reduce((s, a) => s + a.contributionsEur, 0),
     totalHistoricalCapitalEur: input.historicalCapitalEur,
     totalMarketGainEur: annualSnapshots.reduce((s, a) => s + a.marketGainEur, 0),
+    realizedSalesEur: 0,
+    realizedRebuysEur: 0,
+    realizedTaxEur: 0,
+    simulatedUserRuleSalesEur: resolveStrategyMode(options) === "USER_RULES" || resolveStrategyMode(options) === "HYBRID"
+      ? annualSnapshots.reduce((s, a) => s + a.events.filter(e => e.type === "sale" && e.description.includes("por regla")).reduce((sum, e) => sum + (e.amountEur ?? 0), 0), 0)
+      : 0,
+    simulatedUserRuleRebuysEur: resolveStrategyMode(options) === "USER_RULES" || resolveStrategyMode(options) === "HYBRID"
+      ? annualSnapshots.reduce((s, a) => s + a.events.filter(e => e.type === "rebuy" && !e.description.includes("hipotética")).reduce((sum, e) => sum + (e.amountEur ?? 0), 0), 0)
+      : 0,
+    simulatedUserRuleTaxEur: resolveStrategyMode(options) === "USER_RULES" || resolveStrategyMode(options) === "HYBRID"
+      ? annualSnapshots.reduce((s, a) => s + a.events.filter(e => e.type === "sale" && e.description.includes("por regla")).reduce((sum, e) => sum + (e.taxEur ?? 0), 0), 0)
+      : 0,
+    simulatedStrategicSalesEur: resolveStrategyMode(options) === "INTELLIGENT_STRATEGY" || resolveStrategyMode(options) === "HYBRID"
+      ? annualSnapshots.reduce((s, a) => s + a.events.filter(e => e.type === "sale" && e.description.includes("hipotética")).reduce((sum, e) => sum + (e.amountEur ?? 0), 0), 0)
+      : 0,
+    simulatedStrategicRebuysEur: resolveStrategyMode(options) === "INTELLIGENT_STRATEGY" || resolveStrategyMode(options) === "HYBRID"
+      ? annualSnapshots.reduce((s, a) => s + a.events.filter(e => e.type === "rebuy" && e.description.includes("hipotética")).reduce((sum, e) => sum + (e.amountEur ?? 0), 0), 0)
+      : 0,
+    simulatedStrategicTaxEur: resolveStrategyMode(options) === "INTELLIGENT_STRATEGY" || resolveStrategyMode(options) === "HYBRID"
+      ? annualSnapshots.reduce((s, a) => s + a.events.filter(e => e.type === "sale" && e.description.includes("hipotética")).reduce((sum, e) => sum + (e.taxEur ?? 0), 0), 0)
+      : 0,
+    proposedSalesEur: annualSnapshots.reduce((s, a) => s + a.salesEur, 0),
+    proposedRebuysEur: annualSnapshots.reduce((s, a) => s + a.rebuysEur, 0),
+    projectedEurcReserve: lastSnap?.eurcFreeEur ?? 0,
+    projectedFiscalReserve: lastSnap?.fiscalReserveEur ?? 0,
+    decision: annualSnapshots.reduce((s, a) => s + a.salesEur + a.rebuysEur, 0) > 0
+      ? (resolveStrategyMode(options) === "HYBRID" ? "hybrid" : resolveStrategyMode(options) === "USER_RULES" ? "user_rules" : "intelligent_strategy")
+      : "hold",
     totalSalesEur: annualSnapshots.reduce((s, a) => s + a.salesEur, 0),
     totalRebuysEur: annualSnapshots.reduce((s, a) => s + a.rebuysEur, 0),
     totalCommissionsEur: annualSnapshots.reduce((s, a) => s + a.commissionsEur, 0),
@@ -1573,20 +1627,24 @@ export function runPerspectivesSimulation(
   // Each scenario must get its own copy of the cycle objects because evaluateSales
   // mutates rule.triggeredAt on the rule object in-place. Without cloning, the first
   // scenario that triggers a sale marks the rule as used for ALL subsequent scenarios.
-  const results = SIM_SCENARIOS.map(scenario => {
+  const cloneInputForScenario = (source: SimInput): SimInput => ({
+    ...source,
+    cycles: source.cycles.map(c => ({
+      ...c,
+      saleRules:     c.saleRules.map(r => ({ ...r })),
+      rebuyTiers:    c.rebuyTiers.map(t => ({ ...t })),
+      assets:        c.assets.map(a => ({ ...a })),
+      substitutions: c.substitutions.map(s => ({ ...s })),
+      revisions:     c.revisions.map(r => ({ ...r })),
+    })),
+  });
+  const runScenarioSet = (source: SimInput) => SIM_SCENARIOS.map(scenario => {
     const localInput: SimInput = {
-      ...input,
-      cycles: input.cycles.map(c => ({
-        ...c,
-        saleRules:     c.saleRules.map(r => ({ ...r })),
-        rebuyTiers:    c.rebuyTiers.map(t => ({ ...t })),
-        assets:        c.assets.map(a => ({ ...a })),
-        substitutions: c.substitutions.map(s => ({ ...s })),
-        revisions:     c.revisions.map(r => ({ ...r })),
-      })),
+      ...cloneInputForScenario(source),
     };
     return runScenario(localInput, scenario, forecastDataset);
   });
+  const results = runScenarioSet(input);
 
   // El ajuste monotónico artificial ha sido eliminado.
   // Los escenarios producen sus propios resultados sin corrección posterior.
@@ -1676,12 +1734,49 @@ export function runPerspectivesSimulation(
     perScenario,
   };
 
+  const modeLabels: Record<SimulationStrategyMode, string> = {
+    PASSIVE: "Plan pasivo",
+    USER_RULES: "Reglas del usuario",
+    INTELLIGENT_STRATEGY: "Estrategia inteligente",
+    HYBRID: "Estrategia híbrida",
+  };
+  const strategyComparisons = (["PASSIVE", "USER_RULES", "INTELLIGENT_STRATEGY", "HYBRID"] as SimulationStrategyMode[])
+    .map((mode) => {
+      const modeInput: SimInput = {
+        ...input,
+        options: {
+          ...input.options,
+          policy: mode === "PASSIVE" ? "plan_base" : "full_strategy",
+          strategyMode: mode,
+        },
+      };
+      const modeResults = mode === resolveStrategyMode(input.options) ? results : runScenarioSet(modeInput);
+      return {
+        mode,
+        label: modeLabels[mode],
+        scenarios: modeResults.map((r) => ({
+          scenario: r.scenario,
+          finalNetWealthEur: r.summary.finalNetWealthEur,
+          benefitEur: r.summary.finalNetWealthEur - r.summary.initialWealthEur - r.summary.totalContributionsEur,
+          twr: r.summary.twr,
+          xirr: r.summary.xirr,
+          salesEur: r.summary.totalSalesEur,
+          rebuysEur: r.summary.totalRebuysEur,
+          taxEur: r.summary.totalTaxEur,
+          finalEurcFreeEur: r.summary.finalEurcFreeEur,
+          finalFiscalReserveEur: r.summary.finalFiscalReserveEur,
+          decision: r.summary.decision,
+        })),
+      };
+    });
+
   return {
     computedAt: Date.now(),
     startYear,
     endYear,
     horizonDate: input.horizonDate,
     scenarios: results,
+    strategyComparisons,
     validations,
     diagnostics,
   };

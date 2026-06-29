@@ -17,6 +17,7 @@ import {
 import type {
   StrategicSignal,
   StrategicSignalStatus,
+  StrategySignalEvidence,
   SignalEngineInput,
   SignalEngineResult,
 } from "./types";
@@ -39,6 +40,14 @@ const DEFAULT_REBUY_THRESHOLDS: { drawdownPct: number; eurcPct: number; label: s
 // Por debajo de este umbral no se genera señal aunque se cumpla la condición de caída.
 const MINIMUM_REBUY_EUR = 25;
 
+function dataVersionForSignal(parts: Array<string | number | null | undefined>): string {
+  return parts.map((part) => part ?? "na").join(":");
+}
+
+function evidence(label: string, value: number | string | boolean | null, source: string, now: number): StrategySignalEvidence {
+  return { label, value, source, observedAt: now };
+}
+
 function makeSellSignal(
   assetId: string,
   ruleId: string,
@@ -54,8 +63,11 @@ function makeSellSignal(
   status: StrategicSignalStatus,
   now: number,
 ): StrategicSignal {
+  const id = randomUUID();
+  const reason = reasons.join(" · ");
   return {
-    id: randomUUID(),
+    id,
+    signalId: id,
     deduplicationKey: `sell_partial:${assetId}:${ruleId}`,
     assetId,
     planId,
@@ -78,6 +90,16 @@ function makeSellSignal(
     fiscalReserveExcludedEur: fiscalReserveEur,
     priority: recommendedAmountEur >= 500 ? "high" : "medium",
     confidence: 0.9,
+    generatedAt: now,
+    dataVersion: dataVersionForSignal([assetId, ruleId, currentPriceEur, referencePriceEur, recommendedPercentage, recommendedQuantity]),
+    reason,
+    evidence: [
+      evidence("Precio actual EUR", currentPriceEur, "market-data", now),
+      evidence("Precio de referencia EUR", referencePriceEur, "portfolio-cost-basis", now),
+      evidence("Porcentaje de venta", recommendedPercentage, "partial-sale-engine", now),
+      evidence("Reserva fiscal EUR", fiscalReserveEur, "partial-sale-engine", now),
+    ],
+    missingInputs: [],
     dataQuality: currentPriceEur > 0 ? "high" : "low",
     reasons,
     conditionsMatched: reasons,
@@ -102,8 +124,11 @@ function makeRebuySignal(
   status: StrategicSignalStatus,
   now: number,
 ): StrategicSignal {
+  const id = randomUUID();
+  const reason = reasons.join(" · ");
   return {
-    id: randomUUID(),
+    id,
+    signalId: id,
     deduplicationKey: `rebuy:${assetId ?? "any"}:${tierId}`,
     assetId,
     planId,
@@ -126,6 +151,16 @@ function makeRebuySignal(
     fiscalReserveExcludedEur: null,
     priority: drawdownPct >= 30 ? "high" : "medium",
     confidence: 0.85,
+    generatedAt: now,
+    dataVersion: dataVersionForSignal([assetId, tierId, currentPriceEur, referencePriceEur, drawdownPct, availableFundingEur]),
+    reason,
+    evidence: [
+      evidence("Precio actual EUR", currentPriceEur, "market-data", now),
+      evidence("Precio de venta/referencia EUR", referencePriceEur, "rebuy-engine", now),
+      evidence("Caída desde referencia", drawdownPct, "rebuy-engine", now),
+      evidence("EURC libre para recompra", availableFundingEur, "treasury", now),
+    ],
+    missingInputs: [],
     dataQuality: currentPriceEur > 0 ? "high" : "low",
     reasons,
     conditionsMatched: reasons,

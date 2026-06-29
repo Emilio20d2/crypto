@@ -17,6 +17,7 @@ export * from "./rebuy-engine";
 export * from "./plan-monitoring";
 export * from "./smart-buy-engine";
 export * from "./projection-engine";
+export * from "./profit-harvest-cycle";
 // perspectives exports — selective to avoid naming conflicts with plan-substitutions
 export type {
   SimScenario, AssetTier, SimLot, AssetSimState, MonthlyState,

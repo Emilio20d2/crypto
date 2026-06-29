@@ -366,29 +366,65 @@ describe("sim-engine: sales", () => {
     }
   });
 
-  it("sin reglas configuradas genera ventas parciales hipotéticas de escenario", () => {
+  it("sin reglas configuradas en modo USER_RULES no genera ventas simuladas por reglas", () => {
     const input = makeInput({
       currentPositions: [{ assetId: "BTC", balance: 1.0, avgCostEur: 5000, currentPriceEur: 90000 }],
       currentLots: [{ id: "l1", assetId: "BTC", date: NOW - 3 * YEAR_MS, remainingAmount: 1.0, unitAcquisitionPriceEur: 5000 }],
       horizonDate: horizon(5),
       cycles: [makeCycle({ saleRules: [] })], // sin reglas de venta
-      options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy" },
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy", strategyMode: "USER_RULES" },
     });
     const result = runPerspectivesSimulation(input);
     for (const s of result.scenarios) {
-      expect(s.summary.totalSalesEur).toBeGreaterThan(0);
-      expect(s.summary.totalRealizedGainEur).toBeGreaterThan(0);
-      expect(s.summary.totalTaxEur).toBeGreaterThan(0);
-      expect(s.summary.finalFiscalReserveEur).toBeGreaterThan(0);
+      expect(s.summary.realizedSalesEur).toBe(0);
+      expect(s.summary.realizedTaxEur).toBe(0);
+      expect(s.summary.totalSalesEur).toBe(0);
+      expect(s.summary.totalRealizedGainEur).toBe(0);
+      expect(s.summary.totalTaxEur).toBe(0);
+      expect(s.summary.finalFiscalReserveEur).toBe(0);
+      expect(s.summary.simulatedStrategicSalesEur).toBe(0);
+      expect(s.summary.decision).toBe("hold");
     }
   });
 
-  it("usa coste medio calculado desde lotes para ventas hipotéticas si la posición no lo trae", () => {
+  it("sin reglas configuradas en INTELLIGENT_STRATEGY puede generar ventas simuladas separadas de la capa real", () => {
+    const input = makeInput({
+      currentPositions: [{ assetId: "BTC", balance: 1.0, avgCostEur: 5000, currentPriceEur: 90000 }],
+      currentLots: [{ id: "l1", assetId: "BTC", date: NOW - 3 * YEAR_MS, remainingAmount: 1.0, unitAcquisitionPriceEur: 5000 }],
+      horizonDate: horizon(5),
+      cycles: [makeCycle({ saleRules: [] })],
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy", strategyMode: "INTELLIGENT_STRATEGY" },
+    });
+    const result = runPerspectivesSimulation(input);
+    for (const s of result.scenarios) {
+      expect(s.summary.realizedSalesEur).toBe(0);
+      expect(s.summary.realizedTaxEur).toBe(0);
+      expect(s.summary.simulationOnly).toBe(true);
+      expect(s.summary.requiresUserConfirmation).toBe(true);
+      expect(s.summary.simulatedStrategicSalesEur).toBeGreaterThan(0);
+      expect(s.summary.simulatedStrategicTaxEur).toBeGreaterThan(0);
+      expect(s.summary.projectedEurcReserve).toBeGreaterThan(0);
+      expect(s.summary.decision).toBe("intelligent_strategy");
+    }
+  });
+
+  it("usa coste medio calculado desde lotes para ventas configuradas si la posición no lo trae", () => {
     const input = makeInput({
       currentPositions: [{ assetId: "BTC", balance: 1.0, avgCostEur: null, currentPriceEur: 90_000 }],
       currentLots: [{ id: "l1", assetId: "BTC", date: NOW - 3 * YEAR_MS, remainingAmount: 1.0, unitAcquisitionPriceEur: 30_000 }],
       horizonDate: horizon(2),
-      cycles: [makeCycle({ monthlyAmountEur: 0, saleRules: [] })],
+      cycles: [makeCycle({
+        monthlyAmountEur: 0,
+        saleRules: [{
+          id: "rule-lot-cost",
+          assetId: "BTC",
+          triggerType: "gain_multiple",
+          triggerValue: 2,
+          sellPercentage: 10,
+          status: "active",
+          triggeredAt: null,
+        }],
+      })],
       options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy" },
     });
     const result = runPerspectivesSimulation(input);
@@ -873,18 +909,61 @@ describe("motor: correcciones críticas — sin fallback 1€, sin ajuste monot�
     }
   });
 
-  it("sin reglas de venta configuradas totalSalesEur incluye ventas hipotéticas de escenario", () => {
+  it("modo PASSIVE sin reglas de venta configuradas mantiene totalSalesEur === 0", () => {
     const input = makeInput({
       currentPositions: [{ assetId: "BTC", balance: 2.0, avgCostEur: 10_000, currentPriceEur: 90_000 }],
       currentLots: [{ id: "l1", assetId: "BTC", date: NOW - 4 * YEAR_MS, remainingAmount: 2.0, unitAcquisitionPriceEur: 10_000 }],
       horizonDate: horizon(5),
       cycles: [makeCycle({ saleRules: [], rebuyTiers: [] })],
-      options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy" },
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base", strategyMode: "PASSIVE" },
     });
     const result = runPerspectivesSimulation(input);
     for (const s of result.scenarios) {
-      expect(s.summary.totalSalesEur).toBeGreaterThan(0);
-      expect(s.summary.totalTaxEur).toBeGreaterThan(0);
+      expect(s.summary.totalSalesEur).toBe(0);
+      expect(s.summary.totalTaxEur).toBe(0);
+      expect(s.summary.simulatedStrategicSalesEur).toBe(0);
+      expect(s.summary.decision).toBe("hold");
+    }
+  });
+
+  it("frontera 2036: no duplica ni pierde aportación al pasar de segunda a tercera etapa", () => {
+    const secondStart = new Date("2031-01-01T00:00:00+01:00").getTime();
+    const secondEnd = new Date("2036-03-31T00:00:00+02:00").getTime();
+    const thirdStart = new Date("2036-04-01T00:00:00+02:00").getTime();
+    const thirdEnd = new Date("2037-01-01T00:00:00+01:00").getTime();
+    const asset = (id: string, cycleStart: number) => ({
+      id,
+      assetId: "BTC",
+      allocationType: "percentage" as const,
+      allocationValue: 100,
+      allocationPercentage: 100,
+      fixedAmountEur: null,
+      targetAmount: null,
+      targetValueEur: null,
+      startDate: cycleStart,
+      endDate: null,
+      status: "active" as const,
+    });
+    const input = makeInput({
+      now: new Date("2035-12-15T00:00:00+01:00").getTime(),
+      horizonDate: new Date("2036-12-31T23:59:59+01:00").getTime(),
+      currentPositions: [{ assetId: "BTC", balance: 0, avgCostEur: null, currentPriceEur: 60_000 }],
+      currentLots: [],
+      historicalCapitalEur: 0,
+      cycles: [
+        makeCycle({ id: "segunda", name: "Segunda", startDate: secondStart, endDate: secondEnd, monthlyAmountEur: 200, assets: [asset("segunda-btc", secondStart)] }),
+        makeCycle({ id: "tercera", name: "Tercera", startDate: thirdStart, endDate: thirdEnd, monthlyAmountEur: 500, assets: [asset("tercera-btc", thirdStart)] }),
+      ],
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base" },
+    });
+    const result = runPerspectivesSimulation(input);
+    expect(result.scenarios.map((scenario) => scenario.scenario)).toEqual(["conservador", "moderado", "base", "favorable", "optimista"]);
+    for (const s of result.scenarios) {
+      const y2036 = s.annualSnapshots.find((snap) => snap.year === 2036)!;
+      expect(y2036.contributionsEur).toBe(5_100);
+      const contributionEvents = y2036.events.filter((event) => event.type === "contribution");
+      expect(contributionEvents).toHaveLength(12);
+      expect(contributionEvents.map((event) => event.amountEur)).toEqual([200, 200, 200, 500, 500, 500, 500, 500, 500, 500, 500, 500]);
     }
   });
 

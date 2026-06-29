@@ -6,7 +6,7 @@ import type { MarketSentiment } from "./sentiment";
 // of that is integrated. "Fuerza relativa" is approximated by comparing the
 // asset's own 30d trend signal against BTC's, both computed by the same
 // MarketSentimentService so they're on the same comparable scale.
-export type AssetHealthStatus = "activo" | "observacion" | "riesgo_elevado" | "salida_recomendada" | "retirado";
+export type AssetHealthStatus = "activo" | "observacion" | "riesgo_elevado" | "salida_recomendada" | "retirado" | "insufficient_data";
 export type AssetTrend = "alcista" | "lateral" | "bajista";
 export type AssetRiskLevel = "bajo" | "moderado" | "alto" | "muy_alto";
 export type AssetStrategicState = "excelente" | "buena" | "neutral" | "vigilancia" | "deterioro" | "sustitucion_recomendada";
@@ -45,6 +45,7 @@ function deriveRiskLevel(status: AssetHealthStatus): AssetRiskLevel {
   if (status === "salida_recomendada") return "muy_alto";
   if (status === "riesgo_elevado") return "alto";
   if (status === "observacion") return "moderado";
+  if (status === "insufficient_data") return "moderado";
   return "bajo";
 }
 
@@ -52,6 +53,7 @@ function deriveStrategicState(status: AssetHealthStatus, strongEntrySignal: bool
   if (status === "salida_recomendada") return "sustitucion_recomendada";
   if (status === "riesgo_elevado") return "deterioro";
   if (status === "observacion") return "vigilancia";
+  if (status === "insufficient_data") return "vigilancia";
   if (status === "retirado") return "neutral";
   if (strongEntrySignal) return "excelente";
   return "buena";
@@ -79,13 +81,13 @@ export function assessAssetHealth(input: AssetHealthInput): AssetHealthResult {
   if (!sentiment) {
     unavailable.push("Sentimiento del activo (momentum/tendencia/volatilidad)");
     return {
-      status: "activo",
+      status: "insufficient_data",
       relativeStrengthVsBtc: null,
       strongEntrySignal: false,
       tendencia: null,
-      riesgoNivel: "bajo",
-      estadoEstrategico: "buena",
-      reasoning: "Sin datos de sentimiento disponibles; no se puede evaluar deterioro, se asume activo por defecto.",
+      riesgoNivel: "moderado",
+      estadoEstrategico: "vigilancia",
+      reasoning: "Sin datos de sentimiento disponibles; no se genera señal positiva ni negativa hasta recibir momentum, tendencia y volatilidad.",
       signalsUsed: used,
       signalsUnavailable: unavailable
     };

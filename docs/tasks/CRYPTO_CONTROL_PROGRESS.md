@@ -186,3 +186,181 @@ Evidencias finales
 Commit y release final
 
 Commit local creado en `codex/final-engine-rebuild`; pendiente de push remoto tras reconstruir el DMG final con el SHA definitivo.
+
+Actualización 2026-06-29 — Plan, Perspectivas, alertas y ciclos
+
+Nueva tarea recibida
+
+Adjunto leído completo: `AGENTE MAESTRO CODEX — MOTOR DE PERSPECTIVAS, CICLOS, ALERTAS Y OPTIMIZACIÓN DEL PLAN DE CRYPTO CONTROL`.
+
+Auditoría inicial específica
+
+- Ruta productiva de Perspectivas localizada: `persp2:getSimulation` en `apps/desktop/src/main.ts`, que llama a `runPerspectivesSimulation()` en `packages/portfolio/src/perspectives/sim-engine.ts`.
+- La base real contiene 1 plan activo, 3 ciclos, 9 activos de plan, 47 lotes y 18 ventas realizadas.
+- No existen reglas de venta parcial configuradas (`partial_sale_rules = 0`).
+- No existen tiers de recompra configurados (`cycle_rebuy_tiers = 0`).
+- El plan real cruza dos etapas en 2036: segunda etapa hasta 2036-03-31 local con 200 EUR/mes y tercera etapa desde 2036-04-01 local con 500 EUR/mes.
+- En 2036 deben contabilizarse 12 aportaciones: 200, 200, 200 y nueve aportaciones de 500, total 5.100 EUR. No debe duplicarse ni perderse marzo/abril.
+- Se reprodujeron las cifras actuales desde la app instalada vía `POST /api/ipc persp2:getSimulation`. Base actual aproximada: neto 84.855 EUR, bruto 84.981 EUR, TWR 12,21 %, XIRR 2,77 %, con ventas/recompras simuladas aunque no hay reglas configuradas.
+
+Causa encontrada
+
+- `runPerspectivesSimulation()` ejecutaba `evaluateProposedSales()` y `evaluateProposedRebuys()` dentro de la ruta productiva `full_strategy`.
+- Esas funciones aplicaban umbrales internos de ventas/recompras hipotéticas sin reglas reales del Plan.
+- Resultado: Perspectivas mezclaba el plan real con operaciones tácticas inventadas por el motor.
+
+Cambios realizados en esta fase
+
+- `packages/portfolio/src/perspectives/sim-engine.ts`: la simulación productiva ya no ejecuta ventas ni recompras tácticas no configuradas.
+- `packages/portfolio/src/perspectives/sim-engine.test.ts`: invertidas regresiones que antes esperaban ventas hipotéticas; ahora sin reglas configuradas `totalSalesEur === 0` y `totalTaxEur === 0`.
+- `packages/portfolio/src/perspectives/sim-engine.test.ts`: añadido test de frontera 2036 con los cinco escenarios y aportaciones 200/200/200/500x9 = 5.100 EUR.
+- Se conserva la existencia de los cinco escenarios: conservador, moderado, base, favorable y optimista.
+
+Resultado local después del cambio
+
+Ejecución local del motor modificado contra SQLite real y snapshot vivo:
+
+- Conservador: neto 78.963,13 EUR; ventas 0; recompras 0; impuestos 0.
+- Moderado: neto 81.147,38 EUR; ventas 0; recompras 0; impuestos 0.
+- Base: neto 87.882,67 EUR; ventas 0; recompras 0; impuestos 0.
+- Favorable: neto 94.543,10 EUR; ventas 0; recompras 0; impuestos 0.
+- Optimista: neto 129.677,85 EUR; ventas 0; recompras 0; impuestos 0.
+
+Pruebas ejecutadas en esta fase
+
+- `npm --prefix packages/portfolio run test -- src/perspectives/sim-engine.test.ts` — OK, 61 tests.
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix packages/portfolio run test -- src/signals/signal-engine.test.ts` — OK, 12 tests.
+- `npm --prefix packages/market-data run test -- src/asset-health.test.ts` — OK, 8 tests.
+- `npm --prefix packages/core run typecheck` — OK.
+- `npm --prefix apps/web run typecheck` — OK.
+- `npm --prefix packages/portfolio run test` — OK, 21 files / 456 tests.
+
+Pendiente
+
+- Ejecutar la batería completa antes de build/release.
+- Revisar si las funciones hipotéticas deben moverse explícitamente a un módulo de backtesting/modo sombra.
+- Añadir persistencia completa en SQLite de ciclo `ProfitHarvestCycle` antes de emitir alertas accionables como estado duradero.
+- Validar móvil/escritorio y DMG solo después de terminar la integración completa.
+
+Ampliación correctiva bloqueante añadida
+
+Archivo añadido: `docs/tasks/CRYPTO_CONTROL_STRATEGY_CLARIFICATION.md`.
+
+Contenido copiado literalmente desde el adjunto `AMPLIACIÓN CORRECTIVA BLOQUEANTE — DIFERENCIAR OPERACIONES REALES, SIMULACIÓN ESTRATÉGICA Y ALERTAS DINÁMICAS`.
+
+Tamaño: 16.998 bytes, 730 líneas.
+
+Nota de integridad: el documento recibido termina en la frase `La terminología correcta será`; no se ha completado ni inferido el resto.
+
+Interpretación obligatoria:
+
+- La corrección de no registrar operaciones inexistentes en cartera real se mantiene.
+- La simulación estratégica de Perspectivas no debe quedar globalmente limitada a cero ventas/recompras cuando no existan reglas manuales.
+- Deben separarse tres capas: operaciones reales, simulación estratégica y alertas dinámicas.
+- Deben existir modos explícitos: `PASSIVE`, `USER_RULES`, `INTELLIGENT_STRATEGY` y `HYBRID`.
+- Los campos agregados deben distinguir importes realizados de importes simulados/propuestos, por ejemplo `realizedSalesEur`, `simulatedStrategicSalesEur`, `proposedSalesEur`, `projectedEurcReserve` y `projectedFiscalReserve`.
+- Las operaciones simuladas deben estar marcadas como simulación, no modificar el libro mayor real y requerir confirmación humana para convertirse en operación real.
+- La página Perspectivas debe comparar estrategia pasiva, reglas de usuario, estrategia inteligente e híbrida en los cinco escenarios.
+
+Impacto sobre los últimos cambios:
+
+- Los tests que exigen ventas/recompras a cero son válidos solo para capa real, modo pasivo, modo sin estrategia táctica o ausencia de señales suficientes.
+- Pendiente ajustar nombres y alcance de tests/campos para no bloquear la futura estrategia inteligente.
+
+Ejecución de la ampliación correctiva
+
+Cambios aplicados:
+
+- `packages/portfolio/src/perspectives/types.ts`: añadido `SimulationStrategyMode` con `PASSIVE`, `USER_RULES`, `INTELLIGENT_STRATEGY` y `HYBRID`.
+- `packages/portfolio/src/perspectives/types.ts`: añadido desglose no ambiguo en `ScenarioSummary`: `realizedSalesEur`, `realizedRebuysEur`, `realizedTaxEur`, `simulatedUserRuleSalesEur`, `simulatedUserRuleRebuysEur`, `simulatedUserRuleTaxEur`, `simulatedStrategicSalesEur`, `simulatedStrategicRebuysEur`, `simulatedStrategicTaxEur`, `proposedSalesEur`, `proposedRebuysEur`, `projectedEurcReserve`, `projectedFiscalReserve`, `strategyMode`, `strategySource`, `simulationOnly`, `requiresUserConfirmation` y `decision`.
+- `packages/portfolio/src/perspectives/sim-engine.ts`: `PASSIVE` no ejecuta ventas/recompras tácticas; `USER_RULES` ejecuta solo reglas configuradas; `INTELLIGENT_STRATEGY` permite propuestas hipotéticas del motor; `HYBRID` combina reglas y propuestas inteligentes.
+- `packages/portfolio/src/perspectives/sim-engine.ts`: añadido `strategyComparisons` para comparar pasivo, reglas, inteligente e híbrido en los cinco escenarios.
+- `apps/desktop/src/main.ts`, `apps/desktop/src/preload.ts`, `packages/core/src/ipc.ts` y `apps/web/src/lib/setupApi.ts`: expuesto `strategyMode` en el contrato.
+- `apps/web/src/pages/Perspectivas.tsx`: añadida tabla de comparación por estrategia y etiquetas explícitas de operaciones simuladas, confirmación requerida y operaciones reales.
+
+Pruebas ejecutadas tras esta ampliación:
+
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix packages/portfolio run test -- src/perspectives/sim-engine.test.ts` — OK, 62 tests.
+- `npm --prefix apps/web run typecheck` — OK.
+- `npm --prefix apps/desktop run typecheck` — OK.
+- `npm --prefix packages/core run typecheck` — OK.
+- `npm --prefix packages/portfolio run test` — OK, 21 files / 457 tests.
+- `npm --prefix apps/web run lint` — OK.
+- `npm --prefix apps/desktop run build` — OK.
+- `npm --prefix packages/core run build` — OK.
+- `npm --prefix apps/web run build` — OK tras limpiar `apps/web/node_modules/.tmp/tsconfig.*.tsbuildinfo`; la primera ejecución usó caché incremental antigua y no veía `insufficient_data`.
+- `npm --prefix apps/web run test` — OK, 12 files / 143 tests.
+- `npm --prefix packages/portfolio run build` — OK.
+- `npm --prefix packages/market-data run typecheck` — OK.
+- `npm --prefix apps/web run dev` — OK, servidor local `http://localhost:5173/` levantado y detenido.
+- `curl -sS http://localhost:5173/perspectivas` — OK, HTML de Vite servido.
+- Búsqueda estática de `Comparación de estrategia`, `Operaciones simuladas por el motor estratégico`, `strategyComparisons` y `SimulationStrategyMode` — OK.
+
+Pendiente de esta ampliación:
+
+- Validar visualmente Perspectivas con la tabla nueva.
+- Mover las funciones hipotéticas a un módulo explícito de estrategia/backtesting si se decide separar físicamente la capa B.
+- Completar persistencia de alertas dinámicas y ciclos `ProfitHarvestCycle`.
+
+Bloqueo de validación visual automatizada:
+
+- Playwright está instalado, pero no tiene Chromium descargado en `/Users/macmini/Library/Caches/ms-playwright/...`.
+- No se instalaron binarios de navegador durante esta fase.
+
+Ejecución posterior
+
+Cambios aplicados:
+
+- `packages/portfolio/src/profit-harvest-cycle.ts`: añadido modelo explícito `ProfitHarvestCycle` para separar venta/recompra simulada, reserva fiscal, EURC operativo, señales asociadas, confirmación humana y resultado frente a mantener.
+- `packages/portfolio/src/index.ts`: exportado el modelo de ciclo.
+- `packages/portfolio/src/profit-harvest-cycle.test.ts`: añadidos tests de reserva fiscal, precio de recompra de equilibrio, recompra simulada y modo pasivo.
+
+Pruebas ejecutadas:
+
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix packages/portfolio run test -- src/profit-harvest-cycle.test.ts src/perspectives/sim-engine.test.ts` — OK, 65 tests.
+
+Pendiente:
+
+- Persistencia SQLite completa del ciclo si se va a activar como estado duradero de producción.
+- No hacer push hasta revisar el diff final y confirmar que no se incluyen artefactos, bases de datos ni credenciales.
+
+Validación amplia posterior
+
+Pruebas y builds:
+
+- `npm --prefix packages/core run typecheck && npm --prefix packages/core run build` — OK.
+- `npm --prefix packages/portfolio run test && npm --prefix packages/portfolio run build` — OK, 22 archivos / 460 tests.
+- `npm --prefix packages/market-data run typecheck && npm --prefix packages/market-data run test && npm --prefix packages/market-data run build` — OK, 5 archivos / 49 tests.
+- `npm --prefix apps/web run lint && npm --prefix apps/web run typecheck && npm --prefix apps/web run test && npm --prefix apps/web run build` — OK, 12 archivos / 143 tests.
+- `npm --prefix apps/desktop run typecheck && npm --prefix apps/desktop run build` — OK.
+- `npm --prefix packages/database run typecheck && npm --prefix packages/database run test && npm --prefix packages/database run build` — OK, 4 archivos / 23 tests.
+- `npm --prefix packages/coinbase-sync run typecheck && npm --prefix packages/coinbase-sync run test && npm --prefix packages/coinbase-sync run build` — OK, 5 archivos / 62 tests.
+
+Validación visual:
+
+- `apps/web` servido en `http://127.0.0.1:5173/` — OK.
+- Captura `artifacts/perspectivas-hash-visual-check.png` — Perspectivas renderiza cinco escenarios, modo `Estrategia inteligente`, operaciones reales 0 €, ventas/recompras simuladas y propuesta simulada.
+- Captura `artifacts/installed-perspectivas-check.png` — build instalado renderiza Perspectivas con confirmación de usuario requerida.
+- Nota: Chrome headless escribió capturas pero dejó procesos auxiliares de updater; se interrumpieron manualmente. Playwright no está instalado en este checkout.
+
+Copias de seguridad
+
+- Base detectada para la app instalada: `/Users/macmini/Library/Application Support/Crypto Control Nueva/crypto-control.sqlite`.
+- Copia creada: `/Users/macmini/Library/Application Support/Crypto Control Nueva/backups-codex-20260629-064643/`.
+- `PRAGMA integrity_check` sobre copia principal — OK.
+- SHA-256 copia principal: `4e13ac6b0c44cb55bcf37f50f6eb0695218f276e7d6e0b8495f0e0c8039e8c96`.
+- SHA-256 copia SHM: `e965dd82d0ce927be34aabda432d13a9cf4984e8d4e4e5c4c309f4f6d59304c5`.
+- SHA-256 copia WAL: `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` (WAL vacío).
+
+DMG e instalación
+
+- Comando: `npm run dist:mac` — OK.
+- DMG: `dist-packaged/Crypto Control-0.1.0-arm64.dmg`.
+- SHA-256 DMG: `8c9b4e923b3532ee9f7e62f2a654d07b0ffb7d94ecb426a85b6a1d4af7d7c430`.
+- DMG montado y verificado por `hdiutil attach` — OK.
+- App copiada a `/Applications/Crypto Control.app` — OK.
+- Primera apertura instalada — OK, proceso escuchando en `:3001`.
+- Segunda apertura instalada — OK, proceso escuchando en `:3001` y sirviendo HTML.

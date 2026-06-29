@@ -171,7 +171,7 @@ const cryptoControl = {
     runIngestion:            (opts?: unknown)                      => ipcRenderer.invoke("perspectives:runIngestion", opts),
   },
   persp2: {
-    getSimulation: (input?: { horizonYears?: number; policy?: "plan_base" | "full_strategy" }) =>
+    getSimulation: (input?: { horizonYears?: number; policy?: "plan_base" | "full_strategy"; strategyMode?: "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID" }) =>
       ipcRenderer.invoke("persp2:getSimulation", input),
   },
   smartBuy: {

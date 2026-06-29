@@ -607,7 +607,7 @@ export type CycleRisk = z.infer<typeof CycleRiskEnum>;
 
 // --- ASSET HEALTH ---
 
-export const AssetHealthStatusEnum = z.enum(["activo", "observacion", "riesgo_elevado", "salida_recomendada", "retirado"]);
+export const AssetHealthStatusEnum = z.enum(["activo", "observacion", "riesgo_elevado", "salida_recomendada", "retirado", "insufficient_data"]);
 export const AssetTrendEnum = z.enum(["alcista", "lateral", "bajista"]);
 export const AssetRiskLevelEnum = z.enum(["bajo", "moderado", "alto", "muy_alto"]);
 export const AssetStrategicStateEnum = z.enum(["excelente", "buena", "neutral", "vigilancia", "deterioro", "sustitucion_recomendada"]);

@@ -214,11 +214,30 @@ export interface ScenarioResult {
 
 export interface ScenarioSummary {
   scenario: SimScenario;
+  strategyEnabled: boolean;
+  strategyMode: SimulationStrategyMode;
+  strategySource: "none" | "user_rules" | "intelligent_engine" | "hybrid";
+  simulationOnly: boolean;
+  requiresUserConfirmation: boolean;
   initialWealthEur: number;
   finalNetWealthEur: number;
   totalContributionsEur: number;
   totalHistoricalCapitalEur: number;
   totalMarketGainEur: number;
+  realizedSalesEur: number;
+  realizedRebuysEur: number;
+  realizedTaxEur: number;
+  simulatedUserRuleSalesEur: number;
+  simulatedUserRuleRebuysEur: number;
+  simulatedUserRuleTaxEur: number;
+  simulatedStrategicSalesEur: number;
+  simulatedStrategicRebuysEur: number;
+  simulatedStrategicTaxEur: number;
+  proposedSalesEur: number;
+  proposedRebuysEur: number;
+  projectedEurcReserve: number;
+  projectedFiscalReserve: number;
+  decision: "hold" | "user_rules" | "intelligent_strategy" | "hybrid";
   totalSalesEur: number;
   totalRebuysEur: number;
   totalCommissionsEur: number;
@@ -285,8 +304,27 @@ export interface PerspectivesSimulation {
   endYear: number;
   horizonDate: number;
   scenarios: ScenarioResult[];
+  strategyComparisons: StrategyModeComparison[];
   validations: ValidationResult[];
   diagnostics: SimDiagnostics;
+}
+
+export interface StrategyModeComparison {
+  mode: SimulationStrategyMode;
+  label: string;
+  scenarios: Array<{
+    scenario: SimScenario;
+    finalNetWealthEur: number;
+    benefitEur: number;
+    twr: number | null;
+    xirr: number | null;
+    salesEur: number;
+    rebuysEur: number;
+    taxEur: number;
+    finalEurcFreeEur: number;
+    finalFiscalReserveEur: number;
+    decision: ScenarioSummary["decision"];
+  }>;
 }
 
 export interface ValidationResult {
@@ -405,9 +443,12 @@ export interface SimRevision {
 
 export interface SimOptions {
   policy: "plan_base" | "full_strategy";
+  strategyMode?: SimulationStrategyMode;
   commissionRate: number;  // e.g. 0.004 = 0.4%
   taxBands: TaxBand[];
 }
+
+export type SimulationStrategyMode = "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID";
 
 export interface TaxBand {
   upToEur: number | null;  // null = unlimited

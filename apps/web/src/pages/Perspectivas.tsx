@@ -64,6 +64,25 @@ interface AnnualSnapshot {
 
 interface ScenarioSummary {
   scenario: SimScenario;
+  strategyEnabled?: boolean;
+  strategyMode?: "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID";
+  strategySource?: string;
+  simulationOnly?: boolean;
+  requiresUserConfirmation?: boolean;
+  realizedSalesEur?: number;
+  realizedRebuysEur?: number;
+  realizedTaxEur?: number;
+  simulatedUserRuleSalesEur?: number;
+  simulatedUserRuleRebuysEur?: number;
+  simulatedUserRuleTaxEur?: number;
+  simulatedStrategicSalesEur?: number;
+  simulatedStrategicRebuysEur?: number;
+  simulatedStrategicTaxEur?: number;
+  proposedSalesEur?: number;
+  proposedRebuysEur?: number;
+  projectedEurcReserve?: number;
+  projectedFiscalReserve?: number;
+  decision?: "hold" | "user_rules" | "intelligent_strategy" | "hybrid";
   initialWealthEur: number;
   finalNetWealthEur: number;
   totalContributionsEur: number;
@@ -132,8 +151,27 @@ interface PerspectivesSimulation {
   endYear: number;
   horizonDate: number;
   scenarios: ScenarioResult[];
+  strategyComparisons?: StrategyModeComparison[];
   validations: ValidationResult[];
   diagnostics: SimDiagnostics;
+}
+
+interface StrategyModeComparison {
+  mode: "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID";
+  label: string;
+  scenarios: Array<{
+    scenario: SimScenario;
+    finalNetWealthEur: number;
+    benefitEur: number;
+    twr: number | null;
+    xirr: number | null;
+    salesEur: number;
+    rebuysEur: number;
+    taxEur: number;
+    finalEurcFreeEur: number;
+    finalFiscalReserveEur: number;
+    decision: "hold" | "user_rules" | "intelligent_strategy" | "hybrid";
+  }>;
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -613,6 +651,59 @@ function ScenarioComparisonTable({
                         ? <span style={{ color: "var(--color-success-text, #2d8a4e)" }}>✓ Cubierto</span>
                         : <span className="text-muted-foreground">⚠ Sin cobertura</span>}
                     </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function StrategyModeComparisonTable({ simData, scenario }: { simData: PerspectivesSimulation; scenario: SimScenario }) {
+  const comparisons = simData.strategyComparisons ?? [];
+  if (comparisons.length === 0) return null;
+  const passive = comparisons.find((item) => item.mode === "PASSIVE")?.scenarios.find((item) => item.scenario === scenario);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Comparación de estrategia — {SCENARIO_LABELS[scenario]}</CardTitle>
+        <p className="text-xs text-muted-foreground mt-1">
+          Operaciones simuladas por el motor estratégico. No ejecutadas.
+        </p>
+      </CardHeader>
+      <CardContent>
+        <div className="responsive-table persp-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Modo</th>
+                <th className="num">Patrimonio neto</th>
+                <th className="num">vs pasivo</th>
+                <th className="num">Ventas</th>
+                <th className="num">Recompras</th>
+                <th className="num">Impuestos</th>
+                <th>Decisión</th>
+              </tr>
+            </thead>
+            <tbody>
+              {comparisons.map((mode) => {
+                const row = mode.scenarios.find((item) => item.scenario === scenario);
+                if (!row) return null;
+                const vsPassive = passive ? row.finalNetWealthEur - passive.finalNetWealthEur : null;
+                return (
+                  <tr key={mode.mode}>
+                    <td>{mode.label}</td>
+                    <td className="num font-mono">{fmt(row.finalNetWealthEur)}</td>
+                    <td className={`num font-mono ${vsPassive != null && vsPassive > 0 ? "text-gain" : vsPassive != null && vsPassive < 0 ? "text-loss" : "text-muted-foreground"}`}>
+                      {vsPassive != null ? (Math.abs(vsPassive) < 0.01 ? "Base" : fmtSign(vsPassive)) : "—"}
+                    </td>
+                    <td className="num font-mono">{row.salesEur > 0 ? fmt(row.salesEur) : "—"}</td>
+                    <td className="num font-mono">{row.rebuysEur > 0 ? fmt(row.rebuysEur) : "—"}</td>
+                    <td className="num font-mono">{row.taxEur > 0 ? fmt(row.taxEur) : "—"}</td>
+                    <td>{row.decision === "hold" ? "Mantener" : row.decision === "user_rules" ? "Reglas" : row.decision === "hybrid" ? "Híbrida" : "Inteligente"}</td>
                   </tr>
                 );
               })}
@@ -1200,6 +1291,14 @@ export function Perspectivas() {
             <div className="persp-group-title">Gestión de ciclos</div>
             <div className="persp-group-rows">
               <div className="persp-group-row">
+                <span>Modo</span>
+                <strong>{sum.strategyMode === "PASSIVE" ? "Pasivo" : sum.strategyMode === "USER_RULES" ? "Reglas" : sum.strategyMode === "HYBRID" ? "Híbrido" : "Estrategia inteligente"}</strong>
+              </div>
+              <div className="persp-group-row">
+                <span>Operaciones reales</span>
+                <strong>{(sum.realizedSalesEur ?? 0) > 0 || (sum.realizedRebuysEur ?? 0) > 0 ? `${fmt(sum.realizedSalesEur ?? 0)} / ${fmt(sum.realizedRebuysEur ?? 0)}` : "0 €"}</strong>
+              </div>
+              <div className="persp-group-row">
                 <span>Ventas simuladas</span>
                 <strong>{sum.totalSalesEur > 0 ? fmt(sum.totalSalesEur) : "—"}</strong>
               </div>
@@ -1208,9 +1307,19 @@ export function Perspectivas() {
                 <strong>{sum.totalRebuysEur > 0 ? fmt(sum.totalRebuysEur) : "—"}</strong>
               </div>
               <div className="persp-group-row">
+                <span>Decisión del motor</span>
+                <strong>{sum.decision === "hold" ? "Mantener" : sum.decision === "user_rules" ? "Aplicar reglas" : sum.decision === "hybrid" ? "Simulación híbrida" : "Propuesta simulada"}</strong>
+              </div>
+              <div className="persp-group-row">
                 <span>Reinversión EURC</span>
                 <strong>{sum.totalEurcReinvestedEur > 0 ? fmt(sum.totalEurcReinvestedEur) : "—"}</strong>
               </div>
+              {sum.simulationOnly && (
+                <div className="persp-group-row">
+                  <span>Confirmación</span>
+                  <strong>Usuario requerida</strong>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1259,6 +1368,8 @@ export function Perspectivas() {
           initialWealthEur={sum.initialWealthEur}
           totalContributionsEur={sum.totalContributionsEur}
         />
+
+        <StrategyModeComparisonTable simData={simData} scenario={selectedScenario} />
 
         {/* ── BLOQUE 6: Secciones desplegables ── */}
         <CollapsibleSection title={`Tabla anual completa — ${SCENARIO_LABELS[selectedScenario]}`}>

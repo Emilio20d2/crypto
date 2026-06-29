@@ -178,7 +178,7 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
       dismiss:     (id: unknown)                              => ipc("signals:dismiss", id),
     },
     persp2: {
-      getSimulation: (input?: { horizonYears?: number; policy?: string }) =>
+      getSimulation: (input?: { horizonYears?: number; policy?: string; strategyMode?: "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID" }) =>
         ipc("persp2:getSimulation", input),
     },
     smartBuy: {

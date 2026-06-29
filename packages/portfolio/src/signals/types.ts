@@ -24,6 +24,42 @@ export type StrategicSignalStatus =
   | "expired"
   | "cancelled";
 
+export type StrategySignalType =
+  | "buy"
+  | "sell"
+  | "rebuy"
+  | "hold"
+  | "review"
+  | "replace"
+  | "alert";
+
+export type StrategySignalStatus =
+  | "active"
+  | "not_triggered"
+  | "insufficient_data"
+  | "blocked"
+  | "expired";
+
+export interface StrategySignalEvidence {
+  label: string;
+  value: number | string | boolean | null;
+  source: string;
+  observedAt: number;
+}
+
+export interface StrategySignal {
+  signalId: string;
+  assetId: string;
+  type: StrategySignalType;
+  status: StrategySignalStatus;
+  generatedAt: number;
+  dataVersion: string;
+  reason: string;
+  evidence: StrategySignalEvidence[];
+  missingInputs: string[];
+  confidence: number;
+}
+
 export type SignalFundingSource =
   | "external_cash"
   | "eur"
@@ -35,6 +71,7 @@ export type SignalDataQuality = "high" | "medium" | "low" | "insufficient";
 
 export interface StrategicSignal {
   id: string;
+  signalId: string;
   /** Clave única para deduplicar: `${actionType}:${assetId}:${ruleId|tierId}` */
   deduplicationKey: string;
   assetId: string;
@@ -63,6 +100,11 @@ export interface StrategicSignal {
   // Metadatos
   priority: SignalPriority;
   confidence: number | null;
+  generatedAt: number;
+  dataVersion: string;
+  reason: string;
+  evidence: StrategySignalEvidence[];
+  missingInputs: string[];
   dataQuality: SignalDataQuality;
   reasons: string[];
   conditionsMatched: string[];
