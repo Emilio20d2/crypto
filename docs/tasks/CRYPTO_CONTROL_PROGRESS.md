@@ -678,5 +678,16 @@ Pruebas ejecutadas
 
 Pendiente de este bloque antes de otro DMG
 
-- Reinstalar DMG solo si se solicita nueva release con esta ampliación.
-- Validar en app instalada que la UI sigue usando `persp2:getSimulation` y no vuelve a exponer el motor antiguo.
+- Backup previo a instalación: `/Users/macmini/Library/Application Support/Crypto Control Nueva/backups-codex-20260629-232658/`, `PRAGMA integrity_check` — OK.
+- SHA-256 backup principal: `509aac0f04caf34d9dacdea625ee9d14173817c0868b5285ec82f28c9dfcce67`.
+- DMG generado con `npm run dist:mac` — OK.
+- Ruta DMG: `dist-packaged/Crypto Control-0.1.0-arm64.dmg`.
+- SHA-256 DMG: `6757a577e07557191b29175d238a40e196472b6a58f60dc4d9c6cec0cbf9c821`.
+- DMG montado e instalado en `/Applications/Crypto Control.app` — OK.
+- App instalada abierta — OK, puente HTTP en `127.0.0.1:3001`.
+- Segunda apertura tras reinstalación — OK.
+- Validación real por `POST /api/ipc persp2:getSimulation` — OK: cinco escenarios (`conservador`, `moderado`, `base`, `favorable`, `optimista`), 19 `annualSnapshots`, 19 `annualStrategyReviews`, primera conciliación anual superada y `usesFutureInformation=false`.
+- Base real tras instalación: `PRAGMA integrity_check` — OK.
+- Commit del bloque: `d4cd65db6d383594cdc71bd9ccbf4b9a11524686`.
+- Push de `codex/final-engine-rebuild` — OK.
+- Fast-forward de `main` a `d4cd65db6d383594cdc71bd9ccbf4b9a11524686` — OK.
