@@ -83,10 +83,16 @@ export interface MonthlyState {
   monthRealizedGainEur: number;
   monthEurcReinvestedEur: number;
   monthNetEurcInflowEur: number;
+  monthExternalPurchasesEur: number;
+  monthReinvestedCapitalEur: number;
+  monthDeployedCapitalEur: number;
   // acumulados del escenario hasta este mes
   cumulativeContributionsEur: number;
   cumulativeSalesEur: number;
   cumulativeRebuysEur: number;
+  cumulativeExternalPurchasesEur: number;
+  cumulativeReinvestedCapitalEur: number;
+  cumulativeDeployedCapitalEur: number;
   cumulativeTaxEur: number;
   cumulativeRealizedGainEur: number;
   cumulativeCommissionsEur: number;
@@ -113,11 +119,20 @@ export interface AnnualSnapshot {
   realizedGainEur: number;
   eurcReinvestedEur: number;
   netEurcInflowEur: number;
+  externalPurchasesEur: number;
+  reinvestedCapitalEur: number;
+  deployedCapitalEur: number;
 
   // Stock a fin de año
   fiscalReserveEur: number;
   eurcFreeEur: number;
   eurCashEur: number;
+  currentInvestedCapitalEur: number;
+  openCostBasisEur: number;
+  externalContributionsCumulativeEur: number;
+  reinvestedCapitalCumulativeEur: number;
+  deployedCapitalCumulativeEur: number;
+  netProfitEur: number;
 
   // Rendimiento del año
   annualReturnPct: number | null;
@@ -177,6 +192,13 @@ export interface SimEvent {
   priceEur?: number;
   gainEur?: number;
   taxEur?: number;
+  eurcUsedEur?: number;
+  commissionEur?: number;
+  spreadEur?: number;
+  slippageEur?: number;
+  costBasisEur?: number;
+  eurcOrigin?: "sale" | "initial" | "operating_liquidity" | "redistribution";
+  relatedSaleCycleId?: string;
   description: string;
 }
 
@@ -225,8 +247,20 @@ export interface ScenarioSummary {
   requiresUserConfirmation: boolean;
   initialWealthEur: number;
   finalNetWealthEur: number;
+  initialCapitalEur: number;
   totalContributionsEur: number;
+  externalContributionsEur: number;
   totalHistoricalCapitalEur: number;
+  totalExternalPurchasesEur: number;
+  reinvestedCapitalEur: number;
+  cumulativeDeployedCapitalEur: number;
+  currentInvestedCapitalEur: number;
+  eurcOperatingLiquidityEur: number;
+  eurcFiscalReserveEur: number;
+  eurcSecurityReserveEur: number;
+  openCostBasisEur: number;
+  grossWealthEur: number;
+  netProfitEur: number;
   totalMarketGainEur: number;
   realizedSalesEur: number;
   realizedRebuysEur: number;

@@ -288,6 +288,42 @@ Pruebas ejecutadas en esta fase
 - Instalación final en `/Applications/Crypto Control.app` — OK.
 - Verificación IPC instalada `persp2:getSimulation` — OK: `source = market-regime-engine+active-forecast-anchors`, `engineVersion = perspectives-v4.0-market-regimes`, `marketRegimeEngine = true`, cinco escenarios presentes, `realisticCycleValidation = passed`.
 
+Actualización 2026-06-29 — Corrección contable de capital y EURC
+
+Nueva ampliación recibida
+
+Adjunto leído completo: `CORRECCIÓN CONTABLE BLOQUEANTE — DIFERENCIAR CAPITAL APORTADO, CAPITAL INVERTIDO, CAPITAL REINVERTIDO Y LIQUIDEZ EN EURC`.
+
+Cambios realizados
+
+- Añadidos acumuladores mensuales y anuales para compras externas, capital reinvertido y capital desplegado.
+- Añadidos campos de resumen para `initialCapitalEur`, `externalContributionsEur`, `totalExternalPurchasesEur`, `reinvestedCapitalEur`, `cumulativeDeployedCapitalEur`, `currentInvestedCapitalEur`, `eurcOperatingLiquidityEur`, `eurcFiscalReserveEur`, `eurcSecurityReserveEur`, `openCostBasisEur`, `grossWealthEur` y `netProfitEur`.
+- Las recompras con EURC ya no pueden confundirse con aportaciones externas; aumentan capital reinvertido y capital desplegado.
+- Las recompras crean lote propio `sim_rebuy` y el evento registra EURC usado, comisión, coste base, origen de EURC y ciclo relacionado.
+- El beneficio neto se calcula frente a capital externo aportado, no frente a recompras internas.
+- Perspectivas muestra por separado aportaciones externas, capital invertido actual, capital reinvertido, capital desplegado, coste de posiciones abiertas, EURC operativo, EURC fiscal y EURC de seguridad.
+
+Pruebas añadidas
+
+- Venta/recompra no incrementa aportaciones externas.
+- Recompra incrementa capital reinvertido y capital desplegado.
+- Recompra reduce EURC operativo y no toca reserva fiscal.
+- Recompra crea trazabilidad de evento/lote.
+- Beneficio neto no se reduce artificialmente por sumar recompras como aportaciones.
+- XIRR y TWR siguen tratándose como métricas sobre flujos externos, no sobre movimientos internos.
+
+Pruebas ejecutadas en esta fase
+
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix packages/portfolio test -- src/perspectives/sim-engine.test.ts` — OK, 68 tests.
+- `npm --prefix packages/portfolio test` — OK, 18 files / 378 tests.
+- `npm --prefix apps/web run typecheck` — OK.
+- `npm --prefix apps/web run lint` — OK.
+- `npm --prefix apps/web test` — OK, 12 files / 143 tests.
+- `npm --prefix packages/portfolio run build` — OK.
+- `npm --prefix apps/web run build` — OK.
+- `npm run build:desktop` — OK.
+
 Ejecución local del motor modificado contra SQLite real y snapshot vivo:
 
 - Conservador: neto 78.963,13 EUR; ventas 0; recompras 0; impuestos 0.

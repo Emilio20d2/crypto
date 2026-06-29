@@ -99,6 +99,30 @@ function calcNetWealth(
   return gross;
 }
 
+function calcOpenCostBasis(state: MonthlyState): number {
+  let cost = 0;
+  for (const st of Object.values(state.assetStates)) {
+    for (const lot of st.lots) {
+      cost += lot.remaining * lot.costPerUnitEur;
+    }
+  }
+  return cost;
+}
+
+function calcInvestedCapital(
+  state: MonthlyState,
+  prices: Record<string, Record<string, number>>,
+  mKey: string,
+): number {
+  let invested = 0;
+  for (const [assetId, st] of Object.entries(state.assetStates)) {
+    if (st.balance <= 0) continue;
+    const price = prices[assetId]?.[mKey];
+    if (price != null && price > 0) invested += st.balance * price;
+  }
+  return invested;
+}
+
 // ─── Inicialización del estado mensual desde input ───────────────────────────
 
 let _lotCounter = 0;
@@ -240,9 +264,15 @@ function initState(input: SimInput): MonthlyState {
     monthRealizedGainEur: 0,
     monthEurcReinvestedEur: 0,
     monthNetEurcInflowEur: 0,
+    monthExternalPurchasesEur: 0,
+    monthReinvestedCapitalEur: 0,
+    monthDeployedCapitalEur: 0,
     cumulativeContributionsEur: 0,
     cumulativeSalesEur: 0,
     cumulativeRebuysEur: 0,
+    cumulativeExternalPurchasesEur: 0,
+    cumulativeReinvestedCapitalEur: 0,
+    cumulativeDeployedCapitalEur: 0,
     cumulativeTaxEur: 0,
     cumulativeRealizedGainEur: 0,
     cumulativeCommissionsEur: 0,
@@ -601,6 +631,8 @@ function evaluateRebuys(
     state.monthRebuysEur += eurcToUse;
     state.monthCommissionsEur += commission;
     state.monthEurcReinvestedEur += eurcToUse;
+    state.monthReinvestedCapitalEur += eurcToUse;
+    state.monthDeployedCapitalEur += eurcToUse;
 
     state.events.push({
       date,
@@ -609,6 +641,13 @@ function evaluateRebuys(
       amountEur: eurcToUse,
       quantity,
       priceEur,
+      eurcUsedEur: eurcToUse,
+      commissionEur: commission,
+      spreadEur: 0,
+      slippageEur: 0,
+      costBasisEur: eurcToUse,
+      eurcOrigin: "operating_liquidity",
+      relatedSaleCycleId: cycle.id,
       description: `Recompra ${assetId}: -${(tier.drawdownPercentage)}% desde referencia`,
     });
   }
@@ -684,6 +723,8 @@ function evaluateProposedRebuys(
       state.monthRebuysEur += eurcToUse;
       state.monthCommissionsEur += commission;
       state.monthEurcReinvestedEur += eurcToUse;
+      state.monthReinvestedCapitalEur += eurcToUse;
+      state.monthDeployedCapitalEur += eurcToUse;
 
       state.events.push({
         date,
@@ -692,6 +733,13 @@ function evaluateProposedRebuys(
         amountEur: eurcToUse,
         quantity,
         priceEur,
+        eurcUsedEur: eurcToUse,
+        commissionEur: commission,
+        spreadEur: 0,
+        slippageEur: 0,
+        costBasisEur: eurcToUse,
+        eurcOrigin: "operating_liquidity",
+        relatedSaleCycleId: cycle.id,
         description: `Recompra hipotética ${ca.assetId}: régimen ${regime}, score ${rebuyOpportunityScore}, −${(drawdown * 100).toFixed(0)}% desde venta previa; usa ${fmtEur(eurcToUse)} de EURC libre`,
       });
 
@@ -786,6 +834,8 @@ function reinvestResidual(
     spent += amountEur;
     state.monthCommissionsEur += commission;
     state.monthEurcReinvestedEur += amountEur;
+    state.monthReinvestedCapitalEur += amountEur;
+    state.monthDeployedCapitalEur += amountEur;
   }
 
   state.eurcFree = Math.max(0, state.eurcFree - spent);
@@ -825,6 +875,9 @@ function simulateMonth(
     monthRealizedGainEur: 0,
     monthEurcReinvestedEur: 0,
     monthNetEurcInflowEur: 0,
+    monthExternalPurchasesEur: 0,
+    monthReinvestedCapitalEur: 0,
+    monthDeployedCapitalEur: 0,
     assetStates: {},
   };
 
@@ -928,6 +981,8 @@ function simulateMonth(
       next.monthCommissionsEur += commissionEur + commTo;
       next.monthTaxEur += taxEur;
       next.monthRealizedGainEur += gainEur;
+      next.monthReinvestedCapitalEur += eurcForPurchase;
+      next.monthDeployedCapitalEur += eurcForPurchase;
 
       sub.status = "executed";
 
@@ -1058,6 +1113,8 @@ function simulateMonth(
       st.avgCostEur = calcAvgCost(st.lots);
 
       next.monthCommissionsEur += commissionEur;
+      next.monthExternalPurchasesEur += alloc.amountEur;
+      next.monthDeployedCapitalEur += alloc.amountEur;
 
       next.events.push({
         date, type: "purchase",
@@ -1082,6 +1139,9 @@ function simulateMonth(
   next.cumulativeContributionsEur = state.cumulativeContributionsEur + next.monthContributionsEur;
   next.cumulativeSalesEur = state.cumulativeSalesEur + next.monthSalesEur;
   next.cumulativeRebuysEur = state.cumulativeRebuysEur + next.monthRebuysEur;
+  next.cumulativeExternalPurchasesEur = state.cumulativeExternalPurchasesEur + next.monthExternalPurchasesEur;
+  next.cumulativeReinvestedCapitalEur = state.cumulativeReinvestedCapitalEur + next.monthReinvestedCapitalEur;
+  next.cumulativeDeployedCapitalEur = state.cumulativeDeployedCapitalEur + next.monthDeployedCapitalEur;
   next.cumulativeTaxEur = state.cumulativeTaxEur + next.monthTaxEur;
   next.cumulativeRealizedGainEur = state.cumulativeRealizedGainEur + next.monthRealizedGainEur;
   next.cumulativeCommissionsEur = state.cumulativeCommissionsEur + next.monthCommissionsEur;
@@ -1165,6 +1225,15 @@ function buildAnnualSnapshot(
   const realizedGainEur = monthsOfYear.reduce((s, m) => s + m.monthRealizedGainEur, 0);
   const eurcReinvestedEur = monthsOfYear.reduce((s, m) => s + m.monthEurcReinvestedEur, 0);
   const netEurcInflowEur = monthsOfYear.reduce((s, m) => s + m.monthNetEurcInflowEur, 0);
+  const externalPurchasesEur = monthsOfYear.reduce((s, m) => s + m.monthExternalPurchasesEur, 0);
+  const reinvestedCapitalEur = monthsOfYear.reduce((s, m) => s + m.monthReinvestedCapitalEur, 0);
+  const deployedCapitalEur = monthsOfYear.reduce((s, m) => s + m.monthDeployedCapitalEur, 0);
+  const currentInvestedCapitalEur = calcInvestedCapital(lastMonth, prices, mKey);
+  const openCostBasisEur = calcOpenCostBasis(lastMonth);
+  const externalContributionsCumulativeEur = input.historicalCapitalEur + lastMonth.cumulativeContributionsEur;
+  const reinvestedCapitalCumulativeEur = lastMonth.cumulativeReinvestedCapitalEur;
+  const deployedCapitalCumulativeEur = input.historicalCapitalEur + lastMonth.cumulativeExternalPurchasesEur + lastMonth.cumulativeReinvestedCapitalEur;
+  const netProfitEur = closingWealthEur - externalContributionsCumulativeEur;
 
   const marketGainEur = closingWealthEur - openingWealthEur - contributionsEur + commissionsEur;
 
@@ -1256,9 +1325,18 @@ function buildAnnualSnapshot(
     realizedGainEur,
     eurcReinvestedEur,
     netEurcInflowEur,
+    externalPurchasesEur,
+    reinvestedCapitalEur,
+    deployedCapitalEur,
     fiscalReserveEur: lastMonth.eurcFiscalReserve,
     eurcFreeEur: lastMonth.eurcFree,
     eurCashEur: lastMonth.eurCash,
+    currentInvestedCapitalEur,
+    openCostBasisEur,
+    externalContributionsCumulativeEur,
+    reinvestedCapitalCumulativeEur,
+    deployedCapitalCumulativeEur,
+    netProfitEur,
     annualReturnPct,
     positions,
     events,
@@ -1562,6 +1640,16 @@ function runScenario(
   const maxDD = calcMaxDrawdown(monthlyWealthSeries);
 
   const finalState = prevYearLastMonth;
+  const lastMKeyForSummary = finalState ? monthKey(finalState.monthDate) : "";
+  const finalCurrentInvestedCapitalEur = finalState ? calcInvestedCapital(finalState, prices, lastMKeyForSummary) : 0;
+  const finalOpenCostBasisEur = finalState ? calcOpenCostBasis(finalState) : 0;
+  const totalFutureExternalContributionsEur = annualSnapshots.reduce((s, a) => s + a.contributionsEur, 0);
+  const totalExternalPurchasesEur = annualSnapshots.reduce((s, a) => s + a.externalPurchasesEur, 0);
+  const totalReinvestedCapitalEur = annualSnapshots.reduce((s, a) => s + a.reinvestedCapitalEur, 0);
+  const cumulativeDeployedCapitalEur = input.historicalCapitalEur + totalExternalPurchasesEur + totalReinvestedCapitalEur;
+  const finalGrossWealthEur = lastSnap?.closingGrossEur ?? initialWealth;
+  const externalContributionsEur = input.historicalCapitalEur + totalFutureExternalContributionsEur;
+  const netProfitEur = (lastSnap?.closingWealthEur ?? initialWealth) - externalContributionsEur;
   const assetSummaries: AssetSimSummary[] = allAssetIds.map(assetId => {
     const st = finalState?.assetStates[assetId];
     const lastMKey = finalState ? monthKey(finalState.monthDate) : "";
@@ -1589,8 +1677,20 @@ function runScenario(
     requiresUserConfirmation: true,
     initialWealthEur: initialWealth,
     finalNetWealthEur: lastSnap?.closingWealthEur ?? initialWealth,
-    totalContributionsEur: annualSnapshots.reduce((s, a) => s + a.contributionsEur, 0),
+    initialCapitalEur: input.historicalCapitalEur,
+    totalContributionsEur: totalFutureExternalContributionsEur,
+    externalContributionsEur,
     totalHistoricalCapitalEur: input.historicalCapitalEur,
+    totalExternalPurchasesEur,
+    reinvestedCapitalEur: totalReinvestedCapitalEur,
+    cumulativeDeployedCapitalEur,
+    currentInvestedCapitalEur: finalCurrentInvestedCapitalEur,
+    eurcOperatingLiquidityEur: lastSnap?.eurcFreeEur ?? 0,
+    eurcFiscalReserveEur: lastSnap?.fiscalReserveEur ?? 0,
+    eurcSecurityReserveEur: 0,
+    openCostBasisEur: finalOpenCostBasisEur,
+    grossWealthEur: finalGrossWealthEur,
+    netProfitEur,
     totalMarketGainEur: annualSnapshots.reduce((s, a) => s + a.marketGainEur, 0),
     realizedSalesEur: 0,
     realizedRebuysEur: 0,

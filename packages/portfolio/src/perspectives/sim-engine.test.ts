@@ -628,6 +628,22 @@ describe("sim-engine: rebuys", () => {
     expect(base.summary.totalRebuysEur).toBeGreaterThan(0);
     expect(base.summary.finalFiscalReserveEur).toBeGreaterThanOrEqual(500);
     expect(base.summary.totalEurcReinvestedEur).toBeGreaterThan(0);
+    expect(base.summary.reinvestedCapitalEur).toBeCloseTo(base.summary.totalRebuysEur, 6);
+    expect(base.summary.externalContributionsEur).toBe(base.summary.initialCapitalEur + base.summary.totalContributionsEur);
+    expect(base.summary.cumulativeDeployedCapitalEur).toBeGreaterThan(base.summary.externalContributionsEur);
+    expect(base.summary.currentInvestedCapitalEur).toBeGreaterThan(0);
+    expect(base.summary.eurcOperatingLiquidityEur).toBeGreaterThanOrEqual(0);
+    expect(base.summary.eurcFiscalReserveEur).toBeGreaterThanOrEqual(500);
+    expect(base.summary.netProfitEur).toBeCloseTo(
+      base.summary.finalNetWealthEur - base.summary.externalContributionsEur,
+      6,
+    );
+    const rebuyEvent = base.annualSnapshots.flatMap(s => s.events).find(e => e.type === "rebuy");
+    expect(rebuyEvent?.eurcUsedEur).toBeGreaterThan(0);
+    expect(rebuyEvent?.costBasisEur).toBe(rebuyEvent?.eurcUsedEur);
+    expect(rebuyEvent?.eurcOrigin).toBe("operating_liquidity");
+    const btc = base.summary.assetSummaries.find(a => a.assetId === "BTC")!;
+    expect(btc.totalRebuys).toBeGreaterThan(0);
   });
 
   it("recompra sin EURC libre no se ejecuta aunque exista venta previa", () => {
@@ -669,6 +685,42 @@ describe("sim-engine: rebuys", () => {
         expect(s.summary.totalRebuysEur).toBe(0);
       }
     }
+  });
+
+  it("separa aportación externa, EURC operativo, reinversión y capital desplegado", () => {
+    const input = makeInput({
+      currentPositions: [{ assetId: "BTC", balance: 0.5, avgCostEur: 30_000, currentPriceEur: 60_000 }],
+      currentLots: [{ id: "l1", assetId: "BTC", date: NOW - 2 * YEAR_MS, remainingAmount: 0.5, unitAcquisitionPriceEur: 30_000 }],
+      historicalSales: [{ assetId: "BTC", date: NOW - YEAR_MS, quantity: 0.2, unitPriceEur: 1_000_000 }],
+      eurcFree: 2_000,
+      eurcFiscalReserve: 750,
+      horizonDate: horizon(1),
+      cycles: [makeCycle({
+        monthlyAmountEur: 0,
+        rebuyTiers: [{
+          id: "accounting-rebuy",
+          assetId: "BTC",
+          drawdownPercentage: 20,
+          usagePercentage: 50,
+          referenceType: "last_sale",
+          referenceValue: 1_000_000,
+          status: "active",
+        }],
+      })],
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy", strategyMode: "USER_RULES", commissionRate: 0 },
+    });
+
+    const base = runPerspectivesSimulation(input).scenarios.find(s => s.scenario === "base")!;
+    expect(base.summary.totalSalesEur).toBe(0);
+    expect(base.summary.totalRebuysEur).toBeGreaterThan(0);
+    expect(base.summary.externalContributionsEur).toBe(base.summary.initialCapitalEur);
+    expect(base.summary.reinvestedCapitalEur).toBe(base.summary.totalRebuysEur);
+    expect(base.summary.cumulativeDeployedCapitalEur).toBe(base.summary.initialCapitalEur + base.summary.reinvestedCapitalEur);
+    expect(base.summary.eurcFiscalReserveEur).toBeGreaterThanOrEqual(750);
+    expect(base.summary.eurcOperatingLiquidityEur).toBeCloseTo(2_000 - base.summary.totalRebuysEur, 6);
+    expect(base.summary.netProfitEur).toBeCloseTo(base.summary.finalNetWealthEur - base.summary.externalContributionsEur, 6);
+    expect(base.summary.xirr).not.toBeNull();
+    expect(base.summary.twr).not.toBeNull();
   });
 
   it("sin escalones configurados no se generan recompras por tiers fijos antiguos", () => {

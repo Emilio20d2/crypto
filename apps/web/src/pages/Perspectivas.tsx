@@ -85,8 +85,20 @@ interface ScenarioSummary {
   decision?: "hold" | "user_rules" | "intelligent_strategy" | "hybrid";
   initialWealthEur: number;
   finalNetWealthEur: number;
+  initialCapitalEur?: number;
   totalContributionsEur: number;
+  externalContributionsEur?: number;
   totalHistoricalCapitalEur: number;
+  totalExternalPurchasesEur?: number;
+  reinvestedCapitalEur?: number;
+  cumulativeDeployedCapitalEur?: number;
+  currentInvestedCapitalEur?: number;
+  eurcOperatingLiquidityEur?: number;
+  eurcFiscalReserveEur?: number;
+  eurcSecurityReserveEur?: number;
+  openCostBasisEur?: number;
+  grossWealthEur?: number;
+  netProfitEur?: number;
   totalMarketGainEur: number;
   totalSalesEur: number;
   totalRebuysEur: number;
@@ -1192,7 +1204,7 @@ export function Perspectivas() {
   }
 
   const sum = activeScenario.summary;
-  const beneficioNetoEur = sum.finalNetWealthEur - sum.initialWealthEur - sum.totalContributionsEur;
+  const beneficioNetoEur = sum.netProfitEur ?? (sum.finalNetWealthEur - sum.initialWealthEur - sum.totalContributionsEur);
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -1246,8 +1258,8 @@ export function Perspectivas() {
               <strong>{fmt(sum.initialWealthEur)}</strong>
             </div>
             <div className="persp-hero-metric">
-              <span>Capital aportado</span>
-              <strong>{fmt(sum.totalContributionsEur)}</strong>
+              <span>Aportaciones externas</span>
+              <strong>{fmt(sum.externalContributionsEur ?? (sum.initialWealthEur + sum.totalContributionsEur))}</strong>
             </div>
             <div className="persp-hero-metric">
               <span>Beneficio neto estimado</span>
@@ -1284,6 +1296,32 @@ export function Perspectivas() {
                   <strong className="neg">−{(sum.maxDrawdownPct * 100).toFixed(1)}%</strong>
                 </div>
               )}
+            </div>
+          </div>
+
+          <div className="persp-group">
+            <div className="persp-group-title">Capital y exposición</div>
+            <div className="persp-group-rows">
+              <div className="persp-group-row">
+                <span>Capital inicial</span>
+                <strong>{fmt(sum.initialCapitalEur ?? sum.totalHistoricalCapitalEur)}</strong>
+              </div>
+              <div className="persp-group-row">
+                <span>Capital invertido actual</span>
+                <strong>{fmt(sum.currentInvestedCapitalEur ?? 0)}</strong>
+              </div>
+              <div className="persp-group-row">
+                <span>Capital reinvertido</span>
+                <strong>{(sum.reinvestedCapitalEur ?? 0) > 0 ? fmt(sum.reinvestedCapitalEur ?? 0) : "—"}</strong>
+              </div>
+              <div className="persp-group-row">
+                <span>Capital desplegado</span>
+                <strong>{fmt(sum.cumulativeDeployedCapitalEur ?? 0)}</strong>
+              </div>
+              <div className="persp-group-row">
+                <span>Coste posiciones abiertas</span>
+                <strong>{fmt(sum.openCostBasisEur ?? 0)}</strong>
+              </div>
             </div>
           </div>
 
@@ -1335,8 +1373,12 @@ export function Perspectivas() {
                 <strong className={sum.finalFiscalReserveEur > 0 ? "warn" : ""}>{sum.finalFiscalReserveEur > 0 ? fmt(sum.finalFiscalReserveEur) : "—"}</strong>
               </div>
               <div className="persp-group-row">
-                <span>EURC libre final</span>
-                <strong>{sum.finalEurcFreeEur > 0 ? fmt(sum.finalEurcFreeEur) : "—"}</strong>
+                <span>EURC operativo</span>
+                <strong>{(sum.eurcOperatingLiquidityEur ?? sum.finalEurcFreeEur) > 0 ? fmt(sum.eurcOperatingLiquidityEur ?? sum.finalEurcFreeEur) : "—"}</strong>
+              </div>
+              <div className="persp-group-row">
+                <span>EURC de seguridad</span>
+                <strong>{(sum.eurcSecurityReserveEur ?? 0) > 0 ? fmt(sum.eurcSecurityReserveEur ?? 0) : "—"}</strong>
               </div>
             </div>
           </div>
