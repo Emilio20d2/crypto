@@ -167,11 +167,11 @@ function normal(rand: () => number): number {
 }
 
 function scenarioReturnTilt(scenario: SimScenario): number {
-  if (scenario === "conservador") return -0.018;
-  if (scenario === "moderado") return -0.006;
+  if (scenario === "conservador") return -0.045;
+  if (scenario === "moderado") return -0.018;
   if (scenario === "base") return 0;
-  if (scenario === "favorable") return 0.010;
-  return 0.018;
+  if (scenario === "favorable") return 0.030;
+  return 0.055;
 }
 
 function tierSpecificReturn(tier: AssetTier, regime: MarketRegime): number {
@@ -198,10 +198,10 @@ function monthCount(nowMs: number, horizonMs: number): number {
 function scenarioTransitionTilt(scenario: SimScenario, next: MarketRegime): number {
   const bearish = next === "CORRECTION" || next === "BEAR_MARKET" || next === "CAPITULATION";
   const bullish = next === "EARLY_BULL" || next === "BULL_EXPANSION" || next === "EUPHORIA" || next === "EARLY_RECOVERY";
-  if (scenario === "conservador") return bearish ? 1.35 : bullish ? 0.78 : 1.05;
-  if (scenario === "moderado") return bearish ? 1.10 : bullish ? 0.95 : 1.08;
-  if (scenario === "favorable") return bearish ? 0.82 : bullish ? 1.18 : 0.98;
-  if (scenario === "optimista") return bearish ? 0.70 : bullish ? 1.32 : 0.92;
+  if (scenario === "conservador") return bearish ? 1.70 : bullish ? 0.55 : 1.12;
+  if (scenario === "moderado") return bearish ? 1.25 : bullish ? 0.82 : 1.08;
+  if (scenario === "favorable") return bearish ? 0.58 : bullish ? 1.45 : 0.92;
+  if (scenario === "optimista") return bearish ? 0.38 : bullish ? 1.85 : 0.82;
   return 1;
 }
 
@@ -245,9 +245,11 @@ function sampleRegimeDurationMonths(regime: MarketRegime, scenario: SimScenario,
     regime === "EUPHORIA" ? 3 :
     4;
   const scenarioFactor =
-    scenario === "conservador" && (regime === "BEAR_MARKET" || regime === "CORRECTION") ? 1.55 :
-    scenario === "optimista" && (regime === "BEAR_MARKET" || regime === "CORRECTION") ? 0.72 :
-    scenario === "favorable" && (regime === "EARLY_BULL" || regime === "BULL_EXPANSION") ? 1.35 :
+    scenario === "conservador" && (regime === "BEAR_MARKET" || regime === "CORRECTION") ? 1.85 :
+    scenario === "moderado" && (regime === "BEAR_MARKET" || regime === "CORRECTION") ? 1.20 :
+    scenario === "optimista" && (regime === "BEAR_MARKET" || regime === "CORRECTION") ? 0.48 :
+    scenario === "favorable" && (regime === "EARLY_BULL" || regime === "BULL_EXPANSION") ? 1.60 :
+    scenario === "optimista" && (regime === "EARLY_BULL" || regime === "BULL_EXPANSION" || regime === "EUPHORIA") ? 1.75 :
     1;
   return Math.max(1, Math.round(base * scenarioFactor * (0.55 + rand() * 1.35)));
 }

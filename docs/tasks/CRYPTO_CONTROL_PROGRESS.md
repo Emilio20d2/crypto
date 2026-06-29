@@ -319,6 +319,27 @@ Diagnóstico del antes
 - Orden inválido reproducido: Moderado < Conservador, Favorable < Base.
 - Causa técnica principal confirmada: cada escenario genera su propia trayectoria estocástica; el azar puede dominar la semántica de escenario.
 
+Cambios aplicados en esta fase
+
+- `runPerspectivesSimulation()` añade `scenarioValidationStatus` y `scenarioOrder`.
+- La app ya no presenta silenciosamente un orden incoherente: si falla, devuelve `invalid_order`.
+- La generación de escenarios visibles pasa por selección cuantílica ordenada de resultados generados, eliminando la inversión de nombres observada en la base real.
+- Los shocks de mercado por activo/horizonte se comparten entre escenarios para reducir el dominio de sorteos independientes.
+- La pantalla Perspectivas usa el año seleccionado para las métricas principales de cabecera: patrimonio neto, patrimonio bruto, beneficio, capital externo, capital invertido, capital reinvertido, capital desplegado, coste abierto, EURC operativo y reserva fiscal.
+- Las evidencias locales reales no se versionan: `docs/tasks/evidence/.gitignore` evita subir JSON/capturas con datos personales.
+
+Validación instalada después del cambio
+
+- DMG: `dist-packaged/Crypto Control-0.1.0-arm64.dmg`.
+- SHA-256 instalado probado: `b5642ea3feafef6d28a6405e9db2537291dd7e60f77bbfe01f857c50cdd46496`.
+- App instalada en `/Applications/Crypto Control.app`.
+- IPC real `persp2:getSimulation` devuelve `scenarioValidationStatus = valid_order`.
+- Orden real tras la corrección: Conservador `121.021`, Moderado `121.967`, Base `136.478`, Favorable `146.722`, Optimista `155.388`.
+
+Limitación pendiente explícita
+
+Esta fase corrige el fallo visible de orden y horizonte seleccionado, pero todavía no completa toda la tarea maestra: faltan el motor Monte Carlo real de al menos 1.000 trayectorias ejecutadas por modo, bolsas EURC por venta, ProfitHarvestCycle productivo completo, fiscalidad anual acumulativa, XIRR mensual real, doble entrada completa y conexión real de analistas/medios como factores probabilísticos. No debe considerarse cierre definitivo de la tarea maestra completa.
+
 Actualización 2026-06-29 — Corrección contable de capital y EURC
 
 Nueva ampliación recibida

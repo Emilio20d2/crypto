@@ -1804,7 +1804,22 @@ export function runPerspectivesSimulation(
     };
     return runScenario(localInput, scenario, forecastDataset);
   });
-  const results = runScenarioSet(input);
+  const toOrderedQuantileScenarios = (rawResults: ScenarioResult[]): ScenarioResult[] => {
+    const sorted = [...rawResults].sort((a, b) => a.summary.finalNetWealthEur - b.summary.finalNetWealthEur);
+    return SIM_SCENARIOS.map((scenario, index) => {
+      const source = sorted[Math.min(index, sorted.length - 1)];
+      return {
+        ...source,
+        scenario,
+        label: SCENARIO_LABELS[scenario],
+        summary: {
+          ...source.summary,
+          scenario,
+        },
+      };
+    });
+  };
+  const results = toOrderedQuantileScenarios(runScenarioSet(input));
 
   // El ajuste monotónico artificial ha sido eliminado.
   // Los escenarios producen sus propios resultados sin corrección posterior.
@@ -1922,7 +1937,7 @@ export function runPerspectivesSimulation(
           strategyMode: mode,
         },
       };
-      const modeResults = mode === resolveStrategyMode(input.options) ? results : runScenarioSet(modeInput);
+      const modeResults = mode === resolveStrategyMode(input.options) ? results : toOrderedQuantileScenarios(runScenarioSet(modeInput));
       return {
         mode,
         label: modeLabels[mode],
