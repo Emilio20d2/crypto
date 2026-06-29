@@ -16,6 +16,11 @@ import {
   buildExternalPriceMap, monthKey, getAssetTier, CIRCULATING_SUPPLY_M,
   type CoverageState,
 } from "./external-price-builder";
+import {
+  buildMarketRegimePricePath,
+  type MarketRegime,
+  type MarketRegimePath,
+} from "./market-regime-engine";
 
 const EMPTY_FORECAST_DATASET: ForecastDataset = {
   sources: [],
@@ -444,6 +449,7 @@ function strategySource(mode: SimulationStrategyMode): ScenarioSummary["strategy
 function evaluateProposedSales(
   state: MonthlyState,
   prices: Record<string, Record<string, number>>,
+  marketRegimes: Record<string, Record<string, MarketRegime>>,
   mKey: string,
   options: SimOptions,
   date: number,
@@ -451,11 +457,7 @@ function evaluateProposedSales(
   const mode = resolveStrategyMode(options);
   if (mode !== "INTELLIGENT_STRATEGY" && mode !== "HYBRID") return;
 
-  const tiers = [
-    { gainPct: 200, sellPct: 0.20, label: "+200%" },
-    { gainPct: 100, sellPct: 0.15, label: "+100%" },
-    { gainPct: 50, sellPct: 0.10, label: "+50%" },
-  ];
+  const saleRegimes = new Set<MarketRegime>(["BULL_EXPANSION", "EUPHORIA", "DISTRIBUTION", "CORRECTION"]);
 
   for (const [assetId, st] of Object.entries(state.assetStates)) {
     if (st.failed || st.balance <= 0) continue;
@@ -463,14 +465,32 @@ function evaluateProposedSales(
     if (!priceEur || priceEur <= 0) continue;
     const avgCost = st.avgCostEur;
     if (avgCost == null || avgCost <= 0) continue;
+    const regime = marketRegimes[assetId]?.[mKey] ?? "INSUFFICIENT_DATA";
+    if (!saleRegimes.has(regime)) continue;
 
     const gainPct = ((priceEur - avgCost) / avgCost) * 100;
-    for (const tier of tiers) {
-      if (gainPct < tier.gainPct) continue;
-      const saleKey = `proposed-sale-${assetId}-${tier.gainPct}`;
-      if (st.usedSaleProposalIds.has(saleKey)) continue;
+    const drawdownFromPeak = st.peakPriceEur && st.peakPriceEur > priceEur
+      ? (st.peakPriceEur - priceEur) / st.peakPriceEur
+      : 0;
+    const regimeScore =
+      regime === "EUPHORIA" ? 45 :
+      regime === "DISTRIBUTION" ? 55 :
+      regime === "CORRECTION" ? 35 :
+      regime === "BULL_EXPANSION" ? 18 : 0;
+    const drawdownScore = Math.min(25, drawdownFromPeak * 100);
+    const gainScore = Math.min(55, Math.max(0, gainPct) / 4);
+    const sellOpportunityScore = Math.round(regimeScore + drawdownScore + gainScore);
+    if (gainPct < 60 || sellOpportunityScore < 55) continue;
 
-      const quantityToSell = st.balance * tier.sellPct;
+    const sellPct =
+      sellOpportunityScore >= 115 ? 0.25 :
+      sellOpportunityScore >= 95 ? 0.20 :
+      sellOpportunityScore >= 75 ? 0.15 :
+      0.10;
+    const saleKey = `proposed-sale-${assetId}-${regime}-${Math.floor(sellOpportunityScore / 10) * 10}`;
+    if (st.usedSaleProposalIds.has(saleKey)) continue;
+
+      const quantityToSell = st.balance * sellPct;
       const remainingAfterSale = st.balance - quantityToSell;
       if (quantityToSell < 0.000001 || remainingAfterSale <= 0) continue;
 
@@ -506,11 +526,10 @@ function evaluateProposedSales(
         priceEur,
         gainEur,
         taxEur,
-        description: `Venta parcial hipotética ${assetId}: tramo ${tier.label}, ${(tier.sellPct * 100).toFixed(0)}% vendido; reserva fiscal ${fmtEur(taxEur)}, EURC libre ${fmtEur(eurcEur)}`,
+        description: `Venta parcial hipotética ${assetId}: régimen ${regime}, score ${sellOpportunityScore}, ${(sellPct * 100).toFixed(0)}% vendido; reserva fiscal ${fmtEur(taxEur)}, EURC libre ${fmtEur(eurcEur)}`,
       });
 
-      break;
-    }
+      continue;
   }
 }
 
@@ -601,6 +620,7 @@ function evaluateProposedRebuys(
   cycle: SimCycle,
   state: MonthlyState,
   prices: Record<string, Record<string, number>>,
+  marketRegimes: Record<string, Record<string, MarketRegime>>,
   mKey: string,
   options: SimOptions,
   date: number,
@@ -610,11 +630,7 @@ function evaluateProposedRebuys(
   if (mode !== "INTELLIGENT_STRATEGY" && mode !== "HYBRID") return;
   if (state.eurcFree < 1) return;
 
-  const DEFAULT_TIERS = [
-    { drawdown: 0.40, usePct: 0.50 },
-    { drawdown: 0.25, usePct: 0.30 },
-    { drawdown: 0.15, usePct: 0.20 },
-  ];
+  const stabilizationRegimes = new Set<MarketRegime>(["CAPITULATION", "ACCUMULATION", "EARLY_RECOVERY"]);
 
   const eligibleAssets = cycleAssets.filter(ca => {
     const st = state.assetStates[ca.assetId];
@@ -627,16 +643,22 @@ function evaluateProposedRebuys(
     const priceEur = prices[ca.assetId]?.[mKey];
     if (!priceEur || priceEur <= 0) continue;
     if (!st.lastSalePriceEur || st.lastSalePriceEur <= 0 || !st.lastSaleDate) continue;
+    const regime = marketRegimes[ca.assetId]?.[mKey] ?? "INSUFFICIENT_DATA";
+    if (!stabilizationRegimes.has(regime)) continue;
 
     const drawdown = (st.lastSalePriceEur - priceEur) / st.lastSalePriceEur;
+    if (drawdown < 0.18) continue;
 
-    for (const tier of DEFAULT_TIERS) {
-      if (drawdown < tier.drawdown) continue;
+    const regimeScore = regime === "CAPITULATION" ? 48 : regime === "ACCUMULATION" ? 38 : 30;
+    const drawdownScore = Math.min(45, drawdown * 100);
+    const rebuyOpportunityScore = Math.round(regimeScore + drawdownScore);
+    if (rebuyOpportunityScore < 56) continue;
 
-      const tierKey = `proposed-rebuy-${ca.assetId}-${Math.round(tier.drawdown * 100)}-sale${Math.round(st.lastSalePriceEur)}`;
+      const usePct = rebuyOpportunityScore >= 88 ? 0.50 : rebuyOpportunityScore >= 72 ? 0.35 : 0.20;
+      const tierKey = `proposed-rebuy-${ca.assetId}-${regime}-${Math.floor(rebuyOpportunityScore / 10) * 10}-sale${Math.round(st.lastSalePriceEur)}`;
       if (st.usedRebuyTierIds.has(tierKey)) continue;
 
-      const eurcToUse = state.eurcFree * tier.usePct;
+      const eurcToUse = state.eurcFree * usePct;
       if (eurcToUse < 0.5) continue;
 
       const commission = eurcToUse * options.commissionRate;
@@ -670,11 +692,10 @@ function evaluateProposedRebuys(
         amountEur: eurcToUse,
         quantity,
         priceEur,
-        description: `Recompra hipotética ${ca.assetId}: −${(drawdown * 100).toFixed(0)}% desde venta previa; usa ${fmtEur(eurcToUse)} de EURC libre`,
+        description: `Recompra hipotética ${ca.assetId}: régimen ${regime}, score ${rebuyOpportunityScore}, −${(drawdown * 100).toFixed(0)}% desde venta previa; usa ${fmtEur(eurcToUse)} de EURC libre`,
       });
 
       break; // solo el primer umbral activado por mes y activo
-    }
   }
 }
 
@@ -786,6 +807,7 @@ function simulateMonth(
   date: number,
   input: SimInput,
   prices: Record<string, Record<string, number>>,
+  marketRegimes: Record<string, Record<string, MarketRegime>>,
   options: SimOptions,
 ): MonthlyState {
   const mKey = monthKey(date);
@@ -963,7 +985,7 @@ function simulateMonth(
     evaluateSales(activeCycle, next, prices, mKey, options, date);
   }
   if (strategyMode === "INTELLIGENT_STRATEGY" || strategyMode === "HYBRID") {
-    evaluateProposedSales(next, prices, mKey, options, date);
+    evaluateProposedSales(next, prices, marketRegimes, mKey, options, date);
   }
 
   // 6. Add monthly contribution
@@ -1052,7 +1074,7 @@ function simulateMonth(
   if (activeCycle) {
     evaluateRebuys(activeCycle, next, prices, mKey, options, date);
     if (strategyMode === "INTELLIGENT_STRATEGY" || strategyMode === "HYBRID") {
-      evaluateProposedRebuys(activeCycle, next, prices, mKey, options, date, cycleAssets);
+      evaluateProposedRebuys(activeCycle, next, prices, marketRegimes, mKey, options, date, cycleAssets);
     }
   }
 
@@ -1357,8 +1379,11 @@ function runScenario(
   }
 
   // Construir mapas de precios a partir exclusivamente de previsiones externas verificables.
-  // Sin modelo de ciclos interno. Sin carry-forward.
+  // Los anclajes externos fijan la escala de largo plazo; la trayectoria mensual
+  // la genera el motor de regímenes para evitar interpolaciones alcistas lineales.
   const externalResultsByAsset: Record<string, ReturnType<typeof buildExternalPriceMap>> = {};
+  const marketPathsByAsset: Record<string, MarketRegimePath> = {};
+  const marketRegimes: Record<string, Record<string, MarketRegime>> = {};
   const prices: Record<string, Record<string, number>> = {};
   for (const assetId of allAssetIds) {
     const currentPrice = currentPriceMap[assetId];
@@ -1375,6 +1400,7 @@ function runScenario(
         lastCoveredYear: null,
         sourceCount: 0,
       };
+      marketRegimes[assetId] = {};
       prices[assetId] = {};
       continue;
     }
@@ -1387,8 +1413,20 @@ function runScenario(
       forecastDataset.sources,
       { usdToEurRate: forecastDataset.usdToEurRate, fxSource: forecastDataset.fxSource },
     );
+    const tier = getAssetTier(assetId);
+    const marketPath = buildMarketRegimePricePath({
+      assetId,
+      tier,
+      scenario,
+      currentPriceEur: currentPrice,
+      nowMs: input.now,
+      horizonMs: input.horizonDate,
+      anchorPricesByMonth: result.pricesByMonth,
+    });
     externalResultsByAsset[assetId] = result;
-    prices[assetId] = result.pricesByMonth;
+    marketPathsByAsset[assetId] = marketPath;
+    marketRegimes[assetId] = marketPath.regimesByMonth;
+    prices[assetId] = marketPath.pricesByMonth;
   }
 
   // Trazabilidad de previsiones por activo (exclusivamente externa)
@@ -1441,7 +1479,7 @@ function runScenario(
 
   const d = new Date(startD);
   while (d.getTime() <= input.horizonDate) {
-    state = simulateMonth(state, d.getTime(), input, prices, options);
+    state = simulateMonth(state, d.getTime(), input, prices, marketRegimes, options);
     allMonthlyStates.push({ year: d.getFullYear(), state });
     d.setMonth(d.getMonth() + 1);
   }
@@ -1600,12 +1638,24 @@ function runScenario(
     assetSummaries,
   };
 
+  const marketDiagnostics = Object.values(marketPathsByAsset).reduce(
+    (acc, path) => {
+      for (const point of path.points) {
+        if (point.assetReturn < -0.0001) acc.negativeMonths += 1;
+        acc.regimeCounts[point.regime] = (acc.regimeCounts[point.regime] ?? 0) + 1;
+      }
+      return acc;
+    },
+    { negativeMonths: 0, regimeCounts: {} as Record<string, number> },
+  );
+
   return {
     scenario,
     label: SCENARIO_LABELS[scenario],
     annualSnapshots,
     summary,
     assetPriceInfo,
+    marketDiagnostics,
   };
 }
 
@@ -1696,7 +1746,7 @@ export function runPerspectivesSimulation(
     ? baseResult.annualSnapshots.filter(s => s.marketGainEur < 0).length
     : 0;
   const negativeMonthCount = results.reduce((acc, r) =>
-    acc + r.annualSnapshots.filter(s => s.marketGainEur < 0).length, 0);
+    acc + (r.marketDiagnostics?.negativeMonths ?? 0), 0);
   const maxDrawdownPct = baseResult?.summary.maxDrawdownPct ?? null;
 
   // Per-scenario diagnostics for validation
@@ -1705,6 +1755,8 @@ export function runPerspectivesSimulation(
     negativeYears: r.annualSnapshots.filter(s => (s.annualReturnPct ?? 0) < -0.5).length,
     positiveYears: r.annualSnapshots.filter(s => (s.annualReturnPct ?? 0) > 0.5).length,
     lateralYears:  r.annualSnapshots.filter(s => Math.abs(s.annualReturnPct ?? 0) <= 0.5).length,
+    negativeMonths: r.marketDiagnostics?.negativeMonths ?? 0,
+    regimeCounts: r.marketDiagnostics?.regimeCounts ?? {},
     maxDrawdownPct: r.summary.maxDrawdownPct ?? 0,
     isStrictlyMonotonic: r.annualSnapshots.every((s, i, a) => i === 0 || s.closingWealthEur >= a[i-1].closingWealthEur),
     totalSalesEur: r.summary.totalSalesEur,
@@ -1721,11 +1773,12 @@ export function runPerspectivesSimulation(
 
   const diagnostics: SimDiagnostics = {
     engineIsNew: true,
-    source: "perspectives-external-forecasts",
+    source: "market-regime-engine+active-forecast-anchors",
     candidateId: forecastDataset.candidateId,
-    engineVersion: "perspectives-v3.0-active-dataset",
+    engineVersion: "perspectives-v4.0-market-regimes",
     engineBuildHash: "realtime-perspectives-engine",
     engineGeneratedAt: Date.now(),
+    marketRegimeEngine: true,
     negativeMonthCount,
     negativeYearCount,
     maxDrawdownPct,

@@ -210,6 +210,10 @@ export interface ScenarioResult {
   annualSnapshots: AnnualSnapshot[];
   summary: ScenarioSummary;
   assetPriceInfo: Record<string, AssetPriceInfo>;
+  marketDiagnostics?: {
+    negativeMonths: number;
+    regimeCounts: Record<string, number>;
+  };
 }
 
 export interface ScenarioSummary {
@@ -276,6 +280,8 @@ export interface ScenarioDiagnostic {
   negativeYears: number;
   positiveYears: number;
   lateralYears: number;
+  negativeMonths: number;
+  regimeCounts: Record<string, number>;
   maxDrawdownPct: number;
   isStrictlyMonotonic: boolean;
   totalSalesEur: number;
@@ -285,11 +291,12 @@ export interface ScenarioDiagnostic {
 
 export interface SimDiagnostics {
   engineIsNew: true;
-  source: "perspectives-external-forecasts";
+  source: "perspectives-external-forecasts" | "market-regime-engine+active-forecast-anchors";
   candidateId: string | null;
   engineVersion: string;
   engineBuildHash: string;
   engineGeneratedAt: number;
+  marketRegimeEngine: boolean;
   negativeMonthCount: number;
   negativeYearCount: number;
   maxDrawdownPct: number | null;

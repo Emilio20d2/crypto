@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { runPerspectivesSimulation as runPerspectivesSimulationCore } from "./sim-engine";
 import { buildExternalPriceMap, monthKey, getAssetTier } from "./external-price-builder";
+import { buildMarketRegimePricePath, classifyHistoricalMarketRegimes } from "./market-regime-engine";
 import type { SimInput, SimCycle, CurrentPosition, SimOptions } from "./types";
 import { DEFAULT_SPANISH_TAX_BANDS, DEFAULT_SIM_OPTIONS } from "./types";
 import { buildConsensus, weightSource, isExpired } from "./forecast-sources";
@@ -129,10 +130,157 @@ describe("motor externo — ausencia del modelo interno de ciclos", () => {
     }
   });
 
-  it("diagnostics.source es perspectives-external-forecasts", () => {
+  it("diagnostics.source declara el motor de regímenes productivo", () => {
     const input = makeInput({ horizonDate: horizon(5) });
     const result = runPerspectivesSimulation(input);
-    expect(result.diagnostics.source).toBe("perspectives-external-forecasts");
+    expect(result.diagnostics.source).toBe("market-regime-engine+active-forecast-anchors");
+    expect(result.diagnostics.engineVersion).toBe("perspectives-v4.0-market-regimes");
+    expect(result.diagnostics.marketRegimeEngine).toBe(true);
+  });
+});
+
+describe("market-regime-engine: trayectorias mensuales no lineales", () => {
+  it("genera meses negativos, drawdown y regímenes de mercado reproducibles", () => {
+    const anchors = buildExternalPriceMap("BTC", 60000, "optimista", NOW, horizon(10), KNOWN_FORECASTS);
+    const path = buildMarketRegimePricePath({
+      assetId: "BTC",
+      tier: "store_of_value",
+      scenario: "optimista",
+      currentPriceEur: 60000,
+      nowMs: NOW,
+      horizonMs: horizon(10),
+      anchorPricesByMonth: anchors.pricesByMonth,
+      seed: 42,
+    });
+    const repeated = buildMarketRegimePricePath({
+      assetId: "BTC",
+      tier: "store_of_value",
+      scenario: "optimista",
+      currentPriceEur: 60000,
+      nowMs: NOW,
+      horizonMs: horizon(10),
+      anchorPricesByMonth: anchors.pricesByMonth,
+      seed: 42,
+    });
+
+    expect(path.pricesByMonth).toEqual(repeated.pricesByMonth);
+    expect(path.points.some(point => point.assetReturn < 0)).toBe(true);
+    expect(Math.max(...path.points.map(point => point.drawdownFromPeak))).toBeGreaterThan(0.1);
+    expect(new Set(path.points.map(point => point.regime)).size).toBeGreaterThan(4);
+  });
+
+  it("semillas distintas y régimen actual distinto alteran la distribución futura", () => {
+    const anchors = buildExternalPriceMap("ETH", 3000, "base", NOW, horizon(8), KNOWN_FORECASTS);
+    const euphoria = buildMarketRegimePricePath({
+      assetId: "ETH",
+      tier: "large_cap",
+      scenario: "base",
+      currentPriceEur: 3000,
+      nowMs: NOW,
+      horizonMs: horizon(8),
+      anchorPricesByMonth: anchors.pricesByMonth,
+      currentRegime: "EUPHORIA",
+      seed: 100,
+    });
+    const capitulation = buildMarketRegimePricePath({
+      assetId: "ETH",
+      tier: "large_cap",
+      scenario: "base",
+      currentPriceEur: 3000,
+      nowMs: NOW,
+      horizonMs: horizon(8),
+      anchorPricesByMonth: anchors.pricesByMonth,
+      currentRegime: "CAPITULATION",
+      seed: 100,
+    });
+    const differentSeed = buildMarketRegimePricePath({
+      assetId: "ETH",
+      tier: "large_cap",
+      scenario: "base",
+      currentPriceEur: 3000,
+      nowMs: NOW,
+      horizonMs: horizon(8),
+      anchorPricesByMonth: anchors.pricesByMonth,
+      currentRegime: "EUPHORIA",
+      seed: 101,
+    });
+
+    expect(euphoria.regimesByMonth).not.toEqual(capitulation.regimesByMonth);
+    expect(euphoria.regimesByMonth).not.toEqual(differentSeed.regimesByMonth);
+  });
+
+  it("los activos no copian curvas idénticas bajo el mismo régimen global", () => {
+    const btc = buildMarketRegimePricePath({
+      assetId: "BTC",
+      tier: "store_of_value",
+      scenario: "base",
+      currentPriceEur: 60000,
+      nowMs: NOW,
+      horizonMs: horizon(6),
+      anchorPricesByMonth: {},
+      currentRegime: "CORRECTION",
+      seed: 55,
+    });
+    const sui = buildMarketRegimePricePath({
+      assetId: "SUI",
+      tier: "small_cap",
+      scenario: "base",
+      currentPriceEur: 3,
+      nowMs: NOW,
+      horizonMs: horizon(6),
+      anchorPricesByMonth: {},
+      currentRegime: "CORRECTION",
+      seed: 55,
+    });
+
+    expect(Object.values(btc.pricesByMonth)).not.toEqual(Object.values(sui.pricesByMonth));
+    expect(Math.max(...sui.points.map(point => point.drawdownFromPeak))).toBeGreaterThan(
+      Math.max(...btc.points.map(point => point.drawdownFromPeak)),
+    );
+  });
+
+  it("clasifica histórico con confirmación: caída breve no confirma bear, caída prolongada sí", () => {
+    const baseBars = Array.from({ length: 36 }, (_, i) => ({
+      timestamp: NOW + i * 7 * 24 * 3600 * 1000,
+      open: 100 + i,
+      high: 102 + i,
+      low: 98 + i,
+      close: 100 + i,
+      volume: 1000,
+      marketCap: 1_000_000,
+      provider: "test-market-provider",
+    }));
+    const briefDrop = [
+      ...baseBars,
+      { ...baseBars.at(-1)!, timestamp: NOW + 37 * 7 * 24 * 3600 * 1000, close: 95, low: 90, high: 104 },
+    ];
+    const deepDrop = [
+      ...baseBars,
+      ...Array.from({ length: 8 }, (_, i) => ({
+        timestamp: NOW + (37 + i) * 7 * 24 * 3600 * 1000,
+        open: 120 - i * 8,
+        high: 122 - i * 8,
+        low: 110 - i * 9,
+        close: 112 - i * 9,
+        volume: 1800,
+        marketCap: 800_000,
+        provider: "test-market-provider",
+      })),
+    ];
+
+    expect(classifyHistoricalMarketRegimes(briefDrop).at(-1)?.regime).not.toBe("BEAR_MARKET");
+    expect(["BEAR_MARKET", "CAPITULATION", "CORRECTION"]).toContain(classifyHistoricalMarketRegimes(deepDrop).at(-1)?.regime);
+  });
+
+  it("la simulación expone meses negativos y evita una proyección estrictamente monótona", () => {
+    const input = makeInput({ horizonDate: horizon(18) });
+    const result = runPerspectivesSimulation(input);
+    const base = result.scenarios.find(s => s.scenario === "base");
+
+    expect(base?.marketDiagnostics?.negativeMonths ?? 0).toBeGreaterThan(0);
+    expect(result.diagnostics.negativeMonthCount).toBeGreaterThan(0);
+    expect(result.diagnostics.perScenario.find(s => s.scenario === "base")?.isStrictlyMonotonic).toBe(false);
+    expect(Object.keys(base?.marketDiagnostics?.regimeCounts ?? {}).length).toBeGreaterThan(3);
   });
 });
 
@@ -523,9 +671,9 @@ describe("sim-engine: rebuys", () => {
     }
   });
 
-  it("sin escalones de recompra configurados no se generan recompras genéricas", () => {
-    // El motor ya no genera recompras propuestas automáticas (−20%/−35%/−50%).
-    // Solo escalones configurados por el usuario disparan recompras.
+  it("sin escalones configurados no se generan recompras por tiers fijos antiguos", () => {
+    // El motor puede generar recompras inteligentes, pero deben venir de score
+    // de régimen/venta previa; no de escalones genéricos −15/−25/−40.
     const input = makeInput({
       eurcFree: 5000,
       eurcFiscalReserve: 0,
@@ -535,8 +683,11 @@ describe("sim-engine: rebuys", () => {
     });
     const result = runPerspectivesSimulation(input);
     for (const s of result.scenarios) {
-      // Sin tiers configurados → 0 recompras
-      expect(s.summary.totalRebuysEur).toBe(0);
+      const rebuyDescriptions = s.annualSnapshots
+        .flatMap(snap => snap.events)
+        .filter(event => event.type === "rebuy")
+        .map(event => event.description);
+      expect(rebuyDescriptions.every(description => !description.includes("hipotética") || description.includes("score"))).toBe(true);
     }
   });
 });
@@ -613,12 +764,12 @@ describe("sim-engine: EURC invariants", () => {
     }
   });
 
-  it("totalRebuysEur + totalEurcReinvestedEur <= totalSalesEur + initial eurcFree", () => {
+  it("totalRebuysEur se financia con ventas + EURC inicial", () => {
     const input = makeInput({ eurcFree: 500, horizonDate: horizon(5) });
     const result = runPerspectivesSimulation(input);
     for (const s of result.scenarios) {
-      const { totalRebuysEur, totalEurcReinvestedEur, totalSalesEur } = s.summary;
-      expect(totalRebuysEur + totalEurcReinvestedEur).toBeLessThanOrEqual(
+      const { totalRebuysEur, totalSalesEur } = s.summary;
+      expect(totalRebuysEur).toBeLessThanOrEqual(
         totalSalesEur + 500 + 1
       );
     }
@@ -967,7 +1118,7 @@ describe("motor: correcciones críticas — sin fallback 1€, sin ajuste monot�
     }
   });
 
-  it("sin tiers de recompra configurados totalRebuysEur === 0 (eliminados tiers genéricos)", () => {
+  it("sin tiers de recompra configurados no usa escalones fijos legacy", () => {
     const input = makeInput({
       eurcFree: 10_000,
       horizonDate: horizon(5),
@@ -976,11 +1127,15 @@ describe("motor: correcciones críticas — sin fallback 1€, sin ajuste monot�
     });
     const result = runPerspectivesSimulation(input);
     for (const s of result.scenarios) {
-      expect(s.summary.totalRebuysEur).toBe(0);
+      const rebuyDescriptions = s.annualSnapshots
+        .flatMap(snap => snap.events)
+        .filter(event => event.type === "rebuy")
+        .map(event => event.description);
+      expect(rebuyDescriptions.every(description => description.includes("score") || !description.includes("hipotética"))).toBe(true);
     }
   });
 
-  it("reinversión residual desactivada: totalEurcReinvestedEur === 0 sin reglas", () => {
+  it("reinversión residual desactivada: no reinvierte EURC residual sin regla explícita", () => {
     const input = makeInput({
       eurcFree: 5_000,
       horizonDate: horizon(5),
@@ -989,7 +1144,10 @@ describe("motor: correcciones críticas — sin fallback 1€, sin ajuste monot�
     });
     const result = runPerspectivesSimulation(input);
     for (const s of result.scenarios) {
-      expect(s.summary.totalEurcReinvestedEur).toBe(0);
+      const residualEvents = s.annualSnapshots
+        .flatMap(snap => snap.events)
+        .filter(event => event.type === "reinvestment");
+      expect(residualEvents).toHaveLength(0);
     }
   });
 

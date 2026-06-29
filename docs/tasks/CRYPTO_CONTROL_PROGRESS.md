@@ -218,6 +218,76 @@ Cambios realizados en esta fase
 
 Resultado local después del cambio
 
+Actualización 2026-06-29 — Corrección bloqueante definitiva de Perspectivas
+
+Nueva ampliación recibida
+
+Adjuntos leídos completos:
+
+- `CORRECCIÓN BLOQUEANTE DEFINITIVA — RECONSTRUIR EL MOTOR COMPLETO DE PERSPECTIVAS CON CICLOS ALCISTAS, BAJISTAS, MERCADOS LATERALES, VENTAS PARCIALES Y RECOMPRAS`.
+- `AMPLIACIÓN BLOQUEANTE — ORIGEN Y CÁLCULO DE LOS PERIODOS ALCISTAS, BAJISTAS Y LATERALES`.
+
+Cambios realizados
+
+- Añadido `packages/portfolio/src/perspectives/market-regime-engine.ts`.
+- `runPerspectivesSimulation()` ya no consume directamente la interpolación mensual de `buildExternalPriceMap()` como trayectoria final.
+- Los precios externos verificados quedan como anclajes de largo plazo; la trayectoria mensual productiva se genera con un motor de regímenes.
+- Eliminada la secuencia fija de regímenes por escenario que se había introducido inicialmente en esta fase.
+- Añadido modelo explícito de transición probabilística entre regímenes, con duración muestreada, semilla reproducible y sesgo por escenario/tipo de activo.
+- Añadido clasificador histórico `classifyHistoricalMarketRegimes()` con señales múltiples e histéresis: rentabilidad, medias, drawdown, volumen y confirmación mínima.
+- Añadido `CurrentMarketRegime` inyectable como `currentRegime` en el generador de trayectoria.
+- Añadidos diagnósticos productivos: `marketRegimeEngine`, `negativeMonths` y `regimeCounts`.
+- Ventas/recompras inteligentes pasan a depender de régimen y score (`SellOpportunityScore`/`RebuyOpportunityScore`), no de tramos fijos `+50/+100/+200` o `-15/-25/-40`.
+
+Evidencia numérica local
+
+- `diagnostics.source`: `market-regime-engine+active-forecast-anchors`.
+- `engineVersion`: `perspectives-v4.0-market-regimes`.
+- `marketRegimeEngine`: `true`.
+- `negativeMonthCount`: 481 en la prueba reproducible 2026-2044.
+- `realisticCycleValidation`: `passed`.
+- Los cinco escenarios existen: conservador, moderado, base, favorable y optimista.
+- Ningún escenario es estrictamente monótono.
+- Optimista conserva periodos negativos: 99 meses negativos en la prueba reproducible.
+- Control 2036-2044 deja de ser `cierre = apertura + aportación - comisión`; todos los años revisados tienen resultado de mercado distinto de cero en la prueba reproducible.
+- Ejemplo 2036-2044, escenario base: 2036 `+9.618`, 2037 `+71`, 2038 `-9.693`, 2039 `+15.093`, 2040 `+15.388`, 2041 `+18.557`, 2042 `-8.388`, 2043 `+2.018`, 2044 `+40.522` EUR de resultado de mercado.
+
+Pruebas añadidas
+
+- Misma semilla produce misma trayectoria.
+- Semilla distinta produce trayectoria distinta.
+- Cambiar régimen actual cambia la distribución futura.
+- Optimista contiene meses negativos y drawdown.
+- Activos distintos no copian la misma curva.
+- Una caída breve no confirma mercado bajista.
+- Una caída profunda/prolongada puede clasificar corrección/bajista/capitulación.
+- Simulación expone meses negativos, conteo de regímenes y evita proyección estrictamente monótona.
+
+Pruebas ejecutadas en esta fase
+
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix packages/portfolio test -- src/perspectives/sim-engine.test.ts` — OK, 67 tests.
+- `npm --prefix packages/portfolio test` — OK, 18 files / 377 tests.
+- `npm --prefix packages/database run typecheck` — OK.
+- `npm --prefix packages/database test` — OK, 5 files / 25 tests.
+- `npm --prefix packages/market-data run typecheck` — OK.
+- `npm --prefix packages/market-data test` — OK, 5 files / 49 tests.
+- `npm --prefix packages/coinbase-sync run typecheck` — OK.
+- `npm --prefix packages/coinbase-sync test` — OK, 5 files / 62 tests.
+- `npm --prefix packages/core run typecheck` — OK.
+- `npm --prefix apps/desktop run typecheck` — OK.
+- `npm --prefix apps/web run typecheck` — OK.
+- `npm --prefix apps/web test` — OK, 12 files / 143 tests.
+- `npm --prefix apps/web run lint` — OK.
+- `npm --prefix apps/web run build` — OK.
+- `npm run build:desktop` — OK.
+- `npm --prefix packages/portfolio run build` — OK, necesario antes de empaquetar para que Electron incluya `packages/portfolio/dist` actualizado.
+- `npm run dist:mac` — OK.
+- DMG final: `dist-packaged/Crypto Control-0.1.0-arm64.dmg`.
+- SHA-256 final: `2b814d3de28a540cac80f2bce0061914d531cfeecc62b1b8b2f2bb856e640d1f`.
+- Instalación final en `/Applications/Crypto Control.app` — OK.
+- Verificación IPC instalada `persp2:getSimulation` — OK: `source = market-regime-engine+active-forecast-anchors`, `engineVersion = perspectives-v4.0-market-regimes`, `marketRegimeEngine = true`, cinco escenarios presentes, `realisticCycleValidation = passed`.
+
 Ejecución local del motor modificado contra SQLite real y snapshot vivo:
 
 - Conservador: neto 78.963,13 EUR; ventas 0; recompras 0; impuestos 0.
