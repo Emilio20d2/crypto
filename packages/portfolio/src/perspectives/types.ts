@@ -43,6 +43,16 @@ export interface SimLot {
   remaining: number;
   costPerUnitEur: number;
   source: "historical" | "sim_plan" | "sim_rebuy" | "sim_extraordinary";
+  fundingOrigin: "EXTERNAL_CONTRIBUTION" | "INTERNAL_REBUY" | "INTERNAL_REALLOCATION" | "INITIAL_POSITION";
+  sourceEurcBucketId: string | null;
+  profitHarvestCycleId: string | null;
+  purchaseDate: number;
+  purchasePriceEur: number;
+  purchaseValueEur: number;
+  acquisitionCostsEur: number;
+  units: number;
+  openUnits: number;
+  costBasisEur: number;
 }
 
 // ─── Estado de un activo en un punto de la simulación ────────────────────────
@@ -86,6 +96,8 @@ export interface MonthlyState {
   monthExternalPurchasesEur: number;
   monthReinvestedCapitalEur: number;
   monthDeployedCapitalEur: number;
+  monthInternalRebuyPrincipalEur: number;
+  monthInternalRebuyRealizedGainEur: number;
   // acumulados del escenario hasta este mes
   cumulativeContributionsEur: number;
   cumulativeSalesEur: number;
@@ -93,6 +105,8 @@ export interface MonthlyState {
   cumulativeExternalPurchasesEur: number;
   cumulativeReinvestedCapitalEur: number;
   cumulativeDeployedCapitalEur: number;
+  cumulativeInternalRebuyPrincipalEur: number;
+  cumulativeInternalRebuyRealizedGainEur: number;
   cumulativeTaxEur: number;
   cumulativeRealizedGainEur: number;
   cumulativeCommissionsEur: number;
@@ -122,6 +136,16 @@ export interface AnnualSnapshot {
   externalPurchasesEur: number;
   reinvestedCapitalEur: number;
   deployedCapitalEur: number;
+  internalRebuyPrincipalEur: number;
+  cumulativeInternalRebuyPrincipalEur: number;
+  internalRebuyOpenCostBasisEur: number;
+  internalRebuyCurrentMarketValueEur: number;
+  internalRebuyUnrealizedGainEur: number;
+  internalRebuyRealizedGainEur: number;
+  internalRebuyTotalReturnEur: number;
+  internalRebuyTotalReturnPct: number | null;
+  internalRebuyUnitsOpen: number;
+  internalRebuyUnitsSold: number;
 
   // Stock a fin de año
   fiscalReserveEur: number;
@@ -286,6 +310,16 @@ export interface AnnualStrategyReview {
   eurcGeneratedEur: number;
   rebuysEur: number;
   reinvestedCapitalEur: number;
+  internalRebuyPrincipalEur: number;
+  cumulativeInternalRebuyPrincipalEur: number;
+  internalRebuyOpenCostBasisEur: number;
+  internalRebuyCurrentMarketValueEur: number;
+  internalRebuyUnrealizedGainEur: number;
+  internalRebuyRealizedGainEur: number;
+  internalRebuyTotalReturnEur: number;
+  internalRebuyTotalReturnPct: number | null;
+  internalRebuyUnitsOpen: number;
+  internalRebuyUnitsSold: number;
   finalEurcEur: number;
   finalFiscalReserveEur: number;
   openingUnitsByAsset: Record<string, number>;
@@ -330,6 +364,16 @@ export interface ScenarioSummary {
   totalExternalPurchasesEur: number;
   reinvestedCapitalEur: number;
   cumulativeDeployedCapitalEur: number;
+  internalRebuyPrincipalEur: number;
+  cumulativeInternalRebuyPrincipalEur: number;
+  internalRebuyOpenCostBasisEur: number;
+  internalRebuyCurrentMarketValueEur: number;
+  internalRebuyUnrealizedGainEur: number;
+  internalRebuyRealizedGainEur: number;
+  internalRebuyTotalReturnEur: number;
+  internalRebuyTotalReturnPct: number | null;
+  internalRebuyUnitsOpen: number;
+  internalRebuyUnitsSold: number;
   currentInvestedCapitalEur: number;
   eurcOperatingLiquidityEur: number;
   eurcFiscalReserveEur: number;

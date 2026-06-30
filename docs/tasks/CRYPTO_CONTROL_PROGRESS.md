@@ -691,3 +691,49 @@ Pendiente de este bloque antes de otro DMG
 - Commit del bloque: `d4cd65db6d383594cdc71bd9ccbf4b9a11524686`.
 - Push de `codex/final-engine-rebuild` — OK.
 - Fast-forward de `main` a `d4cd65db6d383594cdc71bd9ccbf4b9a11524686` — OK.
+
+Actualización 2026-06-30 — Rentabilidad real de recompras y recuperación de gráficas de Cartera
+
+Nueva ampliación recibida
+
+- `AMPLIACIÓN BLOQUEANTE — RENTABILIDAD REAL DE LAS RECOMPRAS Y RECUPERACIÓN ROBUSTA DE LAS GRÁFICAS DE CARTERA`.
+
+Auditoría específica
+
+- Ruta productiva de recompras: `packages/portfolio/src/perspectives/sim-engine.ts`, funciones `evaluateRebuys()` y `evaluateProposedRebuys()`, consumida por `persp2:getSimulation`.
+- La recompra ya sumaba unidades y creaba un lote `sim_rebuy`, pero no exponía origen de financiación ni métricas separadas de rentabilidad atribuible a lotes recomprados.
+- Las ventas posteriores usaban FIFO global, pero no separaban plusvalía/minusvalía realizada de lotes de recompra.
+- Ruta productiva de gráfica de Cartera: `apps/desktop/src/main.ts`, handler `portfolio:get-historical-series`.
+- La reconstrucción usa `buildPortfolioValueGrid()` con cantidades históricas y precios de `price_history`/caché/mercado, pero para `1h` y `24h` devolvía temprano si no había suficientes puntos intradía, aunque existiera caché persistente parcial.
+
+Cambios realizados
+
+- `SimLot` ahora registra `fundingOrigin`, `sourceEurcBucketId`, `profitHarvestCycleId`, `purchaseDate`, `purchasePriceEur`, `purchaseValueEur`, `acquisitionCostsEur`, `units`, `openUnits` y `costBasisEur`.
+- Las compras del Plan crean lotes `EXTERNAL_CONTRIBUTION`.
+- Las recompras configuradas e inteligentes crean lotes `INTERNAL_REBUY` con bolsa EURC trazable y costes de adquisición.
+- Las reinversiones/sustituciones internas crean lotes `INTERNAL_REALLOCATION`.
+- Añadidas métricas explicativas: `internalRebuyPrincipalEur`, `cumulativeInternalRebuyPrincipalEur`, `internalRebuyOpenCostBasisEur`, `internalRebuyCurrentMarketValueEur`, `internalRebuyUnrealizedGainEur`, `internalRebuyRealizedGainEur`, `internalRebuyTotalReturnEur`, `internalRebuyTotalReturnPct`, `internalRebuyUnitsOpen`, `internalRebuyUnitsSold`.
+- Las métricas anteriores se exponen en `AnnualSnapshot`, `AnnualStrategyReview` y `ScenarioSummary`.
+- Las ventas FIFO atribuyen ganancia realizada a lotes `INTERNAL_REBUY` cuando consumen esos lotes.
+- `portfolio:get-historical-series` ahora devuelve metadatos de estado/cobertura: `state`, `provider`, `generatedAt`, `oldestPointAt`, `newestPointAt`, `pointCount`, `expectedPointCount`, `coveragePct`, `missingRanges`, `usedPersistentCache`, `usedExternalFallback`, `isStale`, `warnings`.
+- Para `1h` y `24h`, si fallan la carga exacta y el rescate externo pero existe caché persistente parcial con al menos dos puntos coherentes, se usa como `CACHE_PARTIAL`/`STALE_USABLE` en lugar de dejar la gráfica vacía.
+
+Pruebas ejecutadas
+
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix packages/portfolio test -- src/perspectives/sim-engine.test.ts` — OK, 75 tests.
+- `npm --prefix apps/desktop run typecheck` — OK.
+- `npm --prefix packages/core run typecheck` — OK.
+- `npm --prefix apps/web run typecheck` — OK.
+- `npm --prefix packages/portfolio run test && npm --prefix packages/portfolio run build` — OK, 18 archivos / 385 tests.
+- `npm --prefix apps/web run lint && npm --prefix apps/web run test && npm --prefix apps/web run build` — OK, 12 archivos / 143 tests.
+- `npm --prefix apps/desktop run build` — OK.
+- `npm --prefix packages/core run build` — OK.
+- `npm --prefix packages/database run typecheck && npm --prefix packages/database run test && npm --prefix packages/database run build` — OK, 5 archivos / 25 tests.
+- `npm --prefix packages/market-data run typecheck && npm --prefix packages/market-data run test && npm --prefix packages/market-data run build` — OK, 5 archivos / 49 tests.
+- `npm --prefix packages/coinbase-sync run typecheck && npm --prefix packages/coinbase-sync run test && npm --prefix packages/coinbase-sync run build` — OK, 5 archivos / 62 tests.
+
+Pendiente de este bloque
+
+- Validar la app instalada con datos reales de Cartera y `persp2:getSimulation`.
+- Generar e instalar DMG solo después de superar las validaciones obligatorias.

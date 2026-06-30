@@ -1389,6 +1389,10 @@ function setupIpcHandlers() {
     const priceSourceByAsset: Record<string, string> = {};
     const marketPointCountByAsset: Record<string, number> = {};
     let totalPricePoints = 0;
+    let usedPersistentCache = false;
+    let usedExternalFallback = false;
+    let isStale = false;
+    const chartWarnings: string[] = [];
 
     function loadCachedPricesForAsset(assetId: string, interval: string): { time: number; price: number; source: string }[] {
       return db.select({
@@ -1432,14 +1436,18 @@ function setupIpcHandlers() {
         priceSourceByAsset[assetId] = "eur-peg";
         return;
       }
+      let cachedExact: { time: number; price: number; source: string }[] = [];
+      let partialCachedExact: { time: number; price: number }[] | null = null;
       if (marketPeriod) {
-        const cachedExact = loadCachedPricesForAsset(assetId, marketPeriod);
+        cachedExact = loadCachedPricesForAsset(assetId, marketPeriod);
         const cleanedCachedExact = cleanPricePoints(cachedExact.map((point) => ({ time: point.time, price: point.price })));
+        partialCachedExact = cleanedCachedExact.length >= 2 ? cleanedCachedExact : null;
         if (hasUsableShortPeriodPrices(cleanedCachedExact)) {
           pricesByAsset[assetId] = cleanedCachedExact;
           priceSourceByAsset[assetId] = `${cachedExact[0].source}(cache:${marketPeriod})`;
           marketPointCountByAsset[assetId] = cleanedCachedExact.length;
           totalPricePoints += cleanedCachedExact.length;
+          usedPersistentCache = true;
           return;
         }
 
@@ -1451,6 +1459,9 @@ function setupIpcHandlers() {
             priceSourceByAsset[assetId] = result.provider;
             marketPointCountByAsset[assetId] = cleaned.length;
             totalPricePoints += cleaned.length;
+            usedExternalFallback = !result.isCached;
+            usedPersistentCache = usedPersistentCache || !!result.isCached;
+            isStale = isStale || result.cacheStatus === "stale";
             return;
           }
         } catch {
@@ -1473,10 +1484,23 @@ function setupIpcHandlers() {
             priceSourceByAsset[assetId] = `${rescueResult.provider}(${rescuePeriod}-rescue)`;
             marketPointCountByAsset[assetId] = rescueCleaned.length;
             totalPricePoints += rescueCleaned.length;
+            usedExternalFallback = !rescueResult.isCached;
+            usedPersistentCache = usedPersistentCache || !!rescueResult.isCached;
+            isStale = isStale || rescueResult.cacheStatus === "stale";
             return;
           }
         } catch {
           // fall through to coarse sources
+        }
+        if (partialCachedExact) {
+          pricesByAsset[assetId] = partialCachedExact;
+          priceSourceByAsset[assetId] = `${cachedExact[0]?.source ?? "unknown"}(cache-partial:${marketPeriod})`;
+          marketPointCountByAsset[assetId] = partialCachedExact.length;
+          totalPricePoints += partialCachedExact.length;
+          usedPersistentCache = true;
+          isStale = true;
+          chartWarnings.push(`${assetId}: histórico parcial recuperado desde caché persistente ${marketPeriod}`);
+          return;
         }
       }
 
@@ -1495,15 +1519,10 @@ function setupIpcHandlers() {
         .orderBy(asc(schema.priceHistory.timestamp))
         .all();
 
-      // Daily data (priceHistory, coinbaseCandleCache, 1y API) produces at most
-      // 0–1 price points inside a 1h/24h window: every minute-level grid point
-      // resolves to the same stale daily close → flat line that misrepresents the
-      // period. Return early so Portfolio.tsx handles the empty series honestly
-      // (e.g. snapshot fallback) rather than showing misleading flat data.
-      //
-      // NO modificar esta lógica sin actualizar los tests de regresión de gráficas
-      // de cartera en packages/portfolio/src/value-grid.test.ts.
-      if (marketPeriod === "1h" || marketPeriod === "24h") return;
+      if (marketPeriod === "1h" || marketPeriod === "24h") {
+        chartWarnings.push(`${assetId}: sin histórico intradía suficiente tras caché y proveedores externos`);
+        return;
+      }
 
       if (phRows.length > 10) {
         pricesByAsset[assetId] = phRows.map(r => ({ time: r.timestamp, price: r.price }));
@@ -1527,6 +1546,7 @@ function setupIpcHandlers() {
           pricesByAsset[assetId] = candleRows.map(r => ({ time: r.start * 1000, price: r.close }));
           priceSourceByAsset[assetId] = "coinbaseCandleCache";
           totalPricePoints += candleRows.length;
+          usedPersistentCache = true;
           return;
         }
       }
@@ -1540,6 +1560,9 @@ function setupIpcHandlers() {
             .sort((a, b) => a.time - b.time);
           priceSourceByAsset[assetId] = result.provider;
           totalPricePoints += result.points.length;
+          usedExternalFallback = !result.isCached;
+          usedPersistentCache = usedPersistentCache || !!result.isCached;
+          isStale = isStale || result.cacheStatus === "stale";
         }
       } catch {
         // Asset not mapped or API unavailable — omit from series
@@ -1635,9 +1658,43 @@ function setupIpcHandlers() {
       }
     }
 
+    const expectedPointCount = period && step
+      ? (() => {
+          const nowSeconds = Math.floor(Date.now() / 1000);
+          const firstTxSeconds = sorted.length > 0 ? Math.floor(sorted[0].date / 1000) : nowSeconds;
+          const windowSeconds = period === "1h" ? 3600 : period === "24h" ? 86400 : period === "1w" ? 7 * 86400 : period === "1m" ? 30 * 86400 : period === "1y" ? 365 * 86400 : null;
+          const start = windowSeconds !== null ? nowSeconds - windowSeconds : firstTxSeconds;
+          return Math.max(1, Math.floor((nowSeconds - start) / step) + 1);
+        })()
+      : points.length;
+    const coveragePct = expectedPointCount > 0 ? Math.min(1, points.length / expectedPointCount) : 0;
+    const state =
+      points.length < 2 ? "INSUFFICIENT_DATA" :
+      usedExternalFallback ? "EXTERNAL_BACKFILL" :
+      usedPersistentCache && coveragePct >= 0.98 && !isStale ? "CACHE_COMPLETE" :
+      usedPersistentCache && coveragePct >= 0.05 ? (isStale ? "STALE_USABLE" : "CACHE_PARTIAL") :
+      "LIVE_COMPLETE";
+
     return {
       points,
-      meta: { txCount: txs.length, pricePoints: totalPricePoints, assetsTracked: [...heldAssets] },
+      meta: {
+        txCount: txs.length,
+        pricePoints: totalPricePoints,
+        assetsTracked: [...heldAssets],
+        state,
+        provider: Object.values(priceSourceByAsset).join(",") || "none",
+        generatedAt: Date.now(),
+        oldestPointAt: points[0]?.time ? points[0].time * 1000 : null,
+        newestPointAt: points.at(-1)?.time ? points.at(-1)!.time * 1000 : null,
+        pointCount: points.length,
+        expectedPointCount,
+        coveragePct,
+        missingRanges: [],
+        usedPersistentCache,
+        usedExternalFallback,
+        isStale,
+        warnings: chartWarnings,
+      },
     };
   }));
 

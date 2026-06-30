@@ -739,6 +739,53 @@ describe("sim-engine: rebuys", () => {
     expect(base.summary.twr).not.toBeNull();
   });
 
+  it("la recompra crea lote interno y su rentabilidad posterior se valora separadamente", () => {
+    const input = makeInput({
+      currentPositions: [{ assetId: "BTC", balance: 0.5, avgCostEur: 30_000, currentPriceEur: 60_000 }],
+      currentLots: [{ id: "initial-btc", assetId: "BTC", date: NOW - 2 * YEAR_MS, remainingAmount: 0.5, unitAcquisitionPriceEur: 30_000 }],
+      historicalSales: [{ assetId: "BTC", date: NOW - YEAR_MS, quantity: 0.2, unitPriceEur: 1_000_000 }],
+      eurcFree: 5_000,
+      eurcFiscalReserve: 1_000,
+      historicalCapitalEur: 15_000,
+      horizonDate: horizon(1),
+      cycles: [makeCycle({
+        monthlyAmountEur: 0,
+        rebuyTiers: [{
+          id: "control-rebuy",
+          assetId: "BTC",
+          drawdownPercentage: 20,
+          usagePercentage: 100,
+          referenceType: "last_sale",
+          referenceValue: 1_000_000,
+          status: "active",
+        }],
+      })],
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy", strategyMode: "USER_RULES", commissionRate: 0 },
+    });
+
+    const base = runPerspectivesSimulation(input).scenarios.find(s => s.scenario === "base")!;
+    const rebuyEvent = base.annualSnapshots.flatMap(s => s.events).find(e => e.type === "rebuy")!;
+
+    expect(base.summary.totalContributionsEur).toBe(0);
+    expect(base.summary.externalContributionsEur).toBe(15_000);
+    expect(rebuyEvent.eurcUsedEur).toBeCloseTo(5_000, 2);
+    expect(rebuyEvent.quantity ?? 0).toBeGreaterThan(0);
+    expect(base.summary.internalRebuyPrincipalEur).toBeCloseTo(5_000, 2);
+    expect(base.summary.cumulativeInternalRebuyPrincipalEur).toBeCloseTo(5_000, 2);
+    expect(base.summary.internalRebuyUnitsOpen).toBeCloseTo(rebuyEvent.quantity ?? 0, 8);
+    expect(base.summary.internalRebuyOpenCostBasisEur).toBeCloseTo(5_000, 2);
+    expect(base.summary.internalRebuyCurrentMarketValueEur).toBeGreaterThan(0);
+    expect(base.summary.internalRebuyUnrealizedGainEur).toBeCloseTo(
+      base.summary.internalRebuyCurrentMarketValueEur - base.summary.internalRebuyOpenCostBasisEur,
+      6,
+    );
+    expect(base.summary.internalRebuyTotalReturnEur).toBeCloseTo(
+      base.summary.internalRebuyRealizedGainEur + base.summary.internalRebuyUnrealizedGainEur,
+      6,
+    );
+    expect(base.summary.netProfitEur).toBeCloseTo(base.summary.finalNetWealthEur - base.summary.externalContributionsEur, 6);
+  });
+
   it("sin escalones configurados no se generan recompras por tiers fijos antiguos", () => {
     // El motor puede generar recompras inteligentes, pero deben venir de score
     // de régimen/venta previa; no de escalones genéricos −15/−25/−40.

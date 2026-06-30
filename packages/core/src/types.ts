@@ -264,7 +264,24 @@ export interface CryptoControlAPI {
     getFifoLots(): Promise<Result<FifoLot[]>>;
     getHistoricalSeries(input?: { period?: "1h" | "24h" | "1w" | "1m" | "1y" | "all" }): Promise<Result<{
       points: { time: number; value: number }[];
-      meta: { txCount: number; pricePoints: number; assetsTracked: string[] };
+      meta: {
+        txCount: number;
+        pricePoints: number;
+        assetsTracked: string[];
+        state?: "LIVE_COMPLETE" | "CACHE_COMPLETE" | "CACHE_PARTIAL" | "EXTERNAL_BACKFILL" | "STALE_USABLE" | "INSUFFICIENT_DATA" | "ERROR";
+        provider?: string;
+        generatedAt?: number;
+        oldestPointAt?: number | null;
+        newestPointAt?: number | null;
+        pointCount?: number;
+        expectedPointCount?: number;
+        coveragePct?: number;
+        missingRanges?: Array<{ start: number; end: number }>;
+        usedPersistentCache?: boolean;
+        usedExternalFallback?: boolean;
+        isStale?: boolean;
+        warnings?: string[];
+      };
     }>>;
     backfillCostBasis(): Promise<Result<{
       legsChecked: number;

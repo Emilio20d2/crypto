@@ -64,11 +64,117 @@ function consumeFifo(
   return { consumed, totalCostEur };
 }
 
+function realizedGainFromConsumedLots(
+  consumed: Array<{ lot: SimLot; qty: number; costEur: number }>,
+  priceEur: number,
+  commissionEur: number,
+  fundingOrigin: SimLot["fundingOrigin"],
+): number {
+  const originGross = consumed
+    .filter(item => item.lot.fundingOrigin === fundingOrigin)
+    .reduce((sum, item) => sum + item.qty * priceEur, 0);
+  if (originGross <= 0) return 0;
+  const totalGross = consumed.reduce((sum, item) => sum + item.qty * priceEur, 0);
+  const originCost = consumed
+    .filter(item => item.lot.fundingOrigin === fundingOrigin)
+    .reduce((sum, item) => sum + item.costEur, 0);
+  const attributedCommission = totalGross > 0 ? commissionEur * (originGross / totalGross) : 0;
+  return originGross - attributedCommission - originCost;
+}
+
 function calcAvgCost(lots: SimLot[]): number | null {
   const totalQty = lots.reduce((s, l) => s + l.remaining, 0);
   if (totalQty <= 0) return null;
   const totalCost = lots.reduce((s, l) => s + l.remaining * l.costPerUnitEur, 0);
   return totalCost / totalQty;
+}
+
+function makeLot(input: {
+  id: string;
+  assetId: string;
+  acquiredAt: number;
+  quantity: number;
+  costPerUnitEur: number;
+  source: SimLot["source"];
+  fundingOrigin: SimLot["fundingOrigin"];
+  sourceEurcBucketId?: string | null;
+  profitHarvestCycleId?: string | null;
+  purchaseValueEur?: number;
+  acquisitionCostsEur?: number;
+}): SimLot {
+  const purchaseValueEur = input.purchaseValueEur ?? input.quantity * input.costPerUnitEur;
+  const acquisitionCostsEur = input.acquisitionCostsEur ?? 0;
+  return {
+    id: input.id,
+    assetId: input.assetId,
+    acquiredAt: input.acquiredAt,
+    quantity: input.quantity,
+    remaining: input.quantity,
+    costPerUnitEur: input.costPerUnitEur,
+    source: input.source,
+    fundingOrigin: input.fundingOrigin,
+    sourceEurcBucketId: input.sourceEurcBucketId ?? null,
+    profitHarvestCycleId: input.profitHarvestCycleId ?? null,
+    purchaseDate: input.acquiredAt,
+    purchasePriceEur: input.costPerUnitEur,
+    purchaseValueEur,
+    acquisitionCostsEur,
+    units: input.quantity,
+    openUnits: input.quantity,
+    costBasisEur: purchaseValueEur + acquisitionCostsEur,
+  };
+}
+
+interface InternalRebuyMetrics {
+  principalEur: number;
+  openCostBasisEur: number;
+  currentMarketValueEur: number;
+  unrealizedGainEur: number;
+  realizedGainEur: number;
+  totalReturnEur: number;
+  totalReturnPct: number | null;
+  unitsOpen: number;
+  unitsSold: number;
+}
+
+function calcInternalRebuyMetrics(
+  state: MonthlyState,
+  prices: Record<string, Record<string, number>>,
+  mKey: string,
+): InternalRebuyMetrics {
+  let principalEur = 0;
+  let openCostBasisEur = 0;
+  let currentMarketValueEur = 0;
+  let unitsOpen = 0;
+  let unitsSold = 0;
+  for (const [assetId, st] of Object.entries(state.assetStates)) {
+    const price = prices[assetId]?.[mKey] ?? null;
+    for (const lot of st.lots) {
+      if (lot.fundingOrigin !== "INTERNAL_REBUY") continue;
+      principalEur += lot.purchaseValueEur + lot.acquisitionCostsEur;
+      unitsOpen += lot.remaining;
+      unitsSold += Math.max(0, lot.quantity - lot.remaining);
+      const openRatio = lot.quantity > 0 ? lot.remaining / lot.quantity : 0;
+      openCostBasisEur += lot.remaining * lot.costPerUnitEur + lot.acquisitionCostsEur * openRatio;
+      if (price != null && price > 0) {
+        currentMarketValueEur += lot.remaining * price;
+      }
+    }
+  }
+  const unrealizedGainEur = currentMarketValueEur - openCostBasisEur;
+  const realizedGainEur = state.cumulativeInternalRebuyRealizedGainEur;
+  const totalReturnEur = realizedGainEur + unrealizedGainEur;
+  return {
+    principalEur,
+    openCostBasisEur,
+    currentMarketValueEur,
+    unrealizedGainEur,
+    realizedGainEur,
+    totalReturnEur,
+    totalReturnPct: principalEur > 0 ? totalReturnEur / principalEur : null,
+    unitsOpen,
+    unitsSold,
+  };
 }
 
 // ─── Cálculo de impuesto ─────────────────────────────────────────────────────
@@ -150,28 +256,28 @@ function initState(input: SimInput): MonthlyState {
     // Build lots from historical lots
     const historicalLots: SimLot[] = input.currentLots
       .filter(l => l.assetId === pos.assetId && l.remainingAmount > 0)
-      .map(l => ({
+      .map(l => makeLot({
         id: l.id,
         assetId: l.assetId,
         acquiredAt: l.date,
         quantity: l.remainingAmount,
-        remaining: l.remainingAmount,
         costPerUnitEur: l.unitAcquisitionPriceEur,
         source: "historical" as const,
+        fundingOrigin: "INITIAL_POSITION",
       }))
       .sort((a, b) => a.acquiredAt - b.acquiredAt);
 
     // If no lots but has balance, create synthetic lot from avgCost
     if (historicalLots.length === 0 && pos.balance > 0 && pos.avgCostEur != null) {
-      historicalLots.push({
+      historicalLots.push(makeLot({
         id: `synthetic-${pos.assetId}`,
         assetId: pos.assetId,
         acquiredAt: Date.now() - 365 * 24 * 3600 * 1000,
         quantity: pos.balance,
-        remaining: pos.balance,
         costPerUnitEur: pos.avgCostEur,
         source: "historical",
-      });
+        fundingOrigin: "INITIAL_POSITION",
+      }));
     }
 
     const avgCostFromLots = calcAvgCost(historicalLots);
@@ -276,12 +382,16 @@ function initState(input: SimInput): MonthlyState {
     monthExternalPurchasesEur: 0,
     monthReinvestedCapitalEur: 0,
     monthDeployedCapitalEur: 0,
+    monthInternalRebuyPrincipalEur: 0,
+    monthInternalRebuyRealizedGainEur: 0,
     cumulativeContributionsEur: 0,
     cumulativeSalesEur: 0,
     cumulativeRebuysEur: 0,
     cumulativeExternalPurchasesEur: 0,
     cumulativeReinvestedCapitalEur: 0,
     cumulativeDeployedCapitalEur: 0,
+    cumulativeInternalRebuyPrincipalEur: 0,
+    cumulativeInternalRebuyRealizedGainEur: 0,
     cumulativeTaxEur: 0,
     cumulativeRealizedGainEur: 0,
     cumulativeCommissionsEur: 0,
@@ -427,11 +537,12 @@ function evaluateSales(
     const quantityToSell = st.balance * sellPct;
     if (quantityToSell < 0.000001) continue;
 
-    const { totalCostEur } = consumeFifo(st.lots, quantityToSell);
+    const { consumed, totalCostEur } = consumeFifo(st.lots, quantityToSell);
     const grossEur = quantityToSell * priceEur;
     const commissionEur = grossEur * options.commissionRate;
     const netEur = grossEur - commissionEur;
     const gainEur = netEur - totalCostEur;
+    const internalRebuyGainEur = realizedGainFromConsumedLots(consumed, priceEur, commissionEur, "INTERNAL_REBUY");
     const taxEur = calcTax(Math.max(0, gainEur), options);
     const eurcEur = Math.max(0, netEur - taxEur);
 
@@ -448,6 +559,7 @@ function evaluateSales(
     state.monthCommissionsEur += commissionEur;
     state.monthTaxEur += taxEur;
     state.monthRealizedGainEur += gainEur;
+    state.monthInternalRebuyRealizedGainEur += internalRebuyGainEur;
     state.monthNetEurcInflowEur += eurcEur;
 
     state.events.push({
@@ -534,11 +646,12 @@ function evaluateProposedSales(
       const remainingAfterSale = st.balance - quantityToSell;
       if (quantityToSell < 0.000001 || remainingAfterSale <= 0) continue;
 
-      const { totalCostEur } = consumeFifo(st.lots, quantityToSell);
+      const { consumed, totalCostEur } = consumeFifo(st.lots, quantityToSell);
       const grossEur = quantityToSell * priceEur;
       const commissionEur = grossEur * options.commissionRate;
       const netEur = grossEur - commissionEur;
       const gainEur = netEur - totalCostEur;
+      const internalRebuyGainEur = realizedGainFromConsumedLots(consumed, priceEur, commissionEur, "INTERNAL_REBUY");
       const taxEur = calcTax(Math.max(0, gainEur), options);
       const eurcEur = Math.max(0, netEur - taxEur);
 
@@ -555,6 +668,7 @@ function evaluateProposedSales(
       state.monthCommissionsEur += commissionEur;
       state.monthTaxEur += taxEur;
       state.monthRealizedGainEur += gainEur;
+      state.monthInternalRebuyRealizedGainEur += internalRebuyGainEur;
       state.monthNetEurcInflowEur += eurcEur;
 
       state.events.push({
@@ -625,15 +739,19 @@ function evaluateRebuys(
 
     st.balance += quantity;
     st.totalRebuys += quantity;
-    const newLot: SimLot = {
+    const newLot = makeLot({
       id: nextLotId(`rebuy-${assetId}`),
       assetId,
       acquiredAt: date,
       quantity,
-      remaining: quantity,
       costPerUnitEur: priceEur,
       source: "sim_rebuy",
-    };
+      fundingOrigin: "INTERNAL_REBUY",
+      sourceEurcBucketId: `eurc:${cycle.id}:${tier.id}:${assetId}`,
+      profitHarvestCycleId: cycle.id,
+      purchaseValueEur: netEur,
+      acquisitionCostsEur: commission,
+    });
     st.lots.push(newLot);
     st.avgCostEur = calcAvgCost(st.lots);
     st.usedRebuyTierIds.add(tierKey);
@@ -644,6 +762,7 @@ function evaluateRebuys(
     state.monthEurcReinvestedEur += eurcToUse;
     state.monthReinvestedCapitalEur += eurcToUse;
     state.monthDeployedCapitalEur += eurcToUse;
+    state.monthInternalRebuyPrincipalEur += eurcToUse;
 
     state.events.push({
       date,
@@ -718,15 +837,19 @@ function evaluateProposedRebuys(
 
       st.balance += quantity;
       st.totalRebuys += quantity;
-      const newLot: SimLot = {
+      const newLot = makeLot({
         id: nextLotId(`prop-rebuy-${ca.assetId}`),
         assetId: ca.assetId,
         acquiredAt: date,
         quantity,
-        remaining: quantity,
         costPerUnitEur: priceEur,
         source: "sim_rebuy",
-      };
+        fundingOrigin: "INTERNAL_REBUY",
+        sourceEurcBucketId: `eurc:${cycle.id}:${tierKey}`,
+        profitHarvestCycleId: cycle.id,
+        purchaseValueEur: netEur,
+        acquisitionCostsEur: commission,
+      });
       st.lots.push(newLot);
       st.avgCostEur = calcAvgCost(st.lots);
       st.usedRebuyTierIds.add(tierKey);
@@ -737,6 +860,7 @@ function evaluateProposedRebuys(
       state.monthEurcReinvestedEur += eurcToUse;
       state.monthReinvestedCapitalEur += eurcToUse;
       state.monthDeployedCapitalEur += eurcToUse;
+      state.monthInternalRebuyPrincipalEur += eurcToUse;
 
       state.events.push({
         date,
@@ -832,15 +956,19 @@ function reinvestResidual(
 
     const st = state.assetStates[ca.assetId]!;
     st.balance += quantity;
-    const newLot: SimLot = {
+    const newLot = makeLot({
       id: nextLotId(`reinvest-${ca.assetId}`),
       assetId: ca.assetId,
       acquiredAt: date,
       quantity,
-      remaining: quantity,
       costPerUnitEur: priceEur,
       source: "sim_rebuy",
-    };
+      fundingOrigin: "INTERNAL_REALLOCATION",
+      sourceEurcBucketId: `eurc:residual:${date}`,
+      profitHarvestCycleId: null,
+      purchaseValueEur: netEur,
+      acquisitionCostsEur: commission,
+    });
     st.lots.push(newLot);
     st.avgCostEur = calcAvgCost(st.lots);
 
@@ -892,6 +1020,8 @@ function simulateMonth(
     monthExternalPurchasesEur: 0,
     monthReinvestedCapitalEur: 0,
     monthDeployedCapitalEur: 0,
+    monthInternalRebuyPrincipalEur: 0,
+    monthInternalRebuyRealizedGainEur: 0,
     assetStates: {},
   };
 
@@ -949,10 +1079,11 @@ function simulateMonth(
 
       // Sell all of fromAsset
       const grossEur = fromSt.balance * priceFrom;
-      const { totalCostEur } = consumeFifo(fromSt.lots, fromSt.balance);
+      const { consumed, totalCostEur } = consumeFifo(fromSt.lots, fromSt.balance);
       const commissionEur = grossEur * options.commissionRate;
       const netEur = grossEur - commissionEur;
       const gainEur = netEur - totalCostEur;
+      const internalRebuyGainEur = realizedGainFromConsumedLots(consumed, priceFrom, commissionEur, "INTERNAL_REBUY");
       const taxEur = calcTax(Math.max(0, gainEur), options);
       const eurcForPurchase = Math.max(0, netEur - taxEur);
 
@@ -979,15 +1110,19 @@ function simulateMonth(
       const netToBuy = eurcForPurchase - commTo;
       const qtyTo = netToBuy / priceTo;
       toSt.balance += qtyTo;
-      toSt.lots.push({
+      toSt.lots.push(makeLot({
         id: nextLotId(`sub-${sub.toAssetId}`),
         assetId: sub.toAssetId,
         acquiredAt: date,
         quantity: qtyTo,
-        remaining: qtyTo,
         costPerUnitEur: priceTo,
         source: "sim_plan",
-      });
+        fundingOrigin: "INTERNAL_REALLOCATION",
+        sourceEurcBucketId: `eurc:substitution:${sub.id}`,
+        profitHarvestCycleId: activeCycle.id,
+        purchaseValueEur: netToBuy,
+        acquisitionCostsEur: commTo,
+      }));
       toSt.avgCostEur = calcAvgCost(toSt.lots);
 
       next.eurcFiscalReserve += taxEur;
@@ -995,6 +1130,7 @@ function simulateMonth(
       next.monthCommissionsEur += commissionEur + commTo;
       next.monthTaxEur += taxEur;
       next.monthRealizedGainEur += gainEur;
+      next.monthInternalRebuyRealizedGainEur += internalRebuyGainEur;
       next.monthReinvestedCapitalEur += eurcForPurchase;
       next.monthDeployedCapitalEur += eurcForPurchase;
 
@@ -1119,15 +1255,17 @@ function simulateMonth(
 
       st.balance += quantity;
       st.totalBought += quantity;
-      const newLot: SimLot = {
+      const newLot = makeLot({
         id: nextLotId(`plan-${alloc.assetId}`),
         assetId: alloc.assetId,
         acquiredAt: date,
         quantity,
-        remaining: quantity,
         costPerUnitEur: priceEur,
         source: "sim_plan",
-      };
+        fundingOrigin: "EXTERNAL_CONTRIBUTION",
+        purchaseValueEur: netEur,
+        acquisitionCostsEur: commissionEur,
+      });
       st.lots.push(newLot);
       st.avgCostEur = calcAvgCost(st.lots);
 
@@ -1162,6 +1300,8 @@ function simulateMonth(
   next.cumulativeExternalPurchasesEur = state.cumulativeExternalPurchasesEur + next.monthExternalPurchasesEur;
   next.cumulativeReinvestedCapitalEur = state.cumulativeReinvestedCapitalEur + next.monthReinvestedCapitalEur;
   next.cumulativeDeployedCapitalEur = state.cumulativeDeployedCapitalEur + next.monthDeployedCapitalEur;
+  next.cumulativeInternalRebuyPrincipalEur = state.cumulativeInternalRebuyPrincipalEur + next.monthInternalRebuyPrincipalEur;
+  next.cumulativeInternalRebuyRealizedGainEur = state.cumulativeInternalRebuyRealizedGainEur + next.monthInternalRebuyRealizedGainEur;
   next.cumulativeTaxEur = state.cumulativeTaxEur + next.monthTaxEur;
   next.cumulativeRealizedGainEur = state.cumulativeRealizedGainEur + next.monthRealizedGainEur;
   next.cumulativeCommissionsEur = state.cumulativeCommissionsEur + next.monthCommissionsEur;
@@ -1248,8 +1388,10 @@ function buildAnnualSnapshot(
   const externalPurchasesEur = monthsOfYear.reduce((s, m) => s + m.monthExternalPurchasesEur, 0);
   const reinvestedCapitalEur = monthsOfYear.reduce((s, m) => s + m.monthReinvestedCapitalEur, 0);
   const deployedCapitalEur = monthsOfYear.reduce((s, m) => s + m.monthDeployedCapitalEur, 0);
+  const internalRebuyPrincipalEur = monthsOfYear.reduce((s, m) => s + m.monthInternalRebuyPrincipalEur, 0);
   const currentInvestedCapitalEur = calcInvestedCapital(lastMonth, prices, mKey);
   const openCostBasisEur = calcOpenCostBasis(lastMonth);
+  const internalRebuyMetrics = calcInternalRebuyMetrics(lastMonth, prices, mKey);
   const externalContributionsCumulativeEur = input.historicalCapitalEur + lastMonth.cumulativeContributionsEur;
   const reinvestedCapitalCumulativeEur = lastMonth.cumulativeReinvestedCapitalEur;
   const deployedCapitalCumulativeEur = input.historicalCapitalEur + lastMonth.cumulativeExternalPurchasesEur + lastMonth.cumulativeReinvestedCapitalEur;
@@ -1348,6 +1490,16 @@ function buildAnnualSnapshot(
     externalPurchasesEur,
     reinvestedCapitalEur,
     deployedCapitalEur,
+    internalRebuyPrincipalEur,
+    cumulativeInternalRebuyPrincipalEur: lastMonth.cumulativeInternalRebuyPrincipalEur,
+    internalRebuyOpenCostBasisEur: internalRebuyMetrics.openCostBasisEur,
+    internalRebuyCurrentMarketValueEur: internalRebuyMetrics.currentMarketValueEur,
+    internalRebuyUnrealizedGainEur: internalRebuyMetrics.unrealizedGainEur,
+    internalRebuyRealizedGainEur: internalRebuyMetrics.realizedGainEur,
+    internalRebuyTotalReturnEur: internalRebuyMetrics.totalReturnEur,
+    internalRebuyTotalReturnPct: internalRebuyMetrics.totalReturnPct,
+    internalRebuyUnitsOpen: internalRebuyMetrics.unitsOpen,
+    internalRebuyUnitsSold: internalRebuyMetrics.unitsSold,
     fiscalReserveEur: lastMonth.eurcFiscalReserve,
     eurcFreeEur: lastMonth.eurcFree,
     eurCashEur: lastMonth.eurCash,
@@ -1506,6 +1658,16 @@ function buildAnnualStrategyReview(ctx: {
     eurcGeneratedEur: ctx.annualSnapshot.netEurcInflowEur,
     rebuysEur: ctx.annualSnapshot.rebuysEur,
     reinvestedCapitalEur: ctx.annualSnapshot.reinvestedCapitalEur,
+    internalRebuyPrincipalEur: ctx.annualSnapshot.internalRebuyPrincipalEur,
+    cumulativeInternalRebuyPrincipalEur: ctx.annualSnapshot.cumulativeInternalRebuyPrincipalEur,
+    internalRebuyOpenCostBasisEur: ctx.annualSnapshot.internalRebuyOpenCostBasisEur,
+    internalRebuyCurrentMarketValueEur: ctx.annualSnapshot.internalRebuyCurrentMarketValueEur,
+    internalRebuyUnrealizedGainEur: ctx.annualSnapshot.internalRebuyUnrealizedGainEur,
+    internalRebuyRealizedGainEur: ctx.annualSnapshot.internalRebuyRealizedGainEur,
+    internalRebuyTotalReturnEur: ctx.annualSnapshot.internalRebuyTotalReturnEur,
+    internalRebuyTotalReturnPct: ctx.annualSnapshot.internalRebuyTotalReturnPct,
+    internalRebuyUnitsOpen: ctx.annualSnapshot.internalRebuyUnitsOpen,
+    internalRebuyUnitsSold: ctx.annualSnapshot.internalRebuyUnitsSold,
     finalEurcEur: ctx.annualSnapshot.eurcFreeEur,
     finalFiscalReserveEur: ctx.annualSnapshot.fiscalReserveEur,
     openingUnitsByAsset,
@@ -1915,6 +2077,16 @@ function runScenario(
     totalExternalPurchasesEur,
     reinvestedCapitalEur: totalReinvestedCapitalEur,
     cumulativeDeployedCapitalEur,
+    internalRebuyPrincipalEur: annualSnapshots.reduce((s, a) => s + a.internalRebuyPrincipalEur, 0),
+    cumulativeInternalRebuyPrincipalEur: lastSnap?.cumulativeInternalRebuyPrincipalEur ?? 0,
+    internalRebuyOpenCostBasisEur: lastSnap?.internalRebuyOpenCostBasisEur ?? 0,
+    internalRebuyCurrentMarketValueEur: lastSnap?.internalRebuyCurrentMarketValueEur ?? 0,
+    internalRebuyUnrealizedGainEur: lastSnap?.internalRebuyUnrealizedGainEur ?? 0,
+    internalRebuyRealizedGainEur: lastSnap?.internalRebuyRealizedGainEur ?? 0,
+    internalRebuyTotalReturnEur: lastSnap?.internalRebuyTotalReturnEur ?? 0,
+    internalRebuyTotalReturnPct: lastSnap?.internalRebuyTotalReturnPct ?? null,
+    internalRebuyUnitsOpen: lastSnap?.internalRebuyUnitsOpen ?? 0,
+    internalRebuyUnitsSold: lastSnap?.internalRebuyUnitsSold ?? 0,
     currentInvestedCapitalEur: finalCurrentInvestedCapitalEur,
     eurcOperatingLiquidityEur: lastSnap?.eurcFreeEur ?? 0,
     eurcFiscalReserveEur: lastSnap?.fiscalReserveEur ?? 0,
