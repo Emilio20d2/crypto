@@ -243,10 +243,27 @@ Pendiente bloqueante por la nueva auditoría:
 
 - Congelar input real de `persp2:getSimulation` como fixture reproducible.
 - Crear libro mayor mensual 2026-2044.
-- Crear verificador independiente que no reutilice funciones del motor principal.
+- Verificador independiente: primera versión creada en `packages/portfolio/src/perspectives/accounting-verifier.ts`, validando identidades anuales y de resumen para patrimonio, EURC, beneficio neto y recompras.
 - Comparar motor contra verificador con tolerancia máxima 0,01 EUR.
 - Validar TWR y XIRR con cálculo independiente.
 - Reinstalar DMG y verificar que la app instalada reproduce el commit y JSON auditado.
+
+Actualización 2026-06-30 — Verificador independiente de Perspectivas
+
+Cambios aplicados:
+
+- `packages/portfolio/src/perspectives/accounting-verifier.ts`: creado verificador contable independiente del motor principal. Recibe el JSON de simulación y recalcula con fórmulas propias: cierre neto anual, EURC operativo anual, puente bruto/neto por reserva fiscal, beneficio neto, plusvalía latente de recompras, rentabilidad total de recompras y consistencia del resumen final.
+- `packages/portfolio/src/perspectives/index.ts`: exportado el verificador para poder usarlo desde tests, auditoría y futuras herramientas de diagnóstico.
+- `packages/portfolio/src/perspectives/sim-engine.ts`: corregida la conciliación anual de EURC para restar `eurcReinvestedEur` completo en lugar de restar solo `rebuysEur`; evita diferencias cuando existe reinversión residual adicional.
+- `packages/portfolio/src/perspectives/sim-engine.test.ts`: añadido test que ejecuta el motor real y lo compara contra el verificador independiente.
+- `packages/portfolio/src/perspectives/sim-engine.test.ts`: añadido caso matemático controlado de recompra: 5.000 EUR a 10 EUR, 500 unidades, precio posterior 14 EUR (+2.000 EUR) y 8 EUR (-1.000 EUR), verificando que la rentabilidad de la recompra llega a patrimonio y beneficio sin aumentar capital externo.
+
+Pruebas ejecutadas:
+
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix packages/portfolio run test -- src/perspectives/sim-engine.test.ts` — OK, 78 tests.
+- `npm --prefix packages/portfolio run test` — OK, 18 files / 388 tests.
+- `npm --prefix packages/portfolio run build` — OK.
 Actualización 2026-06-29 — Corrección bloqueante definitiva de Perspectivas
 
 Nueva ampliación recibida

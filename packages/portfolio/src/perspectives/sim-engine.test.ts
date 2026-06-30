@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { runPerspectivesSimulation as runPerspectivesSimulationCore } from "./sim-engine";
+import { verifyPerspectivesAccounting } from "./accounting-verifier";
 import { buildExternalPriceMap, monthKey, getAssetTier } from "./external-price-builder";
 import { buildMarketRegimePricePath, classifyHistoricalMarketRegimes } from "./market-regime-engine";
 import type { SimInput, SimCycle, CurrentPosition, SimOptions } from "./types";
@@ -830,6 +831,207 @@ describe("sim-engine: rebuys", () => {
     expect(rebuy?.eurcUsedEur).toBeCloseTo(5_000, 6);
     expect(base.summary.finalEurcFreeEur).toBeCloseTo(0, 6);
     expect(base.summary.internalRebuyPrincipalEur).toBeCloseTo(5_000, 6);
+  });
+
+  it("el verificador independiente concilia el resultado contable del motor", () => {
+    const input = makeInput({
+      currentPositions: [{ assetId: "BTC", balance: 0.5, avgCostEur: 30_000, currentPriceEur: 60_000 }],
+      currentLots: [{ id: "initial-btc", assetId: "BTC", date: NOW - 2 * YEAR_MS, remainingAmount: 0.5, unitAcquisitionPriceEur: 30_000 }],
+      historicalSales: [{ assetId: "BTC", date: NOW - YEAR_MS, quantity: 0.2, unitPriceEur: 1_000_000 }],
+      eurcFree: 5_000,
+      eurcFiscalReserve: 1_000,
+      historicalCapitalEur: 15_000,
+      horizonDate: horizon(2),
+      cycles: [makeCycle({
+        monthlyAmountEur: 0,
+        rebuyTiers: [{
+          id: "verifier-rebuy",
+          assetId: "BTC",
+          drawdownPercentage: 20,
+          usagePercentage: 100,
+          referenceType: "last_sale",
+          referenceValue: 1_000_000,
+          status: "active",
+        }],
+      })],
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy", strategyMode: "USER_RULES", commissionRate: 0 },
+    });
+
+    const result = runPerspectivesSimulation(input);
+    const report = verifyPerspectivesAccounting(result, 0.01);
+    expect(report.checks.filter(check => check.status === "FAIL")).toEqual([]);
+    expect(report.passed).toBe(true);
+  });
+
+  it("verifica matemáticamente recompra 5000 EUR a 10 EUR con subida a 14 EUR y caída a 8 EUR", () => {
+    function makeControlledSimulation(finalPriceEur: number) {
+      const marketValue = 500 * finalPriceEur;
+      const rebuyGain = marketValue - 5_000;
+      const finalNetWealth = 20_000 + rebuyGain;
+      return {
+        computedAt: NOW,
+        startYear: 2026,
+        endYear: 2026,
+        horizonDate: NOW,
+        validations: [],
+        strategyComparisons: [],
+        diagnostics: {
+          engineIsNew: true as const,
+          source: "market-regime-engine+active-forecast-anchors" as const,
+          candidateId: "controlled",
+          engineVersion: "test",
+          engineBuildHash: "test",
+          engineGeneratedAt: NOW,
+          marketRegimeEngine: true,
+          negativeMonthCount: 0,
+          negativeYearCount: 0,
+          maxDrawdownPct: null,
+          hasBearPeriods: false,
+          realisticCycleValidation: "passed" as const,
+          scenarioValidationStatus: "valid_order" as const,
+          scenarioOrder: [],
+          perScenario: [],
+        },
+        scenarios: [{
+          scenario: "base" as const,
+          label: "Base",
+          assetPriceInfo: {},
+          marketDiagnostics: { negativeMonths: 0, regimeCounts: {} },
+          annualStrategyReviews: [],
+          annualSnapshots: [{
+            year: 2026,
+            scope: "plan" as const,
+            openingWealthEur: 20_000,
+            closingWealthEur: finalNetWealth,
+            closingGrossEur: finalNetWealth,
+            contributionsEur: 0,
+            marketGainEur: rebuyGain,
+            salesEur: 0,
+            rebuysEur: 5_000,
+            commissionsEur: 0,
+            taxEur: 0,
+            realizedGainEur: 0,
+            eurcReinvestedEur: 5_000,
+            netEurcInflowEur: 0,
+            externalPurchasesEur: 0,
+            reinvestedCapitalEur: 5_000,
+            deployedCapitalEur: 5_000,
+            internalRebuyPrincipalEur: 5_000,
+            cumulativeInternalRebuyPrincipalEur: 5_000,
+            internalRebuyOpenCostBasisEur: 5_000,
+            internalRebuyCurrentMarketValueEur: marketValue,
+            internalRebuyUnrealizedGainEur: rebuyGain,
+            internalRebuyRealizedGainEur: 0,
+            internalRebuyTotalReturnEur: rebuyGain,
+            internalRebuyTotalReturnPct: rebuyGain / 5_000,
+            internalRebuyUnitsOpen: 500,
+            internalRebuyUnitsSold: 0,
+            fiscalReserveEur: 0,
+            eurcFreeEur: 0,
+            eurCashEur: 0,
+            currentInvestedCapitalEur: marketValue,
+            openCostBasisEur: 5_000,
+            externalContributionsCumulativeEur: 20_000,
+            reinvestedCapitalCumulativeEur: 5_000,
+            deployedCapitalCumulativeEur: 25_000,
+            netProfitEur: rebuyGain,
+            annualReturnPct: rebuyGain / 20_000,
+            positions: {},
+            events: [{
+              date: NOW,
+              type: "rebuy" as const,
+              origin: "USER_RULE" as const,
+              assetId: "BTC",
+              amountEur: 5_000,
+              quantity: 500,
+              priceEur: 10,
+              eurcUsedEur: 5_000,
+              commissionEur: 0,
+              costBasisEur: 5_000,
+              description: "Controlled rebuy",
+            }],
+            salesSkipReasons: [],
+            rebuysSkipReasons: [],
+            forecastCoverage: "covered" as const,
+          }],
+          summary: {
+            scenario: "base" as const,
+            strategyEnabled: true,
+            strategyMode: "USER_RULES" as const,
+            strategySource: "user_rules" as const,
+            simulationOnly: true,
+            requiresUserConfirmation: true,
+            initialWealthEur: 20_000,
+            finalNetWealthEur: finalNetWealth,
+            initialCapitalEur: 20_000,
+            totalContributionsEur: 0,
+            externalContributionsEur: 20_000,
+            totalHistoricalCapitalEur: 20_000,
+            totalExternalPurchasesEur: 0,
+            reinvestedCapitalEur: 5_000,
+            cumulativeDeployedCapitalEur: 25_000,
+            internalRebuyPrincipalEur: 5_000,
+            cumulativeInternalRebuyPrincipalEur: 5_000,
+            internalRebuyOpenCostBasisEur: 5_000,
+            internalRebuyCurrentMarketValueEur: marketValue,
+            internalRebuyUnrealizedGainEur: rebuyGain,
+            internalRebuyRealizedGainEur: 0,
+            internalRebuyTotalReturnEur: rebuyGain,
+            internalRebuyTotalReturnPct: rebuyGain / 5_000,
+            internalRebuyUnitsOpen: 500,
+            internalRebuyUnitsSold: 0,
+            currentInvestedCapitalEur: marketValue,
+            eurcOperatingLiquidityEur: 0,
+            eurcFiscalReserveEur: 0,
+            eurcSecurityReserveEur: 0,
+            openCostBasisEur: 5_000,
+            grossWealthEur: finalNetWealth,
+            netProfitEur: rebuyGain,
+            totalMarketGainEur: rebuyGain,
+            realizedSalesEur: 0,
+            realizedRebuysEur: 0,
+            realizedTaxEur: 0,
+            simulatedUserRuleSalesEur: 0,
+            simulatedUserRuleRebuysEur: 5_000,
+            simulatedUserRuleTaxEur: 0,
+            simulatedStrategicSalesEur: 0,
+            simulatedStrategicRebuysEur: 0,
+            simulatedStrategicTaxEur: 0,
+            proposedSalesEur: 0,
+            proposedRebuysEur: 5_000,
+            projectedEurcReserve: 0,
+            projectedFiscalReserve: 0,
+            decision: "user_rules" as const,
+            totalSalesEur: 0,
+            totalRebuysEur: 5_000,
+            totalCommissionsEur: 0,
+            totalTaxEur: 0,
+            totalRealizedGainEur: 0,
+            totalUnrealizedGainEur: rebuyGain,
+            totalEurcReinvestedEur: 5_000,
+            totalNetEurcInflowEur: 0,
+            initialEurcFreeEur: 5_000,
+            initialEurcFiscalReserveEur: 0,
+            finalEurcFreeEur: 0,
+            finalFiscalReserveEur: 0,
+            xirr: null,
+            twr: null,
+            twrCumulative: null,
+            twrAnnualized: null,
+            maxDrawdownPct: null,
+            assetSummaries: [],
+          },
+        }],
+      };
+    }
+
+    const up = verifyPerspectivesAccounting(makeControlledSimulation(14), 0.01);
+    expect(up.passed).toBe(true);
+    expect(up.checks.filter(check => check.status === "FAIL")).toEqual([]);
+
+    const down = verifyPerspectivesAccounting(makeControlledSimulation(8), 0.01);
+    expect(down.passed).toBe(true);
+    expect(down.checks.filter(check => check.status === "FAIL")).toEqual([]);
   });
 });
 

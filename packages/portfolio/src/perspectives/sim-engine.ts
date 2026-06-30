@@ -1639,7 +1639,7 @@ function buildAnnualStrategyReview(ctx: {
     ctx.annualSnapshot.marketGainEur -
     ctx.annualSnapshot.commissionsEur;
   const wealthDiffEur = ctx.annualSnapshot.closingWealthEur - wealthExpected;
-  const eurcExpected = openingEurc + ctx.annualSnapshot.netEurcInflowEur - ctx.annualSnapshot.rebuysEur;
+  const eurcExpected = openingEurc + ctx.annualSnapshot.netEurcInflowEur - ctx.annualSnapshot.eurcReinvestedEur;
   const eurcDiffEur = ctx.annualSnapshot.eurcFreeEur - eurcExpected;
   const toleranceEur = 0.01;
 
