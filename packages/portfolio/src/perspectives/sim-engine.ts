@@ -142,7 +142,6 @@ function calcInternalRebuyMetrics(
   prices: Record<string, Record<string, number>>,
   mKey: string,
 ): InternalRebuyMetrics {
-  let principalEur = 0;
   let openCostBasisEur = 0;
   let currentMarketValueEur = 0;
   let unitsOpen = 0;
@@ -151,7 +150,6 @@ function calcInternalRebuyMetrics(
     const price = prices[assetId]?.[mKey] ?? null;
     for (const lot of st.lots) {
       if (lot.fundingOrigin !== "INTERNAL_REBUY") continue;
-      principalEur += lot.purchaseValueEur + lot.acquisitionCostsEur;
       unitsOpen += lot.remaining;
       unitsSold += Math.max(0, lot.quantity - lot.remaining);
       const openRatio = lot.quantity > 0 ? lot.remaining / lot.quantity : 0;
@@ -164,6 +162,7 @@ function calcInternalRebuyMetrics(
   const unrealizedGainEur = currentMarketValueEur - openCostBasisEur;
   const realizedGainEur = state.cumulativeInternalRebuyRealizedGainEur;
   const totalReturnEur = realizedGainEur + unrealizedGainEur;
+  const principalEur = state.cumulativeInternalRebuyPrincipalEur;
   return {
     principalEur,
     openCostBasisEur,
