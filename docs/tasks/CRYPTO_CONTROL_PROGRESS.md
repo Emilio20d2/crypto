@@ -267,6 +267,51 @@ Pruebas ejecutadas:
 - `npm --prefix apps/web run lint && npm --prefix apps/web run typecheck && npm --prefix apps/web run test && npm --prefix apps/web run build` — OK, 13 files / 144 tests.
 - `npm --prefix apps/desktop run typecheck && npm --prefix apps/desktop run build` — OK.
 - `npm --prefix packages/core run typecheck && npm --prefix packages/core run build` — OK.
+
+Actualización 2026-06-30 — DMG final instalado y verificado
+
+Commit final instalado: `177f03b0b0f5ac5145078a77b4109f3b07a5234f`.
+
+Corrección adicional aplicada antes del DMG final:
+
+- `packages/portfolio/src/perspectives/sim-engine.ts`: `internalRebuyTotalReturnPct` usa como denominador el principal acumulado de recompras (`cumulativeInternalRebuyPrincipalEur`) también cuando lotes recomprados han sido vendidos después. Evita que la ganancia realizada quede en el numerador pero el principal vendido salga del denominador.
+
+Validaciones previas al empaquetado final:
+
+- `npm --prefix apps/web run lint && npm --prefix apps/web run typecheck && npm --prefix apps/web run test && npm --prefix apps/web run build` — OK, 13 files / 144 tests.
+- `npm --prefix apps/desktop run typecheck && npm --prefix apps/desktop run build` — OK.
+- `npm --prefix packages/core run typecheck && npm --prefix packages/core run build` — OK.
+- `npm --prefix packages/portfolio run test` — OK, 18 files / 388 tests. Primer intento bajo carga paralela agotó timeout en un test de importación; repetido en solitario pasó completo.
+- `npm --prefix packages/portfolio run build` — OK.
+
+DMG final:
+
+- Ruta: `/Users/macmini/Developer/crypto-realtime-perspectives/dist-packaged/Crypto Control-0.1.0-arm64.dmg`.
+- SHA-256: `f8463b6583c2a32163886719271c5edc944e639dabffa0ebf5e211055c9c1a3a`.
+- Instalado en `/Applications/Crypto Control.app`.
+- La app instalada sirve el bundle con `commit=177f03b0b0f5ac5145078a77b4109f3b07a5234f`, `commitShort=177f03b`, rama `codex/final-engine-rebuild`.
+- SQLite real tras instalación: `PRAGMA integrity_check` = `ok`.
+- Backup previo verificado: `/Users/macmini/Library/Application Support/Crypto Control Nueva/backups-codex-20260630-151514/crypto-control.sqlite`, SHA-256 `447519d3290184eed1665400523fafb57d8f80044e0be40a71058c10251cbcae`, integridad `ok`.
+
+Perspectivas instaladas:
+
+- JSON real extraído desde la app instalada: `/tmp/crypto-control-perspectives-final-177f03b-20260630-154429.json`.
+- Tamaño JSON: 3.019.292 bytes.
+- Escenarios presentes: conservador, moderado, base, favorable, optimista.
+- `engineBuildHash`: `realtime-perspectives-engine`.
+- `engineVersion`: `perspectives-v4.0-market-regimes`.
+- Verificador independiente: 635 comprobaciones, 0 fallos.
+- Resultado final neto por escenario:
+  - Conservador: 153.291,69 EUR.
+  - Moderado: 157.263,85 EUR.
+  - Base: 186.773,53 EUR.
+  - Favorable: 195.062,07 EUR.
+  - Optimista: 221.377,57 EUR.
+
+Pendientes que siguen fuera del alcance ya comprobado:
+
+- El libro mayor mensual completo 2026-2044 todavía no se persiste como artefacto propio dentro del repositorio.
+- TWR/XIRR todavía no están recalculados por un verificador externo separado; el verificador actual cubre patrimonio, EURC, beneficio, bruto/neto y recompras.
 Actualización 2026-06-29 — Corrección bloqueante definitiva de Perspectivas
 
 Nueva ampliación recibida
