@@ -735,5 +735,19 @@ Pruebas ejecutadas
 
 Pendiente de este bloque
 
-- Validar la app instalada con datos reales de Cartera y `persp2:getSimulation`.
-- Generar e instalar DMG solo después de superar las validaciones obligatorias.
+- Backup previo a instalación: `/Users/macmini/Library/Application Support/Crypto Control Nueva/backups-codex-20260630-081148/`, `PRAGMA integrity_check` — OK.
+- SHA-256 backup principal: `36e3ad11ce0c378a5eaf6ec39327569b6b3fc015da82405b95971640dda5e606`.
+- Commit inicial del bloque: `56044592fe2f998ab921c78de8533621c065cd3d`.
+- DMG generado con `npm run dist:mac` — OK.
+- Ruta DMG: `dist-packaged/Crypto Control-0.1.0-arm64.dmg`.
+- SHA-256 DMG validado: `6842df5292e16cfd029f41a88d10dffc5b1a4c25c901cd5a772cc567fdd1865a`.
+- DMG montado e instalado en `/Applications/Crypto Control.app` — OK.
+- App instalada abierta — OK, puente HTTP en `127.0.0.1:3001`.
+- Validación real por `POST /api/ipc persp2:getSimulation` — OK: cinco escenarios, `totalRebuysEur=11328.173068747377`, `internalRebuyPrincipalEur=11328.173068747377`, `internalRebuyCurrentMarketValueEur=14067.514614471844`, `internalRebuyUnrealizedGainEur=2739.3415457244664`, `internalRebuyTotalReturnPct=0.24181671034686722`, `internalRebuyUnitsOpen=1147.0987072866262`.
+- Validación real de gráfica de Cartera por `portfolio:get-historical-series` — OK:
+  - `1h`: 61 puntos, `STALE_USABLE`, cobertura 100 %, caché persistente.
+  - `24h`: 96 puntos, `CACHE_COMPLETE`, cobertura 98,97 %, caché persistente.
+  - `1w`: 169 puntos, `CACHE_COMPLETE`, cobertura 100 %, caché persistente.
+  - `1m`: 120 puntos, `CACHE_COMPLETE`, cobertura 99,17 %, caché persistente.
+  - `1y`: 339 puntos, `CACHE_PARTIAL`, cobertura 92,62 %, caché persistente.
+  - `all`: 34 puntos, `EXTERNAL_BACKFILL`, cobertura 56,67 %, caché persistente y recuperación externa.
