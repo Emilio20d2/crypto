@@ -635,6 +635,14 @@ Pruebas tras retirar el motor antiguo:
 - `npm --prefix packages/core run typecheck && npm --prefix packages/core run build` — OK.
 - `npm --prefix packages/market-data run typecheck && npm --prefix packages/market-data run test && npm --prefix packages/market-data run build` — OK, 5 archivos / 49 tests.
 - `npm --prefix packages/coinbase-sync run typecheck && npm --prefix packages/coinbase-sync run test && npm --prefix packages/coinbase-sync run build` — OK, 5 archivos / 62 tests.
+- Backup previo a instalación: `/Users/macmini/Library/Application Support/Crypto Control Nueva/backups-codex-20260630-145735/`, `PRAGMA integrity_check` — OK.
+- SHA-256 backup principal: `1a3cdaa75d63f6bb08a552bd7c1f79dcd889fe2188184b5e077c30cffd14bfe8`.
+- Commit del bloque: `2d51e23c85f23293586e00f22c81045369a8ad7f`.
+- DMG generado con `npm run dist:mac` — OK.
+- SHA-256 DMG: `3c0b0d2d1f01a61becb3e1fef374fc44d9f22bdf85a31c724715e4c4445be04b`.
+- DMG instalado en `/Applications/Crypto Control.app` — OK.
+- Validación real por `POST /api/ipc persp2:getSimulation` en app instalada — OK: cinco escenarios, `totalRebuysEur=25082.365103786367`, `internalRebuyPrincipalEur=25082.365103786367`, `internalRebuyCurrentMarketValueEur=60890.67959469153`, `internalRebuyTotalReturnEur=40778.57477173332`.
+- Base real tras instalación: `PRAGMA integrity_check` — OK.
 - Backup previo final: `/Users/macmini/Library/Application Support/Crypto Control Nueva/backups-codex-20260629-130536/`, `PRAGMA integrity_check` — OK.
 - SHA-256 backup principal final: `ce9a639f321a41ea17c7dc31a511b7f44825d48bc996e6f53211cfa2dd639e2c`.
 - DMG final regenerado e instalado — OK.
