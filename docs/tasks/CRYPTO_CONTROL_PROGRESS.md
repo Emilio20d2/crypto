@@ -264,6 +264,9 @@ Pruebas ejecutadas:
 - `npm --prefix packages/portfolio run test -- src/perspectives/sim-engine.test.ts` — OK, 78 tests.
 - `npm --prefix packages/portfolio run test` — OK, 18 files / 388 tests.
 - `npm --prefix packages/portfolio run build` — OK.
+- `npm --prefix apps/web run lint && npm --prefix apps/web run typecheck && npm --prefix apps/web run test && npm --prefix apps/web run build` — OK, 13 files / 144 tests.
+- `npm --prefix apps/desktop run typecheck && npm --prefix apps/desktop run build` — OK.
+- `npm --prefix packages/core run typecheck && npm --prefix packages/core run build` — OK.
 Actualización 2026-06-29 — Corrección bloqueante definitiva de Perspectivas
 
 Nueva ampliación recibida
