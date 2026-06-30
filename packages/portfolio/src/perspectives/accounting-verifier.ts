@@ -147,8 +147,8 @@ function verifyScenarioSummary(
     tolerance,
   );
 
-  if (summary.internalRebuyOpenCostBasisEur > tolerance) {
-    const rebuyPctExpected = summary.internalRebuyTotalReturnEur / summary.internalRebuyOpenCostBasisEur;
+  if (summary.internalRebuyPrincipalEur > tolerance) {
+    const rebuyPctExpected = summary.internalRebuyTotalReturnEur / summary.internalRebuyPrincipalEur;
     addCheck(
       checks,
       scenario,
