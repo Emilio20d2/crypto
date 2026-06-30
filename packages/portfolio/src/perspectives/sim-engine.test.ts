@@ -805,6 +805,32 @@ describe("sim-engine: rebuys", () => {
       expect(rebuyDescriptions.every(description => !description.includes("hipotética") || description.includes("score"))).toBe(true);
     }
   });
+
+  it("recompra inteligente reinvierte todo el EURC operativo disponible cuando la tesis es válida", async () => {
+    const fs = await import("node:fs/promises");
+    const source = await fs.readFile(new URL("./sim-engine.ts", import.meta.url), "utf8");
+    expect(source).not.toContain("state.eurcFree * usePct");
+
+    const input = makeInput({
+      currentPositions: [{ assetId: "BTC", balance: 0.01, avgCostEur: 100_000, currentPriceEur: 60_000 }],
+      currentLots: [{ id: "lot-high-cost", assetId: "BTC", date: NOW - 2 * YEAR_MS, remainingAmount: 0.01, unitAcquisitionPriceEur: 100_000 }],
+      historicalSales: [{ assetId: "BTC", date: NOW - YEAR_MS, quantity: 0.2, unitPriceEur: 1_000_000 }],
+      eurcFree: 5_000,
+      eurcFiscalReserve: 1_000,
+      historicalCapitalEur: 1_000,
+      horizonDate: horizon(5),
+      cycles: [makeCycle({ monthlyAmountEur: 0, saleRules: [], rebuyTiers: [] })],
+      options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy", strategyMode: "INTELLIGENT_STRATEGY", commissionRate: 0 },
+    });
+
+    const base = runPerspectivesSimulation(input).scenarios.find(s => s.scenario === "base")!;
+    const rebuy = base.annualSnapshots.flatMap(s => s.events).find(e => e.type === "rebuy");
+
+    expect(rebuy?.amountEur).toBeCloseTo(5_000, 6);
+    expect(rebuy?.eurcUsedEur).toBeCloseTo(5_000, 6);
+    expect(base.summary.finalEurcFreeEur).toBeCloseTo(0, 6);
+    expect(base.summary.internalRebuyPrincipalEur).toBeCloseTo(5_000, 6);
+  });
 });
 
 // ─── Motor de simulación: métricas anuales ───────────────────────────────────

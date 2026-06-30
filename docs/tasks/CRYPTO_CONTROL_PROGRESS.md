@@ -751,3 +751,28 @@ Pendiente de este bloque
   - `1m`: 120 puntos, `CACHE_COMPLETE`, cobertura 99,17 %, caché persistente.
   - `1y`: 339 puntos, `CACHE_PARTIAL`, cobertura 92,62 %, caché persistente.
   - `all`: 34 puntos, `EXTERNAL_BACKFILL`, cobertura 56,67 %, caché persistente y recuperación externa.
+
+Actualización 2026-06-30 — Recompras: reinvertir todo lo posible
+
+Nueva aclaración recibida
+
+- El EURC operativo procedente de ventas se estaba reinvirtiendo demasiado poco.
+- El adjunto confirma que el motor no debe limitarse a contadores ni tramos conservadores cuando una tesis de recompra ya es válida.
+
+Cambios realizados
+
+- `evaluateProposedRebuys()` deja de usar tramos `20% / 35% / 50%` según score.
+- Una recompra inteligente válida consume el 100% del `eurcFree` operativo disponible en ese momento.
+- La reserva fiscal no se toca porque vive separada en `eurcFiscalReserve`.
+- Añadida regresión: con EURC libre de 5.000 €, venta previa y oportunidad de recompra válida, la recompra usa 5.000 € completos, deja EURC operativo a 0 y registra `internalRebuyPrincipalEur=5.000`.
+
+Pruebas ejecutadas
+
+- `npm --prefix packages/portfolio run typecheck && npm --prefix packages/portfolio test -- src/perspectives/sim-engine.test.ts` — OK, 76 tests.
+- `npm --prefix packages/portfolio run test && npm --prefix packages/portfolio run build` — OK, 18 archivos / 386 tests.
+- `npm --prefix apps/web run lint && npm --prefix apps/web run typecheck && npm --prefix apps/web run test && npm --prefix apps/web run build` — OK, 12 archivos / 143 tests.
+- `npm --prefix apps/desktop run typecheck && npm --prefix apps/desktop run build` — OK.
+- `npm --prefix packages/core run typecheck && npm --prefix packages/core run build` — OK.
+- `npm --prefix packages/database run typecheck && npm --prefix packages/database run test && npm --prefix packages/database run build` — OK, 5 archivos / 25 tests.
+- `npm --prefix packages/market-data run typecheck && npm --prefix packages/market-data run test && npm --prefix packages/market-data run build` — OK, 5 archivos / 49 tests.
+- `npm --prefix packages/coinbase-sync run typecheck && npm --prefix packages/coinbase-sync run test && npm --prefix packages/coinbase-sync run build` — OK, 5 archivos / 62 tests.

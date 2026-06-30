@@ -824,11 +824,10 @@ function evaluateProposedRebuys(
     const rebuyOpportunityScore = Math.round(regimeScore + drawdownScore);
     if (rebuyOpportunityScore < 56) continue;
 
-      const usePct = rebuyOpportunityScore >= 88 ? 0.50 : rebuyOpportunityScore >= 72 ? 0.35 : 0.20;
       const tierKey = `proposed-rebuy-${ca.assetId}-${regime}-${Math.floor(rebuyOpportunityScore / 10) * 10}-sale${Math.round(st.lastSalePriceEur)}`;
       if (st.usedRebuyTierIds.has(tierKey)) continue;
 
-      const eurcToUse = state.eurcFree * usePct;
+      const eurcToUse = state.eurcFree;
       if (eurcToUse < 0.5) continue;
 
       const commission = eurcToUse * options.commissionRate;
