@@ -58,6 +58,16 @@ interface AnnualSnapshot {
   externalContributionsCumulativeEur?: number;
   reinvestedCapitalCumulativeEur?: number;
   deployedCapitalCumulativeEur?: number;
+  internalRebuyPrincipalEur?: number;
+  cumulativeInternalRebuyPrincipalEur?: number;
+  internalRebuyOpenCostBasisEur?: number;
+  internalRebuyCurrentMarketValueEur?: number;
+  internalRebuyUnrealizedGainEur?: number;
+  internalRebuyRealizedGainEur?: number;
+  internalRebuyTotalReturnEur?: number;
+  internalRebuyTotalReturnPct?: number | null;
+  internalRebuyUnitsOpen?: number;
+  internalRebuyUnitsSold?: number;
   netProfitEur?: number;
   fiscalReserveEur: number;
   eurcFreeEur: number;
@@ -98,6 +108,16 @@ interface ScenarioSummary {
   totalExternalPurchasesEur?: number;
   reinvestedCapitalEur?: number;
   cumulativeDeployedCapitalEur?: number;
+  internalRebuyPrincipalEur?: number;
+  cumulativeInternalRebuyPrincipalEur?: number;
+  internalRebuyOpenCostBasisEur?: number;
+  internalRebuyCurrentMarketValueEur?: number;
+  internalRebuyUnrealizedGainEur?: number;
+  internalRebuyRealizedGainEur?: number;
+  internalRebuyTotalReturnEur?: number;
+  internalRebuyTotalReturnPct?: number | null;
+  internalRebuyUnitsOpen?: number;
+  internalRebuyUnitsSold?: number;
   currentInvestedCapitalEur?: number;
   eurcOperatingLiquidityEur?: number;
   eurcFiscalReserveEur?: number;
@@ -982,12 +1002,13 @@ function EurcReconciliationSection({ sum }: { sum: ScenarioSummary }) {
   const eurcInflow       = sum.totalNetEurcInflowEur ?? 0;
   const rebuys           = sum.totalRebuysEur;
   const reinvested       = sum.totalEurcReinvestedEur;
+  const residualReinvested = Math.max(0, reinvested - rebuys);
   const eurcFreeFinal    = sum.finalEurcFreeEur;
   const fiscalGenerated  = sum.totalTaxEur;
   const fiscalFinal      = sum.finalFiscalReserveEur;
 
   // EURC libre: saldo inicial + entradas − salidas = libre calculado
-  const eurcComputed = eurcInitial + eurcInflow - rebuys - reinvested;
+  const eurcComputed = eurcInitial + eurcInflow - reinvested;
   const diffFree     = eurcFreeFinal - eurcComputed;
 
   // Reserva fiscal: inicial + generada = calculada
@@ -1026,7 +1047,7 @@ function EurcReconciliationSection({ sum }: { sum: ScenarioSummary }) {
               fmtRow("EURC libre inicial",              eurcInitial,   ""),
               fmtRow("+ EURC neto de ventas",           eurcInflow,    "+"),
               fmtRow("− Recompras (comisión incl.)",    rebuys,        "−"),
-              fmtRow("− Reinversión residual",          reinvested,    "−"),
+              fmtRow("− Reinversión residual",          residualReinvested, "−"),
             ].map((r, i) => (
               <tr key={i}>
                 <td className="py-1 text-muted-foreground">{r.label}</td>
@@ -1096,7 +1117,7 @@ function EurcReconciliationSection({ sum }: { sum: ScenarioSummary }) {
             </div>
             <div className="flex justify-between py-1 border-b border-border/30">
               <span className="text-muted-foreground">Total reinversión residual</span>
-              <span className="font-mono">{fmtE(reinvested)}</span>
+              <span className="font-mono">{fmtE(residualReinvested)}</span>
             </div>
             <div className="flex justify-between py-1 border-b border-border/30">
               <span className="text-muted-foreground">EURC libre final</span>
@@ -1216,8 +1237,13 @@ export function Perspectivas() {
   const displayGrossWealthEur = selectedSnap?.closingGrossEur ?? sum.grossWealthEur ?? (sum.finalNetWealthEur + sum.finalFiscalReserveEur);
   const displayExternalCapitalEur = selectedSnap?.externalContributionsCumulativeEur ?? sum.externalContributionsEur ?? (sum.initialWealthEur + sum.totalContributionsEur);
   const displayInvestedCapitalEur = selectedSnap?.currentInvestedCapitalEur ?? sum.currentInvestedCapitalEur ?? 0;
-  const displayReinvestedCapitalEur = selectedSnap?.reinvestedCapitalCumulativeEur ?? sum.reinvestedCapitalEur ?? 0;
   const displayDeployedCapitalEur = selectedSnap?.deployedCapitalCumulativeEur ?? sum.cumulativeDeployedCapitalEur ?? 0;
+  const displayInternalRebuyPrincipalEur = selectedSnap?.cumulativeInternalRebuyPrincipalEur ?? sum.cumulativeInternalRebuyPrincipalEur ?? sum.internalRebuyPrincipalEur ?? 0;
+  const displayInternalRebuyMarketValueEur = selectedSnap?.internalRebuyCurrentMarketValueEur ?? sum.internalRebuyCurrentMarketValueEur ?? 0;
+  const displayInternalRebuyReturnEur = selectedSnap?.internalRebuyTotalReturnEur ?? sum.internalRebuyTotalReturnEur ?? 0;
+  const displayInternalRebuyReturnPct = selectedSnap?.internalRebuyTotalReturnPct ?? sum.internalRebuyTotalReturnPct ?? null;
+  const displayInternalRebuyUnitsOpen = selectedSnap?.internalRebuyUnitsOpen ?? sum.internalRebuyUnitsOpen ?? 0;
+  const displayInternalRebuyUnitsSold = selectedSnap?.internalRebuyUnitsSold ?? sum.internalRebuyUnitsSold ?? 0;
   const displayOpenCostBasisEur = selectedSnap?.openCostBasisEur ?? sum.openCostBasisEur ?? 0;
   const displayFiscalReserveEur = selectedSnap?.fiscalReserveEur ?? sum.finalFiscalReserveEur;
   const displayEurcOperatingEur = selectedSnap?.eurcFreeEur ?? sum.eurcOperatingLiquidityEur ?? sum.finalEurcFreeEur;
@@ -1271,7 +1297,7 @@ export function Perspectivas() {
           </div>
           <div className="persp-hero-metrics">
             <div className="persp-hero-metric">
-              <span>Patrimonio inicial</span>
+              <span>Valor inicial cartera</span>
               <strong>{fmt(sum.initialWealthEur)}</strong>
             </div>
             <div className="persp-hero-metric">
@@ -1326,16 +1352,16 @@ export function Perspectivas() {
             <div className="persp-group-title">Capital y exposición</div>
             <div className="persp-group-rows">
               <div className="persp-group-row">
-                <span>Capital inicial</span>
+                <span>Base de coste inicial</span>
                 <strong>{fmt(sum.initialCapitalEur ?? sum.totalHistoricalCapitalEur)}</strong>
               </div>
               <div className="persp-group-row">
-                <span>Capital invertido actual</span>
+                <span>Valor actual en criptomonedas</span>
                 <strong>{fmt(displayInvestedCapitalEur)}</strong>
               </div>
               <div className="persp-group-row">
-                <span>Capital reinvertido</span>
-                <strong>{displayReinvestedCapitalEur > 0 ? fmt(displayReinvestedCapitalEur) : "—"}</strong>
+                <span>Principal recomprado</span>
+                <strong>{displayInternalRebuyPrincipalEur > 0 ? fmt(displayInternalRebuyPrincipalEur) : "—"}</strong>
               </div>
               <div className="persp-group-row">
                 <span>Capital desplegado</span>
@@ -1349,31 +1375,27 @@ export function Perspectivas() {
           </div>
 
           <div className="persp-group">
-            <div className="persp-group-title">Gestión de ciclos</div>
+            <div className="persp-group-title">Ventas y liquidez</div>
             <div className="persp-group-rows">
               <div className="persp-group-row">
                 <span>Modo</span>
                 <strong>{sum.strategyMode === "PASSIVE" ? "Pasivo" : sum.strategyMode === "USER_RULES" ? "Reglas" : sum.strategyMode === "HYBRID" ? "Híbrido" : "Estrategia inteligente"}</strong>
               </div>
               <div className="persp-group-row">
-                <span>Operaciones reales</span>
-                <strong>{(sum.realizedSalesEur ?? 0) > 0 || (sum.realizedRebuysEur ?? 0) > 0 ? `${fmt(sum.realizedSalesEur ?? 0)} / ${fmt(sum.realizedRebuysEur ?? 0)}` : "0 €"}</strong>
-              </div>
-              <div className="persp-group-row">
                 <span>Ventas simuladas</span>
                 <strong>{sum.totalSalesEur > 0 ? fmt(sum.totalSalesEur) : "—"}</strong>
               </div>
               <div className="persp-group-row">
-                <span>Recompras simuladas</span>
-                <strong>{sum.totalRebuysEur > 0 ? fmt(sum.totalRebuysEur) : "—"}</strong>
+                <span>Reserva fiscal apartada</span>
+                <strong>{displayFiscalReserveEur > 0 ? fmt(displayFiscalReserveEur) : "—"}</strong>
+              </div>
+              <div className="persp-group-row">
+                <span>EURC libre restante</span>
+                <strong>{displayEurcOperatingEur > 0 ? fmt(displayEurcOperatingEur) : "—"}</strong>
               </div>
               <div className="persp-group-row">
                 <span>Decisión del motor</span>
                 <strong>{sum.decision === "hold" ? "Mantener" : sum.decision === "user_rules" ? "Aplicar reglas" : sum.decision === "hybrid" ? "Simulación híbrida" : "Propuesta simulada"}</strong>
-              </div>
-              <div className="persp-group-row">
-                <span>Reinversión EURC</span>
-                <strong>{sum.totalEurcReinvestedEur > 0 ? fmt(sum.totalEurcReinvestedEur) : "—"}</strong>
               </div>
               {sum.simulationOnly && (
                 <div className="persp-group-row">
@@ -1385,23 +1407,27 @@ export function Perspectivas() {
           </div>
 
           <div className="persp-group">
-            <div className="persp-group-title">Fiscalidad y liquidez</div>
+            <div className="persp-group-title">Resultado de recompras</div>
             <div className="persp-group-rows">
               <div className="persp-group-row">
-                <span>Impuesto estimado</span>
-                <strong className={sum.totalTaxEur > 0 ? "warn" : ""}>{sum.totalTaxEur > 0 ? fmt(sum.totalTaxEur) : "—"}</strong>
+                <span>EURC usado en recompras</span>
+                <strong>{sum.totalRebuysEur > 0 ? fmt(sum.totalRebuysEur) : "—"}</strong>
               </div>
               <div className="persp-group-row">
-                <span>Reserva fiscal final</span>
-                <strong className={displayFiscalReserveEur > 0 ? "warn" : ""}>{displayFiscalReserveEur > 0 ? fmt(displayFiscalReserveEur) : "—"}</strong>
+                <span>Valor actual recompras</span>
+                <strong>{displayInternalRebuyMarketValueEur > 0 ? fmt(displayInternalRebuyMarketValueEur) : "—"}</strong>
               </div>
               <div className="persp-group-row">
-                <span>EURC operativo</span>
-                <strong>{displayEurcOperatingEur > 0 ? fmt(displayEurcOperatingEur) : "—"}</strong>
+                <span>Resultado recompras</span>
+                <strong className={displayInternalRebuyReturnEur >= 0 ? "pos" : "neg"}>{displayInternalRebuyPrincipalEur > 0 ? fmtSign(displayInternalRebuyReturnEur) : "—"}</strong>
               </div>
               <div className="persp-group-row">
-                <span>EURC de seguridad</span>
-                <strong>{(sum.eurcSecurityReserveEur ?? 0) > 0 ? fmt(sum.eurcSecurityReserveEur ?? 0) : "—"}</strong>
+                <span>Rentabilidad recompra</span>
+                <strong className={(displayInternalRebuyReturnPct ?? 0) >= 0 ? "pos" : "neg"}>{displayInternalRebuyReturnPct != null ? fmtPct(displayInternalRebuyReturnPct) : "—"}</strong>
+              </div>
+              <div className="persp-group-row">
+                <span>Unidades abiertas / vendidas</span>
+                <strong>{displayInternalRebuyUnitsOpen > 0 || displayInternalRebuyUnitsSold > 0 ? `${displayInternalRebuyUnitsOpen.toPrecision(4)} / ${displayInternalRebuyUnitsSold.toPrecision(4)}` : "—"}</strong>
               </div>
             </div>
           </div>

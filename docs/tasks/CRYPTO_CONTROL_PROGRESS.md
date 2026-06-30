@@ -218,6 +218,35 @@ Cambios realizados en esta fase
 
 Resultado local después del cambio
 
+Actualización 2026-06-30 — Auditoría bloqueante de cálculos de Perspectivas
+
+Nueva instrucción recibida y leída completa: `AUDITORÍA BLOQUEANTE — COMPROBAR Y CORREGIR TODOS LOS CÁLCULOS DEL MOTOR DE PERSPECTIVAS`.
+
+Estado de cierre actualizado: la tarea no puede considerarse terminada solo por compilar, generar DMG o corregir tarjetas. Queda añadido como criterio bloqueante demostrar con fixture reproducible, libro mayor mensual y verificador independiente que las cifras de Perspectivas concilian al céntimo.
+
+Cambios aplicados en esta fase:
+
+- `apps/web/src/pages/Perspectivas.tsx`: la pantalla superior de Perspectivas deja de mostrar la misma cifra como `Capital reinvertido`, `Recompras simuladas` y `Reinversión EURC`.
+- `apps/web/src/pages/Perspectivas.tsx`: etiquetas ambiguas sustituidas por `Valor inicial cartera`, `Base de coste inicial` y `Valor actual en criptomonedas`.
+- `apps/web/src/pages/Perspectivas.tsx`: añadido bloque visible `Resultado de recompras` con EURC usado, valor actual de lotes recomprados, resultado económico, rentabilidad y unidades abiertas/vendidas.
+- `apps/web/src/pages/Perspectivas.tsx`: el bloque de ventas separa ventas simuladas, reserva fiscal apartada, EURC libre restante y decisión del motor.
+- `apps/web/src/pages/Perspectivas.tsx`: la conciliación EURC deja de restar dos veces las recompras cuando `totalEurcReinvestedEur` ya las incluye; la reinversión residual se calcula como `max(0, totalEurcReinvestedEur - totalRebuysEur)`.
+- `apps/web/src/Perspectivas.test.tsx`: añadida prueba de regresión de UI para impedir que vuelvan las etiquetas ambiguas y verificar que la pantalla muestra el resultado económico de recompras.
+
+Pruebas ejecutadas en esta fase:
+
+- `npm --prefix apps/web run typecheck` — OK.
+- `npm --prefix apps/web run lint` — OK.
+- `npm --prefix apps/web run test -- src/Perspectivas.test.tsx` — OK, 1 test.
+
+Pendiente bloqueante por la nueva auditoría:
+
+- Congelar input real de `persp2:getSimulation` como fixture reproducible.
+- Crear libro mayor mensual 2026-2044.
+- Crear verificador independiente que no reutilice funciones del motor principal.
+- Comparar motor contra verificador con tolerancia máxima 0,01 EUR.
+- Validar TWR y XIRR con cálculo independiente.
+- Reinstalar DMG y verificar que la app instalada reproduce el commit y JSON auditado.
 Actualización 2026-06-29 — Corrección bloqueante definitiva de Perspectivas
 
 Nueva ampliación recibida
