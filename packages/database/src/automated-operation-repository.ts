@@ -66,11 +66,13 @@ function parseJson<T>(value: string, fallback: T): T {
 }
 
 function mapPolicy(row: PolicyRow): StoredAutomatedPolicy {
+  const enabled = row.enabled === 1;
+  const policy = parseJson<AutomatedOperationPolicy>(row.policy_json, {} as AutomatedOperationPolicy);
   return {
     id: row.id,
     label: row.label,
-    enabled: row.enabled === 1,
-    policy: parseJson<AutomatedOperationPolicy>(row.policy_json, {} as AutomatedOperationPolicy),
+    enabled,
+    policy: { ...policy, id: row.id, enabled },
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -171,28 +173,69 @@ export class DatabaseAutomatedOperationRepository {
 
   listPolicies(enabledOnly = false): StoredAutomatedPolicy[] {
     this.ensureTables();
-    const sql = enabledOnly
+    const query = enabledOnly
       ? "SELECT * FROM automated_operation_policies_v1 WHERE enabled = 1 ORDER BY updated_at DESC"
       : "SELECT * FROM automated_operation_policies_v1 ORDER BY updated_at DESC";
-    return (this.db().prepare(sql).all() as PolicyRow[]).map(mapPolicy);
+    return (this.db().prepare(query).all() as PolicyRow[]).map(mapPolicy);
+  }
+
+  listEnabledPolicies(): AutomatedOperationPolicy[] {
+    return this.listPolicies(true).map((item) => item.policy);
   }
 
   setPolicyEnabled(id: string, enabled: boolean): void {
     this.ensureTables();
+    const stored = this.getPolicy(id);
+    if (!stored) throw new Error(`Automated operation policy ${id} not found`);
+    const policy = { ...stored.policy, enabled };
     this.db().prepare(`
       UPDATE automated_operation_policies_v1
-      SET enabled = ?, updated_at = ?
+      SET enabled = ?, policy_json = ?, updated_at = ?
       WHERE id = ?
-    `).run(enabled ? 1 : 0, Date.now(), id);
+    `).run(enabled ? 1 : 0, JSON.stringify(policy), Date.now(), id);
+  }
+
+  markPolicyExecuted(policyId: string, executedAt: number): void {
+    this.ensureTables();
+    const stored = this.getPolicy(policyId);
+    if (!stored) throw new Error(`Automated operation policy ${policyId} not found`);
+    const policy: AutomatedOperationPolicy = {
+      ...stored.policy,
+      executionCount: stored.policy.executionCount + 1,
+      lastExecutedAt: executedAt,
+    };
+    this.db().prepare(`
+      UPDATE automated_operation_policies_v1
+      SET policy_json = ?, updated_at = ?
+      WHERE id = ?
+    `).run(JSON.stringify(policy), executedAt, policyId);
   }
 
   claimProposal(runId: string, proposal: AutomatedOperationProposal): AutomatedOperationRun {
     this.ensureTables();
     const now = Date.now();
+    const retryableStates = "'SCHEDULED','MONITORING','BLOCKED_DATA','BLOCKED_RISK','REVIEW_REQUIRED','READY_TO_PREVIEW'";
     this.db().prepare(`
-      INSERT OR IGNORE INTO automated_operation_runs_v1
+      INSERT INTO automated_operation_runs_v1
         (id, policy_id, idempotency_key, state, proposal_json, notional_eur, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(idempotency_key) DO UPDATE SET
+        state = CASE
+          WHEN automated_operation_runs_v1.state IN (${retryableStates}) THEN excluded.state
+          ELSE automated_operation_runs_v1.state
+        END,
+        proposal_json = CASE
+          WHEN automated_operation_runs_v1.state IN (${retryableStates}) THEN excluded.proposal_json
+          ELSE automated_operation_runs_v1.proposal_json
+        END,
+        notional_eur = CASE
+          WHEN automated_operation_runs_v1.state IN (${retryableStates}) THEN excluded.notional_eur
+          ELSE automated_operation_runs_v1.notional_eur
+        END,
+        updated_at = CASE
+          WHEN automated_operation_runs_v1.state IN (${retryableStates}) THEN excluded.updated_at
+          ELSE automated_operation_runs_v1.updated_at
+        END
     `).run(
       runId,
       proposal.policyId,
@@ -258,9 +301,10 @@ export class DatabaseAutomatedOperationRepository {
 
   listRuns(policyId?: string, limit = 100): AutomatedOperationRun[] {
     this.ensureTables();
+    const safeLimit = Math.max(1, Math.min(1_000, Math.floor(limit)));
     const rows = policyId
-      ? this.db().prepare(`SELECT * FROM automated_operation_runs_v1 WHERE policy_id = ? ORDER BY created_at DESC LIMIT ?`).all(policyId, limit)
-      : this.db().prepare(`SELECT * FROM automated_operation_runs_v1 ORDER BY created_at DESC LIMIT ?`).all(limit);
+      ? this.db().prepare(`SELECT * FROM automated_operation_runs_v1 WHERE policy_id = ? ORDER BY created_at DESC LIMIT ?`).all(policyId, safeLimit)
+      : this.db().prepare(`SELECT * FROM automated_operation_runs_v1 ORDER BY created_at DESC LIMIT ?`).all(safeLimit);
     return (rows as RunRow[]).map(mapRun);
   }
 
@@ -270,8 +314,8 @@ export class DatabaseAutomatedOperationRepository {
       SELECT COUNT(*) AS executions, COALESCE(SUM(notional_eur), 0) AS notional
       FROM automated_operation_runs_v1
       WHERE policy_id = ?
-        AND created_at >= ?
-        AND created_at < ?
+        AND COALESCE(completed_at, updated_at) >= ?
+        AND COALESCE(completed_at, updated_at) < ?
         AND state IN ('SUBMITTED', 'COMPLETED')
     `).get(policyId, dayStartUtc, dayEndUtc) as { executions: number; notional: number };
     return { executions: row.executions, notionalEur: row.notional };
