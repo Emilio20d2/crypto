@@ -16,6 +16,7 @@ export * from "./partial-sale-engine";
 export * from "./rebuy-engine";
 export * from "./plan-monitoring";
 export * from "./smart-buy-engine";
+export * from "./automated-operations";
 export * from "./fiscal-config";
 export * from "./plan-snapshot";
 export * from "./profit-harvest-cycle";
