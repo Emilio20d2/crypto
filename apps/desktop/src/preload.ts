@@ -85,6 +85,14 @@ const cryptoControl = {
     createScheduledOperation: (input: unknown)          => ipcRenderer.invoke("coinbase:create-scheduled-operation", input),
     deleteScheduledOperation: (id: string)              => ipcRenderer.invoke("coinbase:delete-scheduled-operation", id),
   },
+  automation: {
+    listPolicies:   ()                   => ipcRenderer.invoke("automation:list-policies"),
+    upsertPolicy:   (input: unknown)     => ipcRenderer.invoke("automation:upsert-policy", input),
+    setPolicyEnabled: (id: string, enabled: boolean) => ipcRenderer.invoke("automation:set-policy-enabled", id, enabled),
+    listRuns:       (input?: unknown)    => ipcRenderer.invoke("automation:list-runs", input),
+    runOnce:        ()                   => ipcRenderer.invoke("automation:run-once"),
+    getStatus:      ()                   => ipcRenderer.invoke("automation:get-status"),
+  },
   sentiment: {
     getGlobal: (input: unknown) => ipcRenderer.invoke("sentiment:get-global", input),
     getAsset:  (input: unknown) => ipcRenderer.invoke("sentiment:get-asset", input),

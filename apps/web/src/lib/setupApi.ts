@@ -89,6 +89,14 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
       createScheduledOperation: (input: unknown) =>          ipc("coinbase:create-scheduled-operation", input),
       deleteScheduledOperation: (id: unknown) =>             ipc("coinbase:delete-scheduled-operation", id),
     },
+    automation: {
+      listPolicies:      () =>                         ipc("automation:list-policies"),
+      upsertPolicy:      (input: unknown) =>           ipc("automation:upsert-policy", input),
+      setPolicyEnabled:  (id: unknown, enabled: unknown) => ipc("automation:set-policy-enabled", id, enabled),
+      listRuns:          (input?: unknown) =>          ipc("automation:list-runs", input),
+      runOnce:           () =>                         ipc("automation:run-once"),
+      getStatus:         () =>                         ipc("automation:get-status"),
+    },
     sentiment: {
       getGlobal: (i: unknown) => ipc("sentiment:get-global", i),
       getAsset:  (i: unknown) => ipc("sentiment:get-asset", i),
