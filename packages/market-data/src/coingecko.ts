@@ -114,8 +114,7 @@ export class CoinGeckoProvider implements MarketDataProvider {
       const volumes = Array.isArray(payload.total_volumes)
         ? payload.total_volumes.filter((row: unknown): row is [number, number] => Array.isArray(row) && row.length >= 2)
         : [];
-      const points = mapVolumes(prices, volumes);
-      if (points.length > 0) return scopeToPeriod(points, period);
+      return scopeToPeriod(mapVolumes(prices, volumes), period);
     }
 
     throw new MarketInvalidResponseError("Invalid historical data from CoinGecko");
