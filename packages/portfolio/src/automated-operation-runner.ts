@@ -43,6 +43,7 @@ export interface AutomatedOperationRunRepository {
     errorMessage?: string | null;
     completed?: boolean;
   }): Promise<AutomationRunRecord> | AutomationRunRecord;
+  markPolicyExecuted?(policyId: string, executedAt: number): Promise<void> | void;
 }
 
 export interface AutomatedOperationRunnerDependencies {
@@ -64,11 +65,38 @@ export interface AutomationCycleResult {
   submitted: number;
   completed: number;
   failed: number;
+  deduplicated: number;
   records: AutomationRunRecord[];
 }
 
+const NON_RETRYABLE_STATES = new Set<AutomatedOperationState>([
+  "PREVIEWING",
+  "READY_TO_SUBMIT",
+  "SUBMITTED",
+  "COMPLETED",
+  "FAILED",
+  "CANCELLED",
+  "EXPIRED",
+]);
+
 function defaultRunId(proposal: AutomatedOperationProposal): string {
   return `auto:${proposal.idempotencyKey}`;
+}
+
+function validatePreview(preview: AutomationPreviewResult, proposal: AutomatedOperationProposal, now: number): void {
+  if (!preview.previewToken.trim()) {
+    throw Object.assign(new Error("Coinbase no devolvió un token de preview válido"), { code: "PREVIEW_TOKEN_MISSING" });
+  }
+  if (!Number.isFinite(preview.notionalEur) || preview.notionalEur <= 0) {
+    throw Object.assign(new Error("El preview devolvió un importe no válido"), { code: "PREVIEW_NOTIONAL_INVALID" });
+  }
+  const toleranceEur = Math.max(1, proposal.amountEur * 0.01);
+  if (preview.notionalEur > proposal.amountEur + toleranceEur) {
+    throw Object.assign(new Error("El preview supera el límite autorizado para la operación"), { code: "PREVIEW_LIMIT_EXCEEDED" });
+  }
+  if (preview.expiresAt <= now + 5_000) {
+    throw Object.assign(new Error("El preview automático ha caducado o no deja margen seguro para el envío"), { code: "PREVIEW_EXPIRED" });
+  }
 }
 
 export class AutomatedOperationRunner {
@@ -97,7 +125,14 @@ export class AutomatedOperationRunner {
       submitted: 0,
       completed: 0,
       failed: 0,
+      deduplicated: 0,
       records: [],
+    };
+
+    const replaceRecord = (next: AutomationRunRecord): void => {
+      const index = result.records.findIndex((item) => item.id === next.id);
+      if (index >= 0) result.records[index] = next;
+      else result.records.push(next);
     };
 
     const policies = await this.deps.repository.listEnabledPolicies();
@@ -109,8 +144,12 @@ export class AutomatedOperationRunner {
         const proposal = evaluateAutomatedOperation(policy, context);
         const runId = (this.deps.createRunId ?? defaultRunId)(proposal);
         record = await this.deps.repository.claimProposal(runId, proposal);
-        result.records.push(record);
+        replaceRecord(record);
 
+        if (NON_RETRYABLE_STATES.has(record.state)) {
+          result.deduplicated += 1;
+          continue;
+        }
         if (proposal.state === "BLOCKED_DATA" || proposal.state === "BLOCKED_RISK") {
           result.blocked += 1;
           continue;
@@ -129,25 +168,34 @@ export class AutomatedOperationRunner {
         }
 
         record = await this.deps.repository.updateRun({ id: record.id, state: "PREVIEWING" });
+        replaceRecord(record);
+
         const preview = await this.deps.preview(proposal);
-        if (preview.expiresAt <= (this.deps.now ?? Date.now)()) {
-          throw Object.assign(new Error("El preview automático ha caducado antes del envío"), { code: "PREVIEW_EXPIRED" });
-        }
+        const now = (this.deps.now ?? Date.now)();
+        validatePreview(preview, proposal, now);
+
         record = await this.deps.repository.updateRun({
           id: record.id,
           state: "READY_TO_SUBMIT",
           previewToken: preview.previewToken,
           previewId: preview.previewId,
         });
+        replaceRecord(record);
         result.previewed += 1;
 
         const submitted = await this.deps.submit(preview, proposal);
+        if (submitted.orderIds.length === 0) {
+          throw Object.assign(new Error("Coinbase no devolvió ningún identificador de orden"), { code: "ORDER_ID_MISSING" });
+        }
+
         record = await this.deps.repository.updateRun({
           id: record.id,
           state: submitted.completed ? "COMPLETED" : "SUBMITTED",
           orderIds: submitted.orderIds,
           completed: submitted.completed,
         });
+        replaceRecord(record);
+        await this.deps.repository.markPolicyExecuted?.(policy.id, now);
         result.submitted += 1;
         if (submitted.completed) result.completed += 1;
       } catch (error) {
@@ -162,8 +210,7 @@ export class AutomatedOperationRunner {
             errorCode: code,
             errorMessage: message,
           });
-          const index = result.records.findIndex((item) => item.id === failed.id);
-          if (index >= 0) result.records[index] = failed;
+          replaceRecord(failed);
         }
       }
     }
