@@ -80,13 +80,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Install web dependencies and generate its lockfile
-        run: npm install --prefix apps/web --ignore-scripts --no-audit --no-fund
-      - name: Upload generated web lockfile
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-package-lock
-          path: apps/web/package-lock.json
+      - name: Install web dependencies
+        run: npm ci --prefix apps/web
       - name: Build shared packages in dependency order
         run: |
           npm --prefix packages/market-data run build
