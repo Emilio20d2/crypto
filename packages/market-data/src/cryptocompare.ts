@@ -47,9 +47,15 @@ export class CryptoCompareProvider implements MarketDataProvider {
 
   private async fetchWithTimeout(url: string, signal?: AbortSignal) {
     const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 6000);
+    let timedOut = false;
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 6_000);
+    const abortFromCaller = () => controller.abort();
 
-    if (signal) signal.addEventListener("abort", () => controller.abort(), { once: true });
+    if (signal?.aborted) controller.abort();
+    else signal?.addEventListener("abort", abortFromCaller, { once: true });
 
     try {
       const response = await fetch(url, {
@@ -59,7 +65,6 @@ export class CryptoCompareProvider implements MarketDataProvider {
           ...(this.apiKey ? { authorization: `Apikey ${this.apiKey}` } : {}),
         },
       });
-      clearTimeout(id);
 
       if (response.status === 404) throw new MarketNotFoundError(`Asset not found at ${url}`);
       if (response.status === 429) {
@@ -77,12 +82,14 @@ export class CryptoCompareProvider implements MarketDataProvider {
       }
       return json;
     } catch (error: unknown) {
-      clearTimeout(id);
-      if (error instanceof DOMException && error.name === "AbortError") throw error;
-      if (error instanceof Error && (error.name === "AbortError" || error.message?.includes("timeout"))) {
-        throw new MarketTimeoutError("CryptoCompare API timed out");
-      }
+      const aborted = error instanceof DOMException && error.name === "AbortError"
+        || error instanceof Error && error.name === "AbortError";
+      if (aborted && signal?.aborted) throw error;
+      if (aborted && timedOut) throw new MarketTimeoutError("CryptoCompare API timed out");
       throw error;
+    } finally {
+      clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", abortFromCaller);
     }
   }
 
