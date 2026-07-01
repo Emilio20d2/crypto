@@ -3,7 +3,6 @@ import { getDb, getSqlite } from "./db";
 import { transactions, transactionLegs, fees, lots, lotConsumptions, realizedGains, accounts } from "./schema";
 
 interface TransactionCacheRow {
-  signature: string;
   data_json: string;
 }
 
@@ -16,107 +15,86 @@ export class DatabasePortfolioRepository implements PortfolioRepository {
     const sqlite = getSqlite();
     if (!sqlite) return;
     sqlite.exec(`
-      CREATE TABLE IF NOT EXISTS portfolio_transaction_cache_v1 (
+      CREATE TABLE IF NOT EXISTS portfolio_transaction_cache_v2 (
         cache_key TEXT PRIMARY KEY NOT NULL,
-        signature TEXT NOT NULL,
         data_json TEXT NOT NULL,
         generated_at INTEGER NOT NULL
       );
 
-      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_after_transaction_insert
+      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_v2_after_transaction_insert
       AFTER INSERT ON transactions BEGIN
-        DELETE FROM portfolio_transaction_cache_v1 WHERE cache_key = 'all-transactions';
+        DELETE FROM portfolio_transaction_cache_v2 WHERE cache_key = 'all-transactions';
       END;
-      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_after_transaction_update
+      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_v2_after_transaction_update
       AFTER UPDATE ON transactions BEGIN
-        DELETE FROM portfolio_transaction_cache_v1 WHERE cache_key = 'all-transactions';
+        DELETE FROM portfolio_transaction_cache_v2 WHERE cache_key = 'all-transactions';
       END;
-      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_after_transaction_delete
+      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_v2_after_transaction_delete
       AFTER DELETE ON transactions BEGIN
-        DELETE FROM portfolio_transaction_cache_v1 WHERE cache_key = 'all-transactions';
+        DELETE FROM portfolio_transaction_cache_v2 WHERE cache_key = 'all-transactions';
       END;
 
-      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_after_leg_insert
+      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_v2_after_leg_insert
       AFTER INSERT ON transaction_legs BEGIN
-        DELETE FROM portfolio_transaction_cache_v1 WHERE cache_key = 'all-transactions';
+        DELETE FROM portfolio_transaction_cache_v2 WHERE cache_key = 'all-transactions';
       END;
-      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_after_leg_update
+      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_v2_after_leg_update
       AFTER UPDATE ON transaction_legs BEGIN
-        DELETE FROM portfolio_transaction_cache_v1 WHERE cache_key = 'all-transactions';
+        DELETE FROM portfolio_transaction_cache_v2 WHERE cache_key = 'all-transactions';
       END;
-      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_after_leg_delete
+      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_v2_after_leg_delete
       AFTER DELETE ON transaction_legs BEGIN
-        DELETE FROM portfolio_transaction_cache_v1 WHERE cache_key = 'all-transactions';
+        DELETE FROM portfolio_transaction_cache_v2 WHERE cache_key = 'all-transactions';
       END;
 
-      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_after_fee_insert
+      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_v2_after_fee_insert
       AFTER INSERT ON fees BEGIN
-        DELETE FROM portfolio_transaction_cache_v1 WHERE cache_key = 'all-transactions';
+        DELETE FROM portfolio_transaction_cache_v2 WHERE cache_key = 'all-transactions';
       END;
-      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_after_fee_update
+      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_v2_after_fee_update
       AFTER UPDATE ON fees BEGIN
-        DELETE FROM portfolio_transaction_cache_v1 WHERE cache_key = 'all-transactions';
+        DELETE FROM portfolio_transaction_cache_v2 WHERE cache_key = 'all-transactions';
       END;
-      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_after_fee_delete
+      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_v2_after_fee_delete
       AFTER DELETE ON fees BEGIN
-        DELETE FROM portfolio_transaction_cache_v1 WHERE cache_key = 'all-transactions';
+        DELETE FROM portfolio_transaction_cache_v2 WHERE cache_key = 'all-transactions';
       END;
     `);
   }
 
-  private transactionSignature(): string | null {
-    const sqlite = getSqlite();
-    if (!sqlite) return null;
-    this.ensureTransactionCache();
-    const row = sqlite.prepare(`
-      SELECT
-        (SELECT COUNT(*) FROM transactions) AS tx_count,
-        (SELECT COALESCE(MAX(updated_at), 0) FROM transactions) AS tx_updated,
-        (SELECT COUNT(*) FROM transaction_legs) AS leg_count,
-        (SELECT COALESCE(SUM(amount), 0) FROM transaction_legs) AS leg_amount_sum,
-        (SELECT COALESCE(SUM(COALESCE(acquisition_value_eur, valuation_eur, 0)), 0) FROM transaction_legs) AS leg_value_sum,
-        (SELECT COUNT(*) FROM fees) AS fee_count,
-        (SELECT COALESCE(SUM(amount), 0) FROM fees) AS fee_amount_sum
-    `).get() as Record<string, number>;
-    return JSON.stringify(row);
-  }
-
-  private readCachedTransactions(signature: string): TransactionInput[] | null {
+  private readCachedTransactions(): TransactionInput[] | null {
     const sqlite = getSqlite();
     if (!sqlite) return null;
     const row = sqlite.prepare(`
-      SELECT signature, data_json
-      FROM portfolio_transaction_cache_v1
+      SELECT data_json
+      FROM portfolio_transaction_cache_v2
       WHERE cache_key = 'all-transactions'
     `).get() as TransactionCacheRow | undefined;
-    if (!row || row.signature !== signature) return null;
+    if (!row) return null;
     try {
       const value = JSON.parse(row.data_json) as TransactionInput[];
       return Array.isArray(value) ? value : null;
     } catch {
+      sqlite.prepare("DELETE FROM portfolio_transaction_cache_v2 WHERE cache_key = 'all-transactions'").run();
       return null;
     }
   }
 
-  private saveCachedTransactions(signature: string, value: TransactionInput[]): void {
+  private saveCachedTransactions(value: TransactionInput[]): void {
     const sqlite = getSqlite();
     if (!sqlite) return;
     sqlite.prepare(`
-      INSERT INTO portfolio_transaction_cache_v1 (cache_key, signature, data_json, generated_at)
-      VALUES ('all-transactions', ?, ?, ?)
+      INSERT INTO portfolio_transaction_cache_v2 (cache_key, data_json, generated_at)
+      VALUES ('all-transactions', ?, ?)
       ON CONFLICT(cache_key) DO UPDATE SET
-        signature = excluded.signature,
         data_json = excluded.data_json,
         generated_at = excluded.generated_at
-    `).run(signature, JSON.stringify(value), Date.now());
+    `).run(JSON.stringify(value), Date.now());
   }
 
   async getTransactions(): Promise<TransactionInput[]> {
-    const signature = this.transactionSignature();
-    if (signature) {
-      const cached = this.readCachedTransactions(signature);
-      if (cached) return cached;
-    }
+    const cached = this.readCachedTransactions();
+    if (cached) return cached;
 
     const [allTxs, allLegs, allFees] = await Promise.all([
       this.db.select().from(transactions),
@@ -157,7 +135,7 @@ export class DatabasePortfolioRepository implements PortfolioRepository {
       legs: legsByTxId[tx.id] || [],
     }));
 
-    if (signature) this.saveCachedTransactions(signature, result);
+    this.saveCachedTransactions(result);
     return result;
   }
 
