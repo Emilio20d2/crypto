@@ -27,26 +27,7 @@ jobs:
       - name: Typecheck
         run: npm --prefix packages/market-data run typecheck
       - name: Tests
-        id: market_tests
-        continue-on-error: true
-        shell: bash
-        run: |
-          set +e
-          npm --prefix packages/market-data test > market-tests.log 2>&1
-          status=$?
-          echo "status=$status" >> "$GITHUB_OUTPUT"
-          exit $status
-      - name: Upload market test diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: market-tests
-          path: market-tests.log
-      - name: Fail on market test errors
-        if: steps.market_tests.outputs.status != '0'
-        run: |
-          cat market-tests.log
-          exit 1
+        run: npm --prefix packages/market-data test
       - name: Build
         run: npm --prefix packages/market-data run build
 
@@ -106,13 +87,103 @@ jobs:
           npm --prefix packages/core run build
           npm --prefix packages/database run build
           npm --prefix packages/coinbase-sync run build
-      - name: Web typecheck and tests
+
+      - name: Web typecheck
+        id: web_typecheck
+        continue-on-error: true
+        shell: bash
         run: |
-          npm --prefix apps/web run typecheck
-          npm --prefix apps/web test
+          set +e
+          npm --prefix apps/web run typecheck > web-typecheck.log 2>&1
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit $status
+      - name: Upload web typecheck diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-typecheck
+          path: web-typecheck.log
+      - name: Web tests
+        id: web_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          npm --prefix apps/web test > web-tests.log 2>&1
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit $status
+      - name: Upload web test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-tests
+          path: web-tests.log
+      - name: Fail on web validation errors
+        if: steps.web_typecheck.outputs.status != '0' || steps.web_tests.outputs.status != '0'
+        run: |
+          cat web-typecheck.log || true
+          cat web-tests.log || true
+          exit 1
+
       - name: Web production build
-        run: npm --prefix apps/web run build
-      - name: Electron typecheck and build
+        id: web_build
+        continue-on-error: true
+        shell: bash
         run: |
-          npm --prefix apps/desktop run typecheck
-          npm --prefix apps/desktop run build
+          set +e
+          npm --prefix apps/web run build > web-build.log 2>&1
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit $status
+      - name: Upload web build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: web-build.log
+      - name: Fail on web build errors
+        if: steps.web_build.outputs.status != '0'
+        run: |
+          cat web-build.log
+          exit 1
+
+      - name: Electron typecheck
+        id: desktop_typecheck
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          npm --prefix apps/desktop run typecheck > desktop-typecheck.log 2>&1
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit $status
+      - name: Upload Electron typecheck diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-typecheck
+          path: desktop-typecheck.log
+      - name: Electron build
+        id: desktop_build
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          npm --prefix apps/desktop run build > desktop-build.log 2>&1
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit $status
+      - name: Upload Electron build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-build
+          path: desktop-build.log
+      - name: Fail on Electron validation errors
+        if: steps.desktop_typecheck.outputs.status != '0' || steps.desktop_build.outputs.status != '0'
+        run: |
+          cat desktop-typecheck.log || true
+          cat desktop-build.log || true
+          exit 1
