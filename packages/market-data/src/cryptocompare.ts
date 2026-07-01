@@ -11,7 +11,7 @@ function historyConfig(period: string): { endpoint: CryptoCompareHistoryEndpoint
   if (period === "1h") return { endpoint: "histominute", aggregate: 1, limit: 60 };
   if (period === "24h") return { endpoint: "histominute", aggregate: 15, limit: 96 };
   if (period === "7d") return { endpoint: "histohour", aggregate: 1, limit: 168 };
-  if (period === "30d") return { endpoint: "histoday", aggregate: 1, limit: 30 };
+  if (period === "30d") return { endpoint: "histohour", aggregate: 6, limit: 120 };
   if (period === "1y") return { endpoint: "histoday", aggregate: 1, limit: 365 };
   return { endpoint: "histoday", aggregate: 1, limit: 2000 };
 }
