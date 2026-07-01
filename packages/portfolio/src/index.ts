@@ -20,14 +20,9 @@ export * from "./fiscal-config";
 export * from "./plan-snapshot";
 export * from "./profit-harvest-cycle";
 
-// Perspectivas V5 es la única superficie nueva que debe usarse a partir de esta rama.
-// La carpeta ./perspectives queda como legado temporal hasta terminar la migración de
-// Electron/preload/UI; no se reexporta como API principal para evitar usar V4 por accidente.
 export * from "./perspectives-v5";
+export { DEFAULT_SPANISH_TAX_BANDS, runPerspectivesSimulation } from "./perspectives-v5/legacy-guard";
 
-// Compatibilidad estrictamente necesaria para módulos heredados que todavía importan
-// ingestion/forecast repositories desde @crypto-control/portfolio. No exportar aquí
-// runPerspectivesSimulation ni tipos de simulación V4.
 export type {
   ForecastSource, ForecastDirection, ForecastSourceType,
   ValidationReport, ValidationError, RegressionReport, StagingRow,
