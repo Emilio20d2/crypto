@@ -27,6 +27,12 @@ function extractHistoryRows(payload: unknown): unknown[] {
   return [];
 }
 
+function numberValue(record: Record<string, unknown>, key: string): number | undefined {
+  const raw = record[key];
+  const value = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+  return Number.isFinite(value) ? value : undefined;
+}
+
 export class CryptoCompareProvider implements MarketDataProvider {
   readonly name = "cryptocompare";
   private readonly apiKey?: string;
@@ -43,9 +49,7 @@ export class CryptoCompareProvider implements MarketDataProvider {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), 6000);
 
-    if (signal) {
-      signal.addEventListener("abort", () => controller.abort(), { once: true });
-    }
+    if (signal) signal.addEventListener("abort", () => controller.abort(), { once: true });
 
     try {
       const response = await fetch(url, {
@@ -83,15 +87,9 @@ export class CryptoCompareProvider implements MarketDataProvider {
   }
 
   async getCurrentPrice(meta: AssetMetadata, signal?: AbortSignal): Promise<number> {
-    if (!this.isConfigured()) {
-      throw new MarketInvalidResponseError("CryptoCompare API key not configured");
-    }
-    const params = new URLSearchParams({
-      fsym: meta.symbol,
-      tsyms: meta.quoteCurrency,
-    });
-    const url = `${CRYPTOCOMPARE_API_URL}/data/price?${params.toString()}`;
-    const data = await this.fetchWithTimeout(url, signal);
+    if (!this.isConfigured()) throw new MarketInvalidResponseError("CryptoCompare API key not configured");
+    const params = new URLSearchParams({ fsym: meta.symbol, tsyms: meta.quoteCurrency });
+    const data = await this.fetchWithTimeout(`${CRYPTOCOMPARE_API_URL}/data/price?${params.toString()}`, signal);
     const record = data && typeof data === "object" ? data as Record<string, unknown> : null;
     const raw = record?.[meta.quoteCurrency];
     const price = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
@@ -100,9 +98,7 @@ export class CryptoCompareProvider implements MarketDataProvider {
   }
 
   async getHistoricalPrices(meta: AssetMetadata, period: string, signal?: AbortSignal): Promise<HistoricalPriceData[]> {
-    if (!this.isConfigured()) {
-      throw new MarketInvalidResponseError("CryptoCompare API key not configured");
-    }
+    if (!this.isConfigured()) throw new MarketInvalidResponseError("CryptoCompare API key not configured");
     const { endpoint, aggregate, limit } = historyConfig(period);
     const params = new URLSearchParams({
       fsym: meta.symbol,
@@ -115,20 +111,22 @@ export class CryptoCompareProvider implements MarketDataProvider {
     const points = rows.flatMap((row): HistoricalPriceData[] => {
       if (!row || typeof row !== "object") return [];
       const record = row as Record<string, unknown>;
-      const time = typeof record.time === "number" ? record.time : NaN;
-      const close = typeof record.close === "number" ? record.close : typeof record.close === "string" ? Number(record.close) : NaN;
+      const time = numberValue(record, "time") ?? NaN;
+      const close = numberValue(record, "close") ?? NaN;
       if (!Number.isFinite(time) || !Number.isFinite(close) || time <= 0 || close <= 0) return [];
       return [{
         timestamp: time * 1000,
         price: close,
+        open: numberValue(record, "open"),
+        high: numberValue(record, "high"),
+        low: numberValue(record, "low"),
+        volume: numberValue(record, "volumeto") ?? numberValue(record, "volumefrom"),
         source: this.name,
         confidence: 0.85,
       }];
     });
 
-    if (points.length === 0) {
-      throw new MarketInvalidResponseError("Invalid historical data from CryptoCompare");
-    }
+    if (points.length === 0) throw new MarketInvalidResponseError("Invalid historical data from CryptoCompare");
     return points.sort((a, b) => a.timestamp - b.timestamp);
   }
 }
