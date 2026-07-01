@@ -20,7 +20,21 @@ export * from "./automated-operations";
 export * from "./automated-operation-runner";
 export * from "./fiscal-config";
 export * from "./plan-snapshot";
-export * from "./profit-harvest-cycle";
+export {
+  addSimulatedRebuy,
+  buildProfitHarvestCycle,
+  calculateBreakEvenRebuyPrice,
+  calculateMinimumDropPct,
+  strategySourceForHarvest,
+} from "./profit-harvest-cycle";
+export type {
+  BuildProfitHarvestCycleInput,
+  ProfitHarvestCycle,
+  ProfitHarvestRebuy,
+  ProfitHarvestSignalSnapshot,
+  ProfitHarvestStrategyMode,
+  ProfitHarvestCycleStatus as LegacyProfitHarvestCycleStatus,
+} from "./profit-harvest-cycle";
 export * from "./perspectives-v5";
 export { DEFAULT_SPANISH_TAX_BANDS, runPerspectivesSimulation } from "./perspectives-v5/legacy-guard";
 export type { ForecastSource, ForecastDirection, ForecastSourceType, ValidationReport, ValidationError, RegressionReport, StagingRow, CandidateVersion, CandidateRow, SqliteDb, ActiveVersion, ExternalPriceResult, ObservationRow, SourceRow, IngestionLogRow, AssetYearCoverage, IngestableSource, IngestResult, SeedSource, SeedObservation } from "./perspectives";
