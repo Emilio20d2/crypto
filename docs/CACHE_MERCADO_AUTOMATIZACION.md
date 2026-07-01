@@ -2,208 +2,202 @@
 
 ## Objetivo
 
-La aplicación debe:
+Esta rama prepara tres bloques relacionados, sin declarar todavía que la aplicación puede operar dinero real automáticamente:
 
-1. abrir las gráficas de Cartera usando primero la base local;
-2. actualizar en segundo plano sin dejar la pantalla esperando;
-3. declarar exactamente qué datos de Mercado faltan;
-4. utilizar precios, OHLCV, volumen, sentimiento y calidad verificables;
-5. permitir compras y ventas manuales;
-6. permitir programar ventas parciales en fases alcistas y recompras escalonadas en fases bajistas;
-7. vincular las operaciones con los ciclos, reservas y objetivos de Perspectivas;
-8. no utilizar nunca la reserva fiscal para recompras;
-9. impedir duplicados y ejecuciones sin autorización vigente.
+1. acelerar Cartera utilizando primero datos persistidos en SQLite;
+2. completar y auditar los datos de Mercado y sentimiento;
+3. construir la base segura para programar ventas parciales alcistas y recompras bajistas vinculadas a objetivos.
 
-## Cambios implementados en esta rama
+## Implementación auditada
 
-### Caché de mercado persistente
+### 1. Caché persistente de mercado
 
-Se añade `market_series_cache_v2`, una caché SQLite por:
+Se utiliza `market_series_cache_v2`, separada por activo, moneda, periodo y proveedor.
 
-- activo;
-- moneda;
-- periodo;
-- proveedor.
+Cada serie conserva:
 
-Guarda la serie completa en JSON con:
-
-- timestamp;
+- fecha y hora;
 - cierre;
 - apertura;
 - máximo;
 - mínimo;
 - volumen;
-- fuente;
+- proveedor;
 - confianza.
 
-La lectura normal utiliza esta serie compacta antes de consultar miles de filas de `price_history`.
+La caché compacta se consulta antes de recorrer `price_history`. Los históricos nuevos se fusionan con los anteriores del mismo proveedor; una respuesta parcial no borra la cobertura válida ya guardada.
 
-La tabla anterior se mantiene como compatibilidad y respaldo.
+La lectura no mezcla velas de Coinbase, CoinGecko y CryptoCompare como si fueran una sola serie. Selecciona una serie coherente del proveedor con mejor combinación de cobertura, número de puntos, calidad, antigüedad y disponibilidad de volumen.
 
-Los históricos dejan de borrarse antes de cada guardado. Se actualizan mediante upsert, evitando perder cobertura válida cuando un proveedor devuelve una respuesta parcial.
+`price_history` continúa como respaldo y compatibilidad.
 
-### Caché persistente de transacciones
+### 2. Caché persistente de transacciones
 
-Se añade `portfolio_transaction_cache_v1`.
+Se utiliza `portfolio_transaction_cache_v2`.
 
-La reconstrucción de transacciones, legs y comisiones se guarda en SQLite y solo se recalcula cuando cambia su firma contable.
+La reconstrucción de transacciones, legs y comisiones se guarda en SQLite. Triggers de SQLite invalidan automáticamente la caché al insertar, modificar o borrar:
 
-Esto reduce el trabajo repetido de las gráficas de Cartera.
+- transacciones;
+- legs;
+- comisiones.
 
-### Datos completos de Mercado
+Por tanto, una segunda carga puede reutilizar el resultado sin volver a ejecutar escaneos contables completos y sin conservar datos antiguos después de una modificación.
 
-Los proveedores conservan ahora:
+La valoración de adquisición prioriza `acquisitionValueEur` y utiliza `valuationEur` solo como compatibilidad.
 
-- Coinbase: OHLCV completo.
-- CoinGecko: precio y volumen.
+### 3. Proveedores de Mercado
+
+Los proveedores conservan los campos disponibles:
+
+- Coinbase: OHLCV completo;
+- CoinGecko: precio y volumen;
 - CryptoCompare: OHLCV completo.
 
-El sentimiento v2 utiliza:
+También se han corregido:
 
-- momentum 24h;
-- tendencia 7d;
-- tendencia 30d;
+- distinción entre timeout interno y cancelación solicitada por el consumidor;
+- limpieza de listeners de cancelación;
+- deduplicación de velas de Coinbase;
+- emparejamiento eficiente de precio y volumen de CoinGecko;
+- resolución de seis horas para los treinta días de CryptoCompare;
+- rechazo de series en vivo con cobertura insuficiente antes de darlas por completas.
+
+### 4. Sentimiento y calidad de datos
+
+El sentimiento v2 puede utilizar:
+
+- momentum de 24 horas;
+- tendencia de 7 días;
+- tendencia de 30 días;
 - volatilidad;
 - confirmación por volumen;
 - Fear & Greed;
 - amplitud de mercado;
 - confirmación agregada por volumen.
 
-Cuando falta una señal:
+Los datos ausentes, parciales o caducados se incluyen en `missingSignals`. Reducen la confianza y cambian el estado a `partial` o `unavailable`. No se sustituyen por una señal neutral para ocultar la ausencia.
 
-- se incluye en `missingSignals`;
-- baja la confianza;
-- el estado pasa a `partial` o `unavailable`;
-- nunca se sustituye por neutral para ocultar la ausencia.
+Fear & Greed solo se acepta dentro del rango 0–100. Los resultados parciales tienen una validez más corta.
 
-### Motor de automatización
+### 5. Evaluador de automatización
 
-Se añade un evaluador puro para:
+Se han creado dos tipos de política:
 
 - `BULL_PARTIAL_SALE`;
 - `BEAR_REBUY`.
 
-Una venta parcial solo puede prepararse cuando:
+Una venta parcial solo puede prepararse cuando se cumplen los requisitos configurados de régimen, plusvalía, sentimiento, calidad de datos, antigüedad, límites diarios, cooldown, posición residual y autorización.
 
-- el régimen está autorizado;
-- existe plusvalía suficiente;
-- el sentimiento confirma la fase;
-- los datos tienen calidad y antigüedad aceptables;
-- se respetan límites diarios, cooldown y porcentaje residual;
-- existe autorización vigente.
+Una recompra solo puede prepararse cuando se cumplen los requisitos de caída, régimen, sentimiento, estabilización, disponibilidad de EURC operativo, límites y objetivo vinculado.
 
-Una recompra solo puede prepararse cuando:
+`operatingEurcEur` representa EURC ya libre después de separar la reserva fiscal. La reserva fiscal se informa, se excluye y no se resta dos veces.
 
-- el mercado está en corrección, bajista, capitulación o recuperación temprana;
-- existe caída suficiente desde el precio de referencia;
-- existe estabilización mínima;
-- el sentimiento confirma la zona;
-- hay EURC operativo libre;
-- la reserva fiscal queda completamente excluida;
-- se respeta el tramo, límite diario y objetivo vinculado.
+### 6. Autorización y seguridad
 
-### Persistencia e idempotencia
+La ejecución automática exige:
 
-Se añaden:
+- autorización explícita;
+- fecha de autorización válida;
+- fecha de caducidad;
+- versión de autorización registrada;
+- límite por operación;
+- límite de operaciones diarias;
+- límite de capital diario;
+- datos suficientemente recientes;
+- número mínimo de fuentes independientes;
+- preview nuevo antes de enviar.
+
+Una política mal formada o corrupta se desactiva y falla de forma segura.
+
+### 7. Persistencia e idempotencia
+
+Se utilizan:
 
 - `automated_operation_policies_v1`;
 - `automated_operation_runs_v1`.
 
-Cada ejecución tiene una clave idempotente única para impedir órdenes duplicadas.
+Cada propuesta tiene una clave idempotente. El repositorio valida el flujo permitido entre estados y exige identificadores de orden para `SUBMITTED` y `COMPLETED`.
 
-Estados:
+El runner no vuelve a enviar una operación ya enviada o completada. Si Coinbase acepta una orden y después falla la actualización auxiliar del contador de la política, la orden conserva su estado real; no se degrada falsamente a `FAILED`.
 
-- programada;
-- monitorizando;
-- bloqueada por datos;
-- bloqueada por riesgo;
-- pendiente de revisión;
-- lista para preview;
-- preview en curso;
-- lista para enviar;
-- enviada;
-- completada;
-- fallida;
-- pausada;
-- cancelada;
-- caducada.
+Estados soportados:
 
-El runner exige un preview nuevo antes de enviar una orden.
+- `SCHEDULED`;
+- `MONITORING`;
+- `BLOCKED_DATA`;
+- `BLOCKED_RISK`;
+- `REVIEW_REQUIRED`;
+- `READY_TO_PREVIEW`;
+- `PREVIEWING`;
+- `READY_TO_SUBMIT`;
+- `SUBMITTED`;
+- `COMPLETED`;
+- `FAILED`;
+- `PAUSED`;
+- `CANCELLED`;
+- `EXPIRED`.
 
-## Integración pendiente antes de operar dinero real
+## Verificación ejecutada
 
-El motor y la persistencia ya están disponibles, pero la ruta productiva de Electron todavía debe conectarlos con:
+El workflow de CI comprueba por separado:
 
-1. contexto real de Mercado y sentimiento;
-2. ciclos y objetivos de Perspectivas V5;
-3. reglas de ventas parciales y tramos de recompra;
-4. preview real de Coinbase;
-5. envío idempotente de la orden;
-6. consulta posterior del estado de Coinbase;
-7. sincronización de transacciones, FIFO, Tesorería y Perspectivas;
-8. interfaz para activar, pausar, autorizar y auditar cada política.
+- Market Data: typecheck, pruebas y compilación;
+- Portfolio: typecheck, pruebas y compilación;
+- Database: compilación previa de dependencias locales, typecheck, pruebas y compilación;
+- aplicación integrada: dependencias web, compilación de paquetes compartidos, typecheck web, pruebas web, build web, typecheck Electron y build Electron.
 
-Hasta que esta integración pase CI y pruebas con entorno controlado, la versión instalada debe continuar en modo revisión y no debe afirmar que ejecuta automáticamente.
+La ejecución de CI del 1 de julio de 2026, run `28540295717`, terminó correctamente en los cuatro trabajos.
 
-## Reglas de seguridad obligatorias
+Se corrigieron durante la auditoría fallos reales que inicialmente rompían CI:
 
-- La automatización real es opt-in.
-- La autorización debe tener fecha de caducidad.
-- Deben existir límites por operación, día y número de operaciones.
-- Un dato parcial o caducado bloquea la ejecución cuando la política exige cobertura completa.
-- Cada orden debe tener preview fresco.
-- Cada paso de una conversión multipaso debe persistirse.
-- No se repite una orden que Coinbase ya aceptó.
-- La reserva fiscal no se utiliza.
-- Alcanzar el objetivo vinculado bloquea nuevas operaciones.
-- Un fallo deja un estado recuperable y auditable.
+- exportación duplicada de `ProfitHarvestCycleStatus`;
+- pérdida de OHLCV durante la normalización;
+- caché transaccional con invalidación insuficiente;
+- combinación incoherente de proveedores;
+- doble descuento de reserva fiscal;
+- reintento potencial de órdenes ya completadas;
+- transición de estados sin validación;
+- timeout tratado como cancelación, impidiendo fallback;
+- resolución insuficiente de CryptoCompare a treinta días;
+- dependencias web no instaladas por la estructura actual del repositorio;
+- firma incompatible del guard de Perspectivas legacy;
+- ausencia de comprobación conjunta de web y Electron.
 
-## Criterios de aceptación
+## Bloqueos antes de operar dinero real
 
-### Cartera
+El motor de evaluación y la persistencia están disponibles, pero todavía no están conectados a una ruta productiva completa de órdenes. Antes de activar dinero real faltan:
 
-- La segunda carga de cada gráfica utiliza caché local.
-- Reiniciar la aplicación no elimina la caché.
-- Una respuesta parcial de un proveedor no borra el histórico anterior.
-- La UI muestra cobertura, antigüedad, fuentes y rangos ausentes.
-- Los puntos incompletos no se presentan como patrimonio total completo.
+1. construir el contexto automático desde Mercado, sentimiento, Tesorería, ciclos y objetivos reales;
+2. conectar cada política con preview real de Coinbase;
+3. enviar la orden con clave idempotente;
+4. consultar el estado posterior de Coinbase;
+5. sincronizar transacciones, lotes, FIFO, Tesorería y Perspectivas;
+6. crear la interfaz para programar, autorizar, pausar, cancelar y auditar políticas;
+7. ejecutar pruebas E2E con un entorno controlado;
+8. generar, instalar y validar el DMG con la base real y el keychain helper.
 
-### Mercado
+La ruta legacy `persp2:getSimulation` sigue protegida por un guard que falla de forma explícita. Compila para no romper Electron, pero no ejecuta el simulador retirado. Debe migrarse a `runPerspectivesV5Simulation` antes de publicar un DMG nuevo.
 
-- Cada activo muestra qué señales están disponibles.
-- Volumen real participa en sentimiento cuando existe.
-- Los estados `partial` y `unavailable` son visibles.
-- Las decisiones automáticas se bloquean con datos insuficientes.
+## Pendientes técnicos conocidos
 
-### Operaciones
+- incorporar un `package-lock.json` propio de `apps/web` y sustituir la instalación temporal de CI por `npm ci --prefix apps/web`;
+- formalizar como migraciones las tablas de caché y automatización que ahora se crean de forma defensiva con `CREATE TABLE IF NOT EXISTS`;
+- cachear también el JSON final ya reconstruido de cada gráfica de Cartera;
+- calcular y mostrar rangos históricos ausentes reales;
+- mostrar en la interfaz cobertura, antigüedad y proveedor por activo;
+- conectar el runner con Electron y Coinbase;
+- migrar la ruta de Perspectivas legacy a V5;
+- validar la aplicación instalada, no solo TypeScript, pruebas unitarias y builds.
 
-- Compra y venta manual mantienen preview y confirmación.
-- Programar una venta alcista crea una política persistente.
-- Programar una recompra bajista crea una política persistente.
-- La condición se evalúa aunque no esté abierta la página Operaciones, siempre que el backend esté activo.
-- El proceso crea preview, persiste el estado y envía una sola vez.
-- La operación real se sincroniza con Coinbase, lotes, FIFO, Tesorería y objetivos.
-- Las recompras se registran como capital interno desplegado y generan beneficios o pérdidas posteriores en Perspectivas.
+## Estado de publicación
 
-## Estado de esta rama
+La rama y el PR deben permanecer en borrador.
 
-Implementado:
+No está autorizado afirmar que:
 
-- caché compacta de series;
-- caché de reconstrucción transaccional;
-- OHLCV en proveedores;
-- sentimiento con volumen y cobertura;
-- evaluador de automatización;
-- persistencia de políticas y ejecuciones;
-- runner idempotente;
-- pruebas unitarias del evaluador y runner;
-- workflow de CI.
+- la automatización real ya funciona;
+- se pueden programar órdenes reales desde la interfaz;
+- la aplicación instalada ha sido validada;
+- el DMG está listo para producción.
 
-Pendiente:
-
-- conexión del runner a Electron y Coinbase;
-- creación/edición de políticas desde Operaciones;
-- cachear también el JSON final de la gráfica de Cartera;
-- mostrar rangos ausentes reales;
-- sincronización completa tras ejecución;
-- pruebas E2E y DMG instalado.
+La automatización real debe continuar desactivada hasta completar la integración y las pruebas anteriores.
