@@ -14,71 +14,76 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  changed-packages:
+  market-data:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Market data typecheck
+      - run: npm ci
+      - name: Typecheck
         run: npm --prefix packages/market-data run typecheck
-
-      - name: Market data tests
+      - name: Tests
         run: npm --prefix packages/market-data test
+      - name: Build
+        run: npm --prefix packages/market-data run build
 
-      - name: Portfolio typecheck
+  portfolio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
         run: npm --prefix packages/portfolio run typecheck
-
-      - name: Portfolio tests
+      - name: Tests
         run: npm --prefix packages/portfolio test
+      - name: Build
+        run: npm --prefix packages/portfolio run build
 
-      - name: Database typecheck
+  database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
         run: npm --prefix packages/database run typecheck
-
-      - name: Database tests
+      - name: Tests
         run: npm --prefix packages/database test
-
-      - name: Build changed packages
-        run: |
-          npm --prefix packages/market-data run build
-          npm --prefix packages/portfolio run build
-          npm --prefix packages/database run build
+      - name: Build
+        run: npm --prefix packages/database run build
 
   full-repository-advisory:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     continue-on-error: true
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
+      - run: npm ci
       - name: Core typecheck
         run: npm --prefix packages/core run typecheck
-
       - name: Web checks
+        if: always()
         run: |
           npm --prefix apps/web run lint
           npm --prefix apps/web run typecheck
           npm --prefix apps/web test
-
       - name: Desktop typecheck
+        if: always()
         run: npm --prefix apps/desktop run typecheck
