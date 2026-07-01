@@ -1,0 +1,67 @@
+name: Crypto Control CI
+
+on:
+  push:
+    branches:
+      - main
+      - codex/**
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: crypto-control-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Core typecheck
+        run: npm --prefix packages/core run typecheck
+
+      - name: Market data typecheck and tests
+        run: |
+          npm --prefix packages/market-data run typecheck
+          npm --prefix packages/market-data test
+
+      - name: Portfolio typecheck and tests
+        run: |
+          npm --prefix packages/portfolio run typecheck
+          npm --prefix packages/portfolio test
+
+      - name: Database typecheck and tests
+        run: |
+          npm --prefix packages/database run typecheck
+          npm --prefix packages/database test
+
+      - name: Web lint, typecheck and tests
+        run: |
+          npm --prefix apps/web run lint
+          npm --prefix apps/web run typecheck
+          npm --prefix apps/web test
+
+      - name: Desktop typecheck
+        run: npm --prefix apps/desktop run typecheck
+
+      - name: Build packages and applications
+        run: |
+          npm --prefix packages/core run build
+          npm --prefix packages/market-data run build
+          npm --prefix packages/portfolio run build
+          npm --prefix packages/database run build
+          npm --prefix apps/web run build
+          npm --prefix apps/desktop run build
