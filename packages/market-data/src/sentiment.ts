@@ -2,17 +2,19 @@ import type { AssetMetadata } from "./mapping";
 import { ASSET_MAP } from "./mapping";
 import type { HistoricalPriceData } from "./interfaces";
 
+type HistoricalResult = {
+  provider: string;
+  points: HistoricalPriceData[];
+  requestedPeriod: string;
+  actualInterval: string;
+  fetchedAt: number;
+  isCached: boolean;
+  cacheStatus?: "fresh" | "partial" | "stale" | "miss";
+  reason?: string;
+};
+
 type HistoricalPriceService = {
-  getHistoricalPrices(assetId: string, period: string, signal?: AbortSignal): Promise<{
-    provider: string;
-    points: HistoricalPriceData[];
-    requestedPeriod: string;
-    actualInterval: string;
-    fetchedAt: number;
-    isCached: boolean;
-    cacheStatus?: "fresh" | "partial" | "stale" | "miss";
-    reason?: string;
-  }>;
+  getHistoricalPrices(assetId: string, period: string, signal?: AbortSignal): Promise<HistoricalResult>;
 };
 
 export type MarketSentimentDirection = "very_bullish" | "bullish" | "neutral" | "bearish" | "very_bearish";
@@ -86,12 +88,22 @@ function clamp(value: number, min = -100, max = 100): number {
   return Math.min(max, Math.max(min, value));
 }
 
+function pushUnique(target: string[], value: string): void {
+  if (!target.includes(value)) target.push(value);
+}
+
 function withTimeout<T>(promise: Promise<T>, timeoutMs = SENTIMENT_REQUEST_TIMEOUT_MS): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("Sentiment source timeout")), timeoutMs);
     promise.then(
-      (value) => { clearTimeout(timer); resolve(value); },
-      (error) => { clearTimeout(timer); reject(error); },
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
     );
   });
 }
@@ -143,15 +155,20 @@ function volatilityScore(points: HistoricalPriceData[]): number | null {
 }
 
 function volumeConfirmation(points: HistoricalPriceData[]): { score: number; label: string } | null {
-  const valid = validPoints(points).filter((point) => typeof point.volume === "number" && Number.isFinite(point.volume) && point.volume! >= 0);
+  const valid = validPoints(points).filter(
+    (point) => typeof point.volume === "number" && Number.isFinite(point.volume) && point.volume >= 0,
+  );
   if (valid.length < 6) return null;
+
   const split = Math.max(2, Math.floor(valid.length * 0.7));
   const previous = valid.slice(0, split);
   const recent = valid.slice(split);
   if (recent.length < 2) return null;
+
   const previousAverage = previous.reduce((sum, point) => sum + (point.volume ?? 0), 0) / previous.length;
   const recentAverage = recent.reduce((sum, point) => sum + (point.volume ?? 0), 0) / recent.length;
   if (!(previousAverage > 0)) return null;
+
   const volumeChange = ((recentAverage - previousAverage) / previousAverage) * 100;
   const priceChange = percentChange(recent) ?? 0;
   const intensity = clamp(Math.abs(volumeChange) * 1.5, 0, 100);
@@ -159,11 +176,32 @@ function volumeConfirmation(points: HistoricalPriceData[]): { score: number; lab
   if (priceChange > 0.25) score = volumeChange >= 0 ? intensity : -intensity * 0.35;
   else if (priceChange < -0.25) score = volumeChange >= 0 ? -intensity : intensity * 0.25;
   else score = -Math.min(35, intensity * 0.35);
-  return { score: clamp(score), label: `${volumeChange >= 0 ? "+" : ""}${volumeChange.toFixed(1)}% volumen; ${priceChange >= 0 ? "+" : ""}${priceChange.toFixed(2)}% precio` };
+
+  return {
+    score: clamp(score),
+    label: `${volumeChange >= 0 ? "+" : ""}${volumeChange.toFixed(1)}% volumen; ${priceChange >= 0 ? "+" : ""}${priceChange.toFixed(2)}% precio`,
+  };
 }
 
-function factor(id: string, label: string, rawScore: number, weight: number, value: number | string | null, source: string, updatedAt: number | null): SentimentFactor {
-  return { id, label, signal: signalFromScore(rawScore), weight, contribution: rawScore * weight, value, source, updatedAt };
+function factor(
+  id: string,
+  label: string,
+  rawScore: number,
+  weight: number,
+  value: number | string | null,
+  source: string,
+  updatedAt: number | null,
+): SentimentFactor {
+  return {
+    id,
+    label,
+    signal: signalFromScore(rawScore),
+    weight,
+    contribution: rawScore * weight,
+    value,
+    source,
+    updatedAt,
+  };
 }
 
 function calculateScore(factors: SentimentFactor[]): number | null {
@@ -172,7 +210,12 @@ function calculateScore(factors: SentimentFactor[]): number | null {
   return clamp(factors.reduce((sum, item) => sum + item.contribution, 0) / availableWeight);
 }
 
-function confidenceFor(factors: SentimentFactor[], missingCount: number, newestTimestamp: number | null, expectedFactors: number): number {
+function confidenceFor(
+  factors: SentimentFactor[],
+  missingCount: number,
+  newestTimestamp: number | null,
+  expectedFactors: number,
+): number {
   if (factors.length === 0) return 0;
   const totalWeight = factors.reduce((sum, item) => sum + item.weight, 0);
   const coverage = Math.min(1, totalWeight);
@@ -194,7 +237,22 @@ function stateFrom(factors: SentimentFactor[], missing: string[], isCached: bool
   return isCached ? "cached" : "live";
 }
 
-function unavailable(scope: "global" | "asset", timeframe: SentimentTimeframe, assetId?: string, missingSignals: string[] = []): MarketSentiment {
+function registerHistoryQuality(label: string, result: HistoricalResult | null, missing: string[]): void {
+  if (!result) {
+    pushUnique(missing, `${label} no disponible`);
+    return;
+  }
+  if (result.cacheStatus === "stale") pushUnique(missing, `${label} caducado en caché`);
+  if (result.cacheStatus === "partial") pushUnique(missing, `${label} con cobertura parcial`);
+  if (result.points.length < 2) pushUnique(missing, `${label} sin puntos suficientes`);
+}
+
+function unavailable(
+  scope: "global" | "asset",
+  timeframe: SentimentTimeframe,
+  assetId?: string,
+  missingSignals: string[] = [],
+): MarketSentiment {
   const now = Date.now();
   return {
     scope,
@@ -214,9 +272,16 @@ function unavailable(scope: "global" | "asset", timeframe: SentimentTimeframe, a
 }
 
 export class MarketSentimentService {
-  constructor(private marketService: HistoricalPriceService, private repository?: MarketSentimentSnapshotRepository) {}
+  constructor(
+    private marketService: HistoricalPriceService,
+    private repository?: MarketSentimentSnapshotRepository,
+  ) {}
 
-  async getAssetSentiment(assetId: string, timeframe: SentimentTimeframe, externalSignals?: SentimentExternalSignals): Promise<MarketSentiment> {
+  async getAssetSentiment(
+    assetId: string,
+    timeframe: SentimentTimeframe,
+    externalSignals?: SentimentExternalSignals,
+  ): Promise<MarketSentiment> {
     const [day, week, month] = await Promise.allSettled([
       withTimeout(this.marketService.getHistoricalPrices(assetId, "24h")),
       withTimeout(this.marketService.getHistoricalPrices(assetId, "7d")),
@@ -233,10 +298,14 @@ export class MarketSentimentService {
     let isCached = false;
     let newest: number | null = null;
 
+    registerHistoryQuality("Histórico 24h", dayData, missing);
+    registerHistoryQuality("Histórico 7d", weekData, missing);
+    registerHistoryQuality("Histórico 30d", monthData, missing);
+
     for (const result of [dayData, weekData, monthData]) {
       if (!result) continue;
       sources.add(result.provider);
-      isCached = isCached || result.isCached || result.cacheStatus === "stale";
+      isCached = isCached || result.isCached;
       const timestamp = latestTimestamp(result.points);
       if (timestamp) newest = Math.max(newest ?? 0, timestamp);
     }
@@ -250,25 +319,36 @@ export class MarketSentimentService {
     const volatility = selected ? volatilityScore(selected.points) : null;
     const volume = selected ? volumeConfirmation(selected.points) : null;
 
-    if (momentum !== null) factors.push(factor("momentum_24h", "Momentum de 24 horas", momentum, SENTIMENT_WEIGHTS.momentum24h, `${dayChange!.toFixed(2)}%`, dayData?.provider ?? "mercado", latestTimestamp(dayData?.points ?? [])));
-    else missing.push("Momentum de 24 horas");
-    if (trend7 !== null) factors.push(factor("trend_7d", "Tendencia de 7 días", trend7, SENTIMENT_WEIGHTS.trend7d, `${weekChange!.toFixed(2)}%`, weekData?.provider ?? "mercado", latestTimestamp(weekData?.points ?? [])));
-    else missing.push("Tendencia de 7 días");
-    if (trend30 !== null) factors.push(factor("trend_30d", "Tendencia de 30 días", trend30, SENTIMENT_WEIGHTS.trend30d, `${monthChange!.toFixed(2)}%`, monthData?.provider ?? "mercado", latestTimestamp(monthData?.points ?? [])));
-    else missing.push("Tendencia de 30 días");
-    if (volatility !== null) factors.push(factor("volatility", "Volatilidad", volatility, SENTIMENT_WEIGHTS.volatility, Math.round(Math.abs(volatility)), selected?.provider ?? "mercado", latestTimestamp(selected?.points ?? [])));
-    else missing.push("Volatilidad");
-    if (volume) factors.push(factor("volume_confirmation", "Confirmación por volumen", volume.score, SENTIMENT_WEIGHTS.volumeConfirmation, volume.label, selected?.provider ?? "mercado", latestTimestamp(selected?.points ?? [])));
-    else missing.push("Confirmación por volumen");
+    if (momentum !== null) {
+      factors.push(factor("momentum_24h", "Momentum de 24 horas", momentum, SENTIMENT_WEIGHTS.momentum24h, `${dayChange!.toFixed(2)}%`, dayData?.provider ?? "mercado", latestTimestamp(dayData?.points ?? [])));
+    } else pushUnique(missing, "Momentum de 24 horas");
+
+    if (trend7 !== null) {
+      factors.push(factor("trend_7d", "Tendencia de 7 días", trend7, SENTIMENT_WEIGHTS.trend7d, `${weekChange!.toFixed(2)}%`, weekData?.provider ?? "mercado", latestTimestamp(weekData?.points ?? [])));
+    } else pushUnique(missing, "Tendencia de 7 días");
+
+    if (trend30 !== null) {
+      factors.push(factor("trend_30d", "Tendencia de 30 días", trend30, SENTIMENT_WEIGHTS.trend30d, `${monthChange!.toFixed(2)}%`, monthData?.provider ?? "mercado", latestTimestamp(monthData?.points ?? [])));
+    } else pushUnique(missing, "Tendencia de 30 días");
+
+    if (volatility !== null) {
+      factors.push(factor("volatility", "Volatilidad", volatility, SENTIMENT_WEIGHTS.volatility, Math.round(Math.abs(volatility)), selected?.provider ?? "mercado", latestTimestamp(selected?.points ?? [])));
+    } else pushUnique(missing, "Volatilidad");
+
+    if (volume) {
+      factors.push(factor("volume_confirmation", "Confirmación por volumen", volume.score, SENTIMENT_WEIGHTS.volumeConfirmation, volume.label, selected?.provider ?? "mercado", latestTimestamp(selected?.points ?? [])));
+    } else pushUnique(missing, "Confirmación por volumen");
 
     const fearGreed = externalSignals?.fearGreedValue;
-    if (typeof fearGreed === "number" && Number.isFinite(fearGreed)) {
+    if (typeof fearGreed === "number" && Number.isFinite(fearGreed) && fearGreed >= 0 && fearGreed <= 100) {
       factors.push(factor("global_context", "Fear & Greed Index", clamp((fearGreed - 50) * 2), SENTIMENT_WEIGHTS.globalContext, Math.round(fearGreed), "alternative.me", null));
       sources.add("alternative.me");
-    } else missing.push("Fear & Greed Index");
+    } else pushUnique(missing, "Fear & Greed Index");
 
     const score = calculateScore(factors);
     if (score === null) return unavailable("asset", timeframe, assetId, missing);
+
+    const now = Date.now();
     const sentiment: MarketSentiment = {
       scope: "asset",
       assetId,
@@ -278,24 +358,30 @@ export class MarketSentimentService {
       timeframe,
       factors: factors.sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution)),
       sourceSummary: [...sources],
-      calculatedAt: Date.now(),
-      validUntil: Date.now() + 15 * 60_000,
+      calculatedAt: now,
+      validUntil: now + (missing.length > 0 ? 5 : 15) * 60_000,
       state: stateFrom(factors, missing, isCached),
       missingSignals: missing,
-      methodology: "Modelo v2: precios y volumen OHLCV persistidos. Las señales ausentes reducen cobertura y confianza; nunca se rellenan con neutral.",
+      methodology: "Modelo v2: precios y volumen OHLCV persistidos. Las señales ausentes, parciales o caducadas reducen cobertura y confianza; nunca se rellenan con neutral.",
     };
     await this.repository?.saveSnapshot(sentiment, SENTIMENT_ALGORITHM_VERSION);
     return sentiment;
   }
 
-  async getGlobalSentiment(assets: Pick<AssetMetadata, "internalId" | "symbol">[], timeframe: SentimentTimeframe, externalSignals?: SentimentExternalSignals): Promise<MarketSentiment> {
+  async getGlobalSentiment(
+    assets: Pick<AssetMetadata, "internalId" | "symbol">[],
+    timeframe: SentimentTimeframe,
+    externalSignals?: SentimentExternalSignals,
+  ): Promise<MarketSentiment> {
     const fullUniverse = assets.length > 0 ? assets : Object.values(ASSET_MAP);
     const universe = fullUniverse.slice(0, GLOBAL_SENTIMENT_ASSET_LIMIT);
     const periods: SentimentTimeframe[] = timeframe === "24h" ? ["24h"] : ["24h", timeframe];
     const uniquePeriods = [...new Set(periods)];
-    const settled = await Promise.allSettled(universe.flatMap((asset) => uniquePeriods.map((period) => withTimeout(this.marketService.getHistoricalPrices(asset.internalId || asset.symbol, period)))));
+    const settled = await Promise.allSettled(
+      universe.flatMap((asset) => uniquePeriods.map((period) => withTimeout(this.marketService.getHistoricalPrices(asset.internalId || asset.symbol, period)))),
+    );
 
-    const rows: Array<{ assetId: string; period: SentimentTimeframe; change: number; result: Awaited<ReturnType<HistoricalPriceService["getHistoricalPrices"]>> }> = [];
+    const rows: Array<{ assetId: string; period: SentimentTimeframe; change: number; result: HistoricalResult }> = [];
     universe.forEach((asset, assetIndex) => {
       uniquePeriods.forEach((period, periodIndex) => {
         const item = settled[assetIndex * uniquePeriods.length + periodIndex];
@@ -314,18 +400,24 @@ export class MarketSentimentService {
     const missing: string[] = [];
     const sources = new Set<string>(["Crypto Control OHLCV"]);
     rows.forEach((row) => sources.add(row.result.provider));
+
+    const staleRows = rows.filter((row) => row.result.cacheStatus === "stale").length;
+    const partialRows = rows.filter((row) => row.result.cacheStatus === "partial").length;
+    if (staleRows > 0) pushUnique(missing, `${staleRows} series históricas caducadas`);
+    if (partialRows > 0) pushUnique(missing, `${partialRows} series con cobertura parcial`);
+
     const positive = breadthRows.filter((row) => row.change > 0).length;
     const breadth = ((positive / breadthRows.length) - 0.5) * 200;
     const average24h = breadthRows.reduce((sum, row) => sum + row.change, 0) / breadthRows.length;
     const newest = Math.max(...breadthRows.map((row) => latestTimestamp(row.result.points) ?? 0));
-    const isCached = rows.some((row) => row.result.isCached || row.result.cacheStatus === "stale");
+    const isCached = rows.some((row) => row.result.isCached);
     factors.push(factor("market_breadth", "Amplitud del mercado", clamp(breadth), 0.30, `${positive}/${breadthRows.length} activos al alza`, "universo disponible", newest));
     factors.push(factor("aggregate_trend_24h", "Tendencia agregada 24h", normalizeChange(average24h, 8) ?? 0, 0.20, `${average24h.toFixed(2)}%`, "precios históricos", newest));
 
     if (timeframe !== "24h" && periodRows.length) {
       const average = periodRows.reduce((sum, row) => sum + row.change, 0) / periodRows.length;
       factors.push(factor("aggregate_trend_period", `Tendencia agregada ${timeframe}`, normalizeChange(average, timeframe === "7d" ? 18 : 35) ?? 0, 0.20, `${average.toFixed(2)}%`, "precios históricos", Math.max(...periodRows.map((row) => latestTimestamp(row.result.points) ?? 0))));
-    } else if (timeframe !== "24h") missing.push(`Tendencia ${timeframe}`);
+    } else if (timeframe !== "24h") pushUnique(missing, `Tendencia ${timeframe}`);
 
     const volumeRows = breadthRows.flatMap((row) => {
       const confirmation = volumeConfirmation(row.result.points);
@@ -334,19 +426,21 @@ export class MarketSentimentService {
     if (volumeRows.length >= Math.max(2, Math.ceil(breadthRows.length * 0.5))) {
       const volumeScore = volumeRows.reduce((sum, value) => sum + value, 0) / volumeRows.length;
       factors.push(factor("aggregate_volume", "Confirmación agregada por volumen", volumeScore, 0.15, `${volumeRows.length}/${breadthRows.length} activos`, "OHLCV", newest));
-    } else missing.push("Volumen agregado comparable");
+    } else pushUnique(missing, "Volumen agregado comparable");
 
     const fearGreed = externalSignals?.fearGreedValue;
-    if (typeof fearGreed === "number" && Number.isFinite(fearGreed)) {
+    if (typeof fearGreed === "number" && Number.isFinite(fearGreed) && fearGreed >= 0 && fearGreed <= 100) {
       factors.push(factor("fear_greed", "Fear & Greed Index", clamp((fearGreed - 50) * 2), 0.15, Math.round(fearGreed), "alternative.me", null));
       sources.add("alternative.me");
-    } else missing.push("Fear & Greed Index");
+    } else pushUnique(missing, "Fear & Greed Index");
 
-    if (rows.filter((row) => row.period === "24h").length < universe.length) missing.push(`${universe.length - dayRows.length} activos sin 24h completo`);
-    if (fullUniverse.length > universe.length) missing.push(`${fullUniverse.length - universe.length} activos fuera del límite de cálculo`);
+    if (dayRows.length < universe.length) pushUnique(missing, `${universe.length - dayRows.length} activos sin 24h completo`);
+    if (fullUniverse.length > universe.length) pushUnique(missing, `${fullUniverse.length - universe.length} activos fuera del límite de cálculo`);
+
     const score = calculateScore(factors);
     if (score === null) return unavailable("global", timeframe, undefined, missing);
 
+    const now = Date.now();
     const sentiment: MarketSentiment = {
       scope: "global",
       direction: classifySentiment(score),
@@ -355,11 +449,11 @@ export class MarketSentimentService {
       timeframe,
       factors: factors.sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution)),
       sourceSummary: [...sources],
-      calculatedAt: Date.now(),
-      validUntil: Date.now() + 15 * 60_000,
+      calculatedAt: now,
+      validUntil: now + (missing.length > 0 ? 5 : 15) * 60_000,
       state: stateFrom(factors, missing, isCached),
       missingSignals: missing,
-      methodology: "Modelo global v2: amplitud, tendencias y volumen del universo disponible. Los huecos se declaran y reducen la confianza.",
+      methodology: "Modelo global v2: amplitud, tendencias y volumen del universo disponible. Los huecos, series parciales y datos caducados se declaran y reducen la confianza.",
     };
     await this.repository?.saveSnapshot(sentiment, SENTIMENT_ALGORITHM_VERSION);
     return sentiment;
