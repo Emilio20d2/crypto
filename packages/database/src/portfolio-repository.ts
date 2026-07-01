@@ -22,6 +22,45 @@ export class DatabasePortfolioRepository implements PortfolioRepository {
         data_json TEXT NOT NULL,
         generated_at INTEGER NOT NULL
       );
+
+      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_after_transaction_insert
+      AFTER INSERT ON transactions BEGIN
+        DELETE FROM portfolio_transaction_cache_v1 WHERE cache_key = 'all-transactions';
+      END;
+      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_after_transaction_update
+      AFTER UPDATE ON transactions BEGIN
+        DELETE FROM portfolio_transaction_cache_v1 WHERE cache_key = 'all-transactions';
+      END;
+      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_after_transaction_delete
+      AFTER DELETE ON transactions BEGIN
+        DELETE FROM portfolio_transaction_cache_v1 WHERE cache_key = 'all-transactions';
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_after_leg_insert
+      AFTER INSERT ON transaction_legs BEGIN
+        DELETE FROM portfolio_transaction_cache_v1 WHERE cache_key = 'all-transactions';
+      END;
+      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_after_leg_update
+      AFTER UPDATE ON transaction_legs BEGIN
+        DELETE FROM portfolio_transaction_cache_v1 WHERE cache_key = 'all-transactions';
+      END;
+      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_after_leg_delete
+      AFTER DELETE ON transaction_legs BEGIN
+        DELETE FROM portfolio_transaction_cache_v1 WHERE cache_key = 'all-transactions';
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_after_fee_insert
+      AFTER INSERT ON fees BEGIN
+        DELETE FROM portfolio_transaction_cache_v1 WHERE cache_key = 'all-transactions';
+      END;
+      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_after_fee_update
+      AFTER UPDATE ON fees BEGIN
+        DELETE FROM portfolio_transaction_cache_v1 WHERE cache_key = 'all-transactions';
+      END;
+      CREATE TRIGGER IF NOT EXISTS invalidate_portfolio_tx_cache_after_fee_delete
+      AFTER DELETE ON fees BEGIN
+        DELETE FROM portfolio_transaction_cache_v1 WHERE cache_key = 'all-transactions';
+      END;
     `);
   }
 
@@ -95,7 +134,7 @@ export class DatabasePortfolioRepository implements PortfolioRepository {
         assetId: leg.assetId,
         amount: leg.amount,
         legType: leg.legType as LegType,
-        valuationEur: leg.valuationEur ?? leg.acquisitionValueEur ?? undefined,
+        valuationEur: leg.acquisitionValueEur ?? leg.valuationEur ?? undefined,
         valuationStatus: leg.valuationStatus as "valued" | "pending" | "estimated" | undefined,
       });
       return acc;
