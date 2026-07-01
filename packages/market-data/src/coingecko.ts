@@ -22,16 +22,28 @@ function scopeToPeriod(points: HistoricalPriceData[], period: string): Historica
   return points.filter((point) => point.timestamp >= cutoff);
 }
 
+function nearestVolume(volumes: Array<[number, number]>, timestamp: number): number | undefined {
+  if (volumes.length === 0) return undefined;
+  let best: [number, number] | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const row of volumes) {
+    const distance = Math.abs(row[0] - timestamp);
+    if (distance < bestDistance) {
+      best = row;
+      bestDistance = distance;
+    }
+  }
+  return best && Number.isFinite(best[1]) && best[1] >= 0 ? best[1] : undefined;
+}
+
 export class CoinGeckoProvider implements MarketDataProvider {
   readonly name = "coingecko";
 
   private async fetchWithTimeout(url: string, signal?: AbortSignal) {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), 5000);
-    
-    if (signal) {
-      signal.addEventListener("abort", () => controller.abort());
-    }
+
+    if (signal) signal.addEventListener("abort", () => controller.abort());
 
     try {
       const response = await fetch(url, { signal: controller.signal });
@@ -47,9 +59,7 @@ export class CoinGeckoProvider implements MarketDataProvider {
       return await response.json();
     } catch (error: unknown) {
       clearTimeout(id);
-      if (error instanceof DOMException && error.name === "AbortError") {
-        throw error;
-      }
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
       if (error instanceof Error && (error.name === "AbortError" || error.message?.includes("timeout"))) {
         throw new MarketTimeoutError("CoinGecko API timed out");
       }
@@ -85,15 +95,19 @@ export class CoinGeckoProvider implements MarketDataProvider {
     );
 
     if (data && Array.isArray(data.prices)) {
+      const volumes: Array<[number, number]> = Array.isArray(data.total_volumes)
+        ? data.total_volumes.filter((row: unknown): row is [number, number] => Array.isArray(row) && row.length >= 2)
+        : [];
       const points = data.prices.map((p: [number, number]) => ({
         timestamp: p[0],
         price: p[1],
+        volume: nearestVolume(volumes, p[0]),
         source: this.name,
-        confidence: 0.9
+        confidence: 0.9,
       })).sort((a: HistoricalPriceData, b: HistoricalPriceData) => a.timestamp - b.timestamp);
       return scopeToPeriod(points, period);
     }
-    
+
     throw new MarketInvalidResponseError("Invalid historical data from CoinGecko");
   }
 }
