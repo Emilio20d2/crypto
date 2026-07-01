@@ -19,30 +19,27 @@ export * from "./smart-buy-engine";
 export * from "./fiscal-config";
 export * from "./plan-snapshot";
 export * from "./profit-harvest-cycle";
-// perspectives exports — selective to avoid naming conflicts with plan-substitutions
+
+// Perspectivas V5 es la única superficie nueva que debe usarse a partir de esta rama.
+// La carpeta ./perspectives queda como legado temporal hasta terminar la migración de
+// Electron/preload/UI; no se reexporta como API principal para evitar usar V4 por accidente.
+export * from "./perspectives-v5";
+
+// Compatibilidad estrictamente necesaria para módulos heredados que todavía importan
+// ingestion/forecast repositories desde @crypto-control/portfolio. No exportar aquí
+// runPerspectivesSimulation ni tipos de simulación V4.
 export type {
-  SimScenario, AssetTier, SimLot, AssetSimState, MonthlyState,
-  AnnualSnapshot, AnnualAssetPosition, SimEvent, SimEventType,
-  ScenarioResult, ScenarioSummary, AssetSimSummary,
-  PerspectivesSimulation, CurrentPosition, HistoricalLot,
-  SimInput, SimCycle, SimCycleAsset, SimSaleRule, SimRebuyTier,
-  SimSubstitution, SimRevision, SimOptions, TaxBand,
-  ForecastDataset,
-  PriceModelType, CoverageState, ExternalPriceResult,
-  ObservationRow, SourceRow, IngestionLogRow, AssetYearCoverage,
-  IngestableSource, IngestResult, SeedSource, SeedObservation,
+  ForecastSource, ForecastDirection, ForecastSourceType,
+  ValidationReport, ValidationError, RegressionReport, StagingRow,
+  CandidateVersion, CandidateRow, SqliteDb, ActiveVersion,
+  ExternalPriceResult, ObservationRow, SourceRow, IngestionLogRow,
+  AssetYearCoverage, IngestableSource, IngestResult, SeedSource, SeedObservation,
 } from "./perspectives";
 export {
-  SIM_SCENARIOS, SCENARIO_LABELS, DEFAULT_SPANISH_TAX_BANDS, DEFAULT_SIM_OPTIONS,
-  monthKey, runPerspectivesSimulation, buildExternalPriceMap,
+  buildExternalPriceMap,
   observationToForecastSources, normalizeForecastSourceType, computeCoverageMatrix, computeFinalWeight,
   MIN_SOURCES_FOR_QUANTILE, ingestSource, ingestRssSource, ingestHttpSource, verifyUrl,
   SEED_FORECAST_SOURCES, SEED_FORECAST_OBSERVATIONS,
   validateStagingObservations, validateMonotonicity, runRegressionTest,
   ForecastCandidateRepository, ForecastActiveRepository, PERSPECTIVES_EXTERNAL_FORECASTS_ENABLED,
-} from "./perspectives";
-export type {
-  ForecastSource, ForecastDirection, ForecastSourceType,
-  ValidationReport, ValidationError, RegressionReport, StagingRow,
-  CandidateVersion, CandidateRow, SqliteDb, ActiveVersion,
 } from "./perspectives";
