@@ -21,8 +21,7 @@ export class CoinbaseProvider implements MarketDataProvider {
   private async fetchWithTimeout(url: string, signal?: AbortSignal) {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), 5000);
-    
-    // If external signal aborts, also abort our controller
+
     if (signal) {
       signal.addEventListener("abort", () => controller.abort());
     }
@@ -53,7 +52,7 @@ export class CoinbaseProvider implements MarketDataProvider {
 
   async getCurrentPrice(meta: AssetMetadata, signal?: AbortSignal): Promise<number> {
     const rawData = await this.fetchWithTimeout(`${COINBASE_API_URL}/products/${meta.coinbaseProductId}/ticker`, signal);
-    
+
     const parsed = CoinbaseTickerSchema.safeParse(rawData);
     if (parsed.success && parsed.data.price) {
       const price = parseFloat(parsed.data.price);
@@ -63,36 +62,33 @@ export class CoinbaseProvider implements MarketDataProvider {
   }
 
   async getHistoricalPrices(meta: AssetMetadata, period: string, signal?: AbortSignal): Promise<HistoricalPriceData[]> {
-    let granularity = 86400; // default 1 day
+    let granularity = 86400;
     const end = new Date();
     const start = new Date(end.getTime());
 
     if (period === "1h") {
-      granularity = 60; // 1 minute
+      granularity = 60;
       start.setHours(start.getHours() - 1);
     } else if (period === "24h") {
-      granularity = 900; // 15 minutes
+      granularity = 900;
       start.setDate(start.getDate() - 1);
     } else if (period === "7d") {
-      granularity = 3600; // 1 hour
+      granularity = 3600;
       start.setDate(start.getDate() - 7);
     } else if (period === "30d") {
-      granularity = 21600; // 6 hours
+      granularity = 21600;
       start.setDate(start.getDate() - 30);
     } else if (period === "1y") {
       granularity = 86400;
       start.setFullYear(start.getFullYear() - 1);
     } else {
-      // all time
       granularity = 86400;
-      start.setFullYear(start.getFullYear() - 10); // max 10 years for simplicity
+      start.setFullYear(start.getFullYear() - 10);
     }
 
     const allCandles: HistoricalPriceData[] = [];
     let currentEnd = new Date(end.getTime());
     let currentStart = new Date(currentEnd.getTime());
-
-    // Coinbase limit is 300 candles per request
     const maxCandlesPerRequest = 300;
     const chunkMs = maxCandlesPerRequest * granularity * 1000;
 
@@ -102,7 +98,6 @@ export class CoinbaseProvider implements MarketDataProvider {
       const startIso = currentStart.toISOString();
       const endIso = currentEnd.toISOString();
       const url = `${COINBASE_API_URL}/products/${meta.coinbaseProductId}/candles?granularity=${granularity}&start=${startIso}&end=${endIso}`;
-
       const rawData = await this.fetchWithTimeout(url, signal);
 
       const parsed = CoinbaseCandlesSchema.safeParse(rawData);
@@ -112,23 +107,22 @@ export class CoinbaseProvider implements MarketDataProvider {
 
       const chunk = parsed.data.map((candle: [number, number, number, number, number, number]) => ({
         timestamp: candle[0] * 1000,
-        price: candle[4], // close price
+        low: candle[1],
+        high: candle[2],
+        open: candle[3],
+        price: candle[4],
+        volume: candle[5],
         source: this.name,
-        confidence: 1
+        confidence: 1,
       }));
 
       allCandles.push(...chunk);
-
-      // If we got less than requested, we might have hit the earliest available data
-      if (parsed.data.length === 0) {
-        break;
-      }
-
-      // Move the end to the start of this chunk, minus one millisecond
+      if (parsed.data.length === 0) break;
       currentEnd = new Date(currentStart.getTime() - 1);
     }
 
-    // Sort ascending by timestamp
-    return allCandles.sort((a, b) => a.timestamp - b.timestamp);
+    const byTimestamp = new Map<number, HistoricalPriceData>();
+    for (const point of allCandles) byTimestamp.set(point.timestamp, point);
+    return [...byTimestamp.values()].sort((a, b) => a.timestamp - b.timestamp);
   }
 }
