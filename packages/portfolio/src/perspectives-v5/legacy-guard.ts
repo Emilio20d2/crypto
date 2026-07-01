@@ -8,7 +8,15 @@ export const DEFAULT_SPANISH_TAX_BANDS: PerspectivesTaxBand[] = [
   { upToEur: null, rate: 0.28 },
 ];
 
-export function runPerspectivesSimulation(): never {
+/**
+ * Compatibility guard for the removed Perspectives V4 entry point.
+ *
+ * The variadic signature deliberately accepts the previous call shape so old
+ * Electron handlers still compile, but execution always fails closed. This
+ * prevents a packaged application from silently falling back to the obsolete
+ * simulator while the handler is migrated to runPerspectivesV5Simulation.
+ */
+export function runPerspectivesSimulation(..._legacyArguments: unknown[]): never {
   throw new Error(
     "PERSPECTIVES_V4_REMOVED: usa runPerspectivesV5Simulation desde @crypto-control/portfolio/perspectives-v5. " +
     "La ruta legacy persp2 debe migrarse antes de publicar un nuevo DMG.",
