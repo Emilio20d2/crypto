@@ -42,13 +42,26 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Typecheck
+        id: portfolio_typecheck
+        continue-on-error: true
         shell: bash
         run: |
           set +e
-          npm --prefix packages/portfolio run typecheck > /tmp/portfolio-tsc.log 2>&1
+          npm --prefix packages/portfolio run typecheck > portfolio-tsc.log 2>&1
           status=$?
-          tail -n 120 /tmp/portfolio-tsc.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
           exit $status
+      - name: Upload portfolio diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: portfolio-tsc
+          path: portfolio-tsc.log
+      - name: Fail on portfolio type errors
+        if: steps.portfolio_typecheck.outputs.status != '0'
+        run: |
+          cat portfolio-tsc.log
+          exit 1
       - name: Tests
         run: npm --prefix packages/portfolio test
       - name: Build
@@ -65,13 +78,26 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Typecheck
+        id: database_typecheck
+        continue-on-error: true
         shell: bash
         run: |
           set +e
-          npm --prefix packages/database run typecheck > /tmp/database-tsc.log 2>&1
+          npm --prefix packages/database run typecheck > database-tsc.log 2>&1
           status=$?
-          tail -n 120 /tmp/database-tsc.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
           exit $status
+      - name: Upload database diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: database-tsc
+          path: database-tsc.log
+      - name: Fail on database type errors
+        if: steps.database_typecheck.outputs.status != '0'
+        run: |
+          cat database-tsc.log
+          exit 1
       - name: Tests
         run: npm --prefix packages/database test
       - name: Build
