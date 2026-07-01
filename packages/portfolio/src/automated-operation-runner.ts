@@ -66,6 +66,7 @@ export interface AutomationCycleResult {
   completed: number;
   failed: number;
   deduplicated: number;
+  bookkeepingWarnings: number;
   records: AutomationRunRecord[];
 }
 
@@ -126,6 +127,7 @@ export class AutomatedOperationRunner {
       completed: 0,
       failed: 0,
       deduplicated: 0,
+      bookkeepingWarnings: 0,
       records: [],
     };
 
@@ -195,22 +197,34 @@ export class AutomatedOperationRunner {
           completed: submitted.completed,
         });
         replaceRecord(record);
-        await this.deps.repository.markPolicyExecuted?.(policy.id, now);
         result.submitted += 1;
         if (submitted.completed) result.completed += 1;
+
+        try {
+          await this.deps.repository.markPolicyExecuted?.(policy.id, now);
+        } catch (bookkeepingError) {
+          result.bookkeepingWarnings += 1;
+          const message = bookkeepingError instanceof Error ? bookkeepingError.message : String(bookkeepingError);
+          this.logger.error(`[AutomatedOperationRunner] ${policy.id}: POLICY_BOOKKEEPING_FAILED ${message}`);
+        }
       } catch (error) {
         result.failed += 1;
         const code = typeof error === "object" && error && "code" in error ? String((error as { code: unknown }).code) : "AUTOMATION_FAILED";
         const message = error instanceof Error ? error.message : String(error);
         this.logger.error(`[AutomatedOperationRunner] ${policy.id}: ${code} ${message}`);
-        if (record) {
-          const failed = await this.deps.repository.updateRun({
-            id: record.id,
-            state: "FAILED",
-            errorCode: code,
-            errorMessage: message,
-          });
-          replaceRecord(failed);
+        if (record && record.state !== "SUBMITTED" && record.state !== "COMPLETED") {
+          try {
+            const failed = await this.deps.repository.updateRun({
+              id: record.id,
+              state: "FAILED",
+              errorCode: code,
+              errorMessage: message,
+            });
+            replaceRecord(failed);
+          } catch (persistenceError) {
+            const persistenceMessage = persistenceError instanceof Error ? persistenceError.message : String(persistenceError);
+            this.logger.error(`[AutomatedOperationRunner] ${policy.id}: FAILURE_STATE_PERSISTENCE_FAILED ${persistenceMessage}`);
+          }
         }
       }
     }
