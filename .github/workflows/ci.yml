@@ -87,3 +87,32 @@ jobs:
         run: npm --prefix packages/database test
       - name: Build
         run: npm --prefix packages/database run build
+
+  application-integration:
+    needs: [market-data, portfolio, database]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Build shared packages in dependency order
+        run: |
+          npm --prefix packages/market-data run build
+          npm --prefix packages/portfolio run build
+          npm --prefix packages/core run build
+          npm --prefix packages/database run build
+          npm --prefix packages/coinbase-sync run build
+      - name: Web typecheck and tests
+        run: |
+          npm --prefix apps/web run typecheck
+          npm --prefix apps/web test
+      - name: Web production build
+        run: npm --prefix apps/web run build
+      - name: Electron typecheck and build
+        run: |
+          npm --prefix apps/desktop run typecheck
+          npm --prefix apps/desktop run build
