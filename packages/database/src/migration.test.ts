@@ -50,6 +50,10 @@ describe("Database Migration & Integrity", () => {
     expect(tableNames).toContain("fiscal_reserve_movements");
     expect(tableNames).toContain("cycle_liquidity_allocations");
     expect(tableNames).toContain("profit_harvest_cycles");
+    expect(tableNames).toContain("market_series_cache_v2");
+    expect(tableNames).toContain("portfolio_transaction_cache_v2");
+    expect(tableNames).toContain("automated_operation_policies_v1");
+    expect(tableNames).toContain("automated_operation_runs_v1");
 
     // Verificamos las nuevas columnas en transaction_legs
     const columnsInfo = sqlite.pragma("table_info('transaction_legs')") as { name: string }[];
@@ -77,6 +81,20 @@ describe("Database Migration & Integrity", () => {
     expect(harvestColumns).toContain("requires_user_confirmation");
     expect(harvestColumns).toContain("eurc_fiscal_reserve_eur");
     expect(harvestColumns).toContain("eurc_operational_eur");
+
+    const automationRunColumns = (sqlite.pragma("table_info('automated_operation_runs_v1')") as { name: string }[]).map(c => c.name);
+    expect(automationRunColumns).toContain("idempotency_key");
+    expect(automationRunColumns).toContain("preview_token");
+    expect(automationRunColumns).toContain("preview_id");
+    expect(automationRunColumns).toContain("order_ids_json");
+    expect(automationRunColumns).toContain("error_code");
+    expect(automationRunColumns).toContain("error_message");
+
+    const triggers = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='trigger'").all() as { name: string }[];
+    const triggerNames = triggers.map(t => t.name);
+    expect(triggerNames).toContain("invalidate_portfolio_tx_cache_v2_after_transaction_insert");
+    expect(triggerNames).toContain("invalidate_portfolio_tx_cache_v2_after_leg_update");
+    expect(triggerNames).toContain("invalidate_portfolio_tx_cache_v2_after_fee_delete");
     
     closeDatabase();
   });
