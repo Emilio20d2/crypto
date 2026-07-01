@@ -124,7 +124,7 @@ describe("automated operation guard", () => {
     expect(isProposalExecutable(proposal)).toBe(false);
   });
 
-  it("uses only free EURC and never the fiscal reserve for a staged rebuy", () => {
+  it("uses only already-free operating EURC and never mixes in the fiscal reserve", () => {
     const context: AutomationMarketContext = {
       ...commonContext(),
       currentPriceEur: 70_000,
@@ -140,7 +140,7 @@ describe("automated operation guard", () => {
 
     expect(proposal.state).toBe("READY_TO_PREVIEW");
     expect(proposal.operationType).toBe("rebuy");
-    expect(proposal.amountEur).toBe(6_250);
+    expect(proposal.amountEur).toBe(7_500);
     expect(proposal.fiscalReserveExcludedEur).toBe(5_000);
     expect(proposal.drawdownPct).toBe(30);
   });
@@ -152,5 +152,17 @@ describe("automated operation guard", () => {
 
     expect(proposal.state).toBe("REVIEW_REQUIRED");
     expect(proposal.requiresUserAuthorization).toBe(true);
+  });
+
+  it("blocks automatic execution without a signed, expiring authorization", () => {
+    const policy = bullPolicy();
+    policy.authorization.authorizedAt = null;
+    policy.authorization.expiresAt = null;
+    policy.authorization.authorizationVersion = null;
+    const proposal = evaluateAutomatedOperation(policy, commonContext());
+
+    expect(proposal.state).toBe("BLOCKED_RISK");
+    expect(proposal.blockers.join(" ")).toMatch(/Autorización automática/);
+    expect(isProposalExecutable(proposal)).toBe(false);
   });
 });
