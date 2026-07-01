@@ -16,7 +16,7 @@ import { formatDateTime, formatMoney } from "../lib/format";
 
 type OperationType = "buy" | "sell" | "convert" | "rebuy";
 type OperationMode = "simulation" | "real";
-type OperationsTab = "new" | "smart-buy" | "smart-sell" | "rebuy" | "scheduled" | "pending" | "history";
+type OperationsTab = "new" | "smart-buy" | "smart-sell" | "rebuy" | "policies" | "scheduled" | "pending" | "history";
 type OperationPayload = {
   operationType: OperationType;
   mode: OperationMode;
@@ -41,6 +41,7 @@ const OPERATION_TABS: Array<{ id: OperationsTab; label: string }> = [
   { id: "smart-buy", label: "Compra Inteligente" },
   { id: "smart-sell", label: "Venta Inteligente" },
   { id: "rebuy", label: "Recompras" },
+  { id: "policies", label: "Políticas" },
   { id: "scheduled", label: "Operaciones programadas" },
   { id: "pending", label: "Órdenes pendientes" },
   { id: "history", label: "Historial" },
@@ -60,6 +61,11 @@ function parsePositive(value: string): number | null {
 
 function coinbaseOperationsApi(): CoinbaseOperationsApi {
   return window.cryptoControl.coinbase as unknown as CoinbaseOperationsApi;
+}
+
+function automationApi() {
+  if (!window.cryptoControl.automation) throw new Error("La API de automatización no está disponible.");
+  return window.cryptoControl.automation;
 }
 
 function badgeForCost(level: string | null | undefined): string {
@@ -124,6 +130,11 @@ export function Operaciones() {
   const [smartResult, setSmartResult] = useState<any | null>(null);
   const [smartLoading, setSmartLoading] = useState(false);
   const [smartError, setSmartError] = useState("");
+  const [policyKind, setPolicyKind] = useState<"BULL_PARTIAL_SALE" | "BEAR_REBUY">("BULL_PARTIAL_SALE");
+  const [policyAssetId, setPolicyAssetId] = useState(preparedAsset);
+  const [policyMaxOperation, setPolicyMaxOperation] = useState("100");
+  const [policySaving, setPolicySaving] = useState(false);
+  const [policyRunning, setPolicyRunning] = useState(false);
 
   const { data: assetsRes } = useQuery({
     queryKey: ["assets"],
@@ -155,6 +166,21 @@ export function Operaciones() {
     queryFn: () => coinbaseOperationsApi().listPendingOrders(),
   });
 
+  const { data: automationStatusRes, refetch: refetchAutomationStatus } = useQuery({
+    queryKey: ["automation", "status"],
+    queryFn: () => automationApi().getStatus(),
+  });
+
+  const { data: automationPoliciesRes, refetch: refetchAutomationPolicies } = useQuery({
+    queryKey: ["automation", "policies"],
+    queryFn: () => automationApi().listPolicies(),
+  });
+
+  const { data: automationRunsRes, refetch: refetchAutomationRuns } = useQuery({
+    queryKey: ["automation", "runs"],
+    queryFn: () => automationApi().listRuns({ limit: 50 }),
+  });
+
   const { data: txsRes, isLoading: loadingTxs } = useQuery({
     queryKey: ["transactions"],
     queryFn: () => window.cryptoControl.transactions.list(),
@@ -168,6 +194,9 @@ export function Operaciones() {
   const coinbaseStatus = coinbaseStatusRes?.ok ? coinbaseStatusRes.data : null;
   const scheduledOperations = scheduledRes?.ok ? scheduledRes.data : [];
   const pendingOrders = pendingRes?.ok ? pendingRes.data : [];
+  const automationStatus = automationStatusRes?.ok ? automationStatusRes.data : null;
+  const automationPolicies = automationPoliciesRes?.ok ? automationPoliciesRes.data : [];
+  const automationRuns = automationRunsRes?.ok ? automationRunsRes.data : [];
   const transactions = useMemo(() => txsRes?.ok ? txsRes.data : [], [txsRes]);
   const filteredTransactions = useMemo(() => {
     const coinbaseTransactions = transactions.filter((tx: any) => typeof tx.externalId === "string" && tx.externalId.length > 0);
@@ -302,6 +331,82 @@ export function Operaciones() {
       return;
     }
     setSmartResult(result.data);
+  };
+
+  const saveAutomationPolicy = async () => {
+    const amount = parsePositive(policyMaxOperation);
+    if (!amount) {
+      setOperationError("Introduce un límite por operación válido.");
+      return;
+    }
+    setPolicySaving(true);
+    setOperationError("");
+    setSuccessMsg("");
+    const now = Date.now();
+    const result = await automationApi().upsertPolicy({
+      label: `${policyKind === "BULL_PARTIAL_SALE" ? "Venta parcial" : "Recompra"} ${policyAssetId}`,
+      policy: {
+        kind: policyKind,
+        assetId: policyAssetId,
+        cycleId: cycleId || null,
+        planId: null,
+        goalId: null,
+        enabled: true,
+        simulationOnly: true,
+        startsAt: now,
+        cooldownHours: 24,
+        maxExecutions: 1,
+        minConfidence: 70,
+        minIndependentSources: 1,
+        requireCompleteData: true,
+        maxMarketDataAgeMinutes: 120,
+        maxOperationEur: amount,
+        authorization: {
+          enabled: true,
+          autoExecute: false,
+          authorizedAt: now,
+          expiresAt: now + 7 * 24 * 60 * 60_000,
+          authorizationVersion: "ui-simulation-v1",
+          maxSingleOperationEur: amount,
+          maxDailyOperations: 1,
+          maxDailyNotionalEur: amount,
+        },
+        bull: policyKind === "BULL_PARTIAL_SALE" ? {
+          allowedRegimes: ["BULL_EXPANSION", "EUPHORIA", "DISTRIBUTION"],
+          minimumUnrealizedGainPct: 25,
+          minimumSentimentScore: 65,
+          sellPercentage: 10,
+          minimumResidualPositionPct: 60,
+        } : undefined,
+        bear: policyKind === "BEAR_REBUY" ? {
+          allowedRegimes: ["CORRECTION", "BEAR_MARKET", "CAPITULATION", "EARLY_RECOVERY"],
+          minimumDrawdownPct: 15,
+          maximumSentimentScore: 45,
+          rebuyPercentageOfFreeEurc: 25,
+          minimumStabilizationScore: 50,
+        } : undefined,
+      },
+    });
+    setPolicySaving(false);
+    if (!result.ok) {
+      setOperationError(result.error.message);
+      return;
+    }
+    setSuccessMsg("Política guardada en modo simulación. La automatización real sigue desactivada.");
+    await Promise.all([refetchAutomationPolicies(), refetchAutomationRuns(), refetchAutomationStatus()]);
+  };
+
+  const runAutomationNow = async () => {
+    setPolicyRunning(true);
+    setOperationError("");
+    const result = await automationApi().runOnce();
+    setPolicyRunning(false);
+    if (!result.ok) {
+      setOperationError(result.error.message);
+      return;
+    }
+    setSuccessMsg("Evaluación manual completada.");
+    await Promise.all([refetchAutomationPolicies(), refetchAutomationRuns(), refetchAutomationStatus()]);
   };
 
   const prepareFromSmartBuy = (recommendation: any) => {
@@ -551,6 +656,85 @@ export function Operaciones() {
             <SmartRulesPanel cycleId={cycleId} onPrepare={(asset, amount) => { setOperationType("sell"); setMode("real"); setFromAssetId(asset); setBaseAmount(String(amount)); setActiveTab("new"); }} />
           ) : activeTab === "rebuy" ? (
             <RebuyRulesPanel cycleId={cycleId} onPrepare={(asset, amount) => { setOperationType("rebuy"); setMode("real"); setAssetId(asset); setQuoteAmount(String(amount)); setActiveTab("new"); }} />
+          ) : activeTab === "policies" ? (
+            <Card>
+              <CardHeader>
+                <CardTitle><ShieldCheck size={16} /> Políticas de automatización</CardTitle>
+                <span className="badge badge-warning">Real desactivado</span>
+              </CardHeader>
+              <CardContent>
+                <div className="banner banner-warning">{automationStatus?.realAutomationBlocker ?? "La automatización real permanece bloqueada."}</div>
+                <div className="investment-distribution">
+                  <span>Modo: <strong>{automationStatus?.mode ?? "simulation_guarded"}</strong></span>
+                  <span>Última evaluación: <strong>{automationStatus?.lastRunAt ? formatDateTime(automationStatus.lastRunAt) : "Sin ejecutar"}</strong></span>
+                  <span>Próxima evaluación: <strong>{automationStatus?.nextRunAt ? formatDateTime(automationStatus.nextRunAt) : "Pendiente"}</strong></span>
+                </div>
+
+                <form className="investment-form-grid compact" onSubmit={(event) => { event.preventDefault(); void saveAutomationPolicy(); }}>
+                  <FormField label="Tipo de política">
+                    <Select value={policyKind} onChange={(event) => setPolicyKind(event.target.value as typeof policyKind)}>
+                      <option value="BULL_PARTIAL_SALE">Venta parcial alcista</option>
+                      <option value="BEAR_REBUY">Recompra bajista</option>
+                    </Select>
+                  </FormField>
+                  <FormField label="Activo">
+                    <Select value={policyAssetId} onChange={(event) => setPolicyAssetId(event.target.value)}>
+                      {cryptoAssets.map((asset: any) => <option key={asset.id} value={asset.id}>{asset.symbol ?? asset.id}</option>)}
+                    </Select>
+                  </FormField>
+                  <FormField label="Límite por operación">
+                    <Input inputMode="decimal" value={policyMaxOperation} onChange={(event) => setPolicyMaxOperation(event.target.value)} />
+                  </FormField>
+                  <div className="investment-form-actions">
+                    <Button type="submit" loading={policySaving}><ShieldCheck size={15} /> Guardar política</Button>
+                    <Button type="button" variant="secondary" loading={policyRunning} onClick={() => void runAutomationNow()}><RefreshCw size={15} /> Evaluar ahora</Button>
+                  </div>
+                </form>
+
+                {automationPolicies.length === 0 ? <EmptyState icon={<ClipboardList size={40} />} title="Sin políticas" description="Crea una política en modo simulación para auditar sus condiciones." /> : (
+                  <div className="investment-contribution-list">
+                    {automationPolicies.map((item: any) => (
+                      <article key={item.id} className="investment-contribution">
+                        <div className="investment-contribution-header">
+                          <div>
+                            <strong>{item.label}</strong>
+                            <span>{item.policy?.assetId} · {item.policy?.kind === "BULL_PARTIAL_SALE" ? "Venta parcial" : "Recompra"} · {item.policy?.simulationOnly ? "Simulación" : "Real bloqueado"}</span>
+                          </div>
+                          <span className={item.enabled ? "badge badge-success" : "badge badge-warning"}>{item.enabled ? "Activa" : "Pausada"}</span>
+                        </div>
+                        <p className="investment-contribution-meta">Ejecuciones: {item.policy?.executionCount ?? 0} · Límite: {formatMoney(item.policy?.maxOperationEur)}</p>
+                        <Button type="button" size="sm" variant="secondary" onClick={async () => {
+                          await automationApi().setPolicyEnabled(item.id, !item.enabled);
+                          await refetchAutomationPolicies();
+                        }}>
+                          {item.enabled ? "Pausar" : "Reanudar"}
+                        </Button>
+                      </article>
+                    ))}
+                  </div>
+                )}
+
+                <h3 className="section-heading">Historial de evaluación</h3>
+                {automationRuns.length === 0 ? <p className="panel-caption">Sin evaluaciones registradas.</p> : (
+                  <div className="investment-contribution-list">
+                    {automationRuns.map((run: any) => (
+                      <article key={run.id} className="investment-contribution">
+                        <div className="investment-contribution-header">
+                          <div>
+                            <strong>{run.state}</strong>
+                            <span>{run.proposal?.assetId} · {formatDateTime(run.updatedAt ?? run.createdAt)}</span>
+                          </div>
+                          <span className="badge">{formatMoney(run.notionalEur)}</span>
+                        </div>
+                        {(run.proposal?.blockers ?? []).length > 0 ? <p className="investment-contribution-meta">Bloqueos: {run.proposal.blockers.join(" · ")}</p> : null}
+                        {(run.proposal?.reasons ?? []).length > 0 ? <p className="investment-contribution-meta">Motivos: {run.proposal.reasons.join(" · ")}</p> : null}
+                        {run.errorMessage ? <p className="investment-contribution-meta">Error: {run.errorMessage}</p> : null}
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           ) : activeTab === "scheduled" ? (
             <Card>
               <CardHeader><CardTitle><CalendarClock size={16} /> Operaciones programadas</CardTitle></CardHeader>
