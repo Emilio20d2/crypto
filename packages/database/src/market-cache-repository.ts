@@ -25,6 +25,15 @@ function periodWindowMs(period: string): number | null {
   return null;
 }
 
+function expectedPointsForPeriod(period: string): number {
+  if (period === "1h") return 50;
+  if (period === "24h") return 80;
+  if (period === "7d") return 140;
+  if (period === "30d") return 100;
+  if (period === "1y") return 300;
+  return 500;
+}
+
 function normalizePoint(point: HistoricalPriceData, provider: string): HistoricalPriceData | null {
   if (!Number.isFinite(point.timestamp) || !Number.isFinite(point.price) || point.timestamp <= 0 || point.price <= 0) return null;
   return {
@@ -39,11 +48,11 @@ function normalizePoint(point: HistoricalPriceData, provider: string): Historica
   };
 }
 
-function mergeSeries(series: HistoricalPriceData[][]): HistoricalPriceData[] {
+function mergeSeries(series: HistoricalPriceData[][], provider = "cache"): HistoricalPriceData[] {
   const merged = new Map<number, HistoricalPriceData>();
   for (const points of series) {
     for (const point of points) {
-      const normalized = normalizePoint(point, point.source ?? "cache");
+      const normalized = normalizePoint(point, point.source ?? provider);
       if (!normalized) continue;
       const current = merged.get(normalized.timestamp);
       if (!current) {
@@ -59,11 +68,46 @@ function mergeSeries(series: HistoricalPriceData[][]): HistoricalPriceData[] {
 }
 
 function scopeSeries(points: HistoricalPriceData[], period: string): HistoricalPriceData[] {
+  const sorted = [...points].sort((a, b) => a.timestamp - b.timestamp);
   const windowMs = periodWindowMs(period);
-  if (windowMs === null || points.length === 0) return points;
-  const latest = points.at(-1)!.timestamp;
+  if (windowMs === null || sorted.length === 0) return sorted;
+  const latest = sorted.at(-1)!.timestamp;
   const cutoff = latest - windowMs;
-  return points.filter((point) => point.timestamp >= cutoff);
+  return sorted.filter((point) => point.timestamp >= cutoff);
+}
+
+type CacheCandidate = {
+  provider: string;
+  fetchedAt: number;
+  points: HistoricalPriceData[];
+};
+
+function candidateScore(candidate: CacheCandidate, period: string, now: number): number {
+  const points = candidate.points;
+  if (points.length === 0) return Number.NEGATIVE_INFINITY;
+  const windowMs = periodWindowMs(period);
+  const span = points.length > 1 ? points.at(-1)!.timestamp - points[0].timestamp : 0;
+  const spanRatio = windowMs === null ? 1 : Math.min(1, span / Math.max(1, windowMs * 0.92));
+  const countRatio = Math.min(1, points.length / expectedPointsForPeriod(period));
+  const providerQuality = confidenceForProvider(candidate.provider);
+  const age = Math.max(0, now - candidate.fetchedAt);
+  const recency = Math.max(0, 1 - age / Math.max(1, maxAgeForPeriod(period) * 2));
+  const volumeCoverage = points.length > 0
+    ? points.filter((point) => point.volume != null && Number.isFinite(point.volume)).length / points.length
+    : 0;
+  return spanRatio * 400 + countRatio * 300 + providerQuality * 200 + recency * 75 + volumeCoverage * 25;
+}
+
+function selectBestCandidate(candidates: CacheCandidate[], period: string, now: number): HistoricalPriceData[] | null {
+  const prepared = candidates
+    .map((candidate) => ({
+      ...candidate,
+      points: scopeSeries(mergeSeries([candidate.points], candidate.provider), period)
+        .map((point) => ({ ...point, source: candidate.provider, confidence: point.confidence ?? confidenceForProvider(candidate.provider) })),
+    }))
+    .filter((candidate) => candidate.points.length > 0)
+    .sort((a, b) => candidateScore(b, period, now) - candidateScore(a, period, now));
+  return prepared[0]?.points ?? null;
 }
 
 export class DatabaseMarketCacheRepository implements MarketCacheRepository {
@@ -126,18 +170,18 @@ export class DatabaseMarketCacheRepository implements MarketCacheRepository {
     const now = Date.now();
     const maxAge = maxAgeForPeriod(period);
     const rows = this.readSeriesRows(assetId, quoteCurrency, period);
-    const eligible = rows.filter((row) => options?.allowStale || now - row.fetched_at <= maxAge);
-    const parsed: HistoricalPriceData[][] = [];
-    for (const row of eligible) {
+    const compactCandidates: CacheCandidate[] = [];
+    for (const row of rows) {
+      if (!options?.allowStale && now - row.fetched_at > maxAge) continue;
       try {
         const value = JSON.parse(row.data_json) as HistoricalPriceData[];
-        if (Array.isArray(value)) parsed.push(value.map((point) => ({ ...point, source: point.source ?? row.provider })));
+        if (Array.isArray(value)) compactCandidates.push({ provider: row.provider, fetchedAt: row.fetched_at, points: value });
       } catch {
         // Ignore a corrupt compact row; price_history remains the compatibility fallback.
       }
     }
-    const fastSeries = scopeSeries(mergeSeries(parsed), period);
-    if (fastSeries.length > 0) return fastSeries;
+    const compact = selectBestCandidate(compactCandidates, period, now);
+    if (compact) return compact;
 
     const legacyRows = await this.db.select()
       .from(priceHistory)
@@ -149,21 +193,27 @@ export class DatabaseMarketCacheRepository implements MarketCacheRepository {
       .orderBy(asc(priceHistory.timestamp));
 
     if (legacyRows.length === 0) return null;
-    const latest = legacyRows[legacyRows.length - 1];
-    if (!options?.allowStale && now - latest.fetchedAt > maxAge) return null;
-
-    return scopeSeries(legacyRows.map((row) => ({
-      timestamp: row.timestamp,
-      price: row.price,
-      source: row.provider,
-      confidence: confidenceForProvider(row.provider),
-    })), period);
+    const byProvider = new Map<string, CacheCandidate>();
+    for (const row of legacyRows) {
+      const candidate = byProvider.get(row.provider) ?? { provider: row.provider, fetchedAt: row.fetchedAt, points: [] };
+      candidate.fetchedAt = Math.max(candidate.fetchedAt, row.fetchedAt);
+      candidate.points.push({
+        timestamp: row.timestamp,
+        price: row.price,
+        source: row.provider,
+        confidence: confidenceForProvider(row.provider),
+      });
+      byProvider.set(row.provider, candidate);
+    }
+    const eligibleLegacy = [...byProvider.values()].filter((candidate) => options?.allowStale || now - candidate.fetchedAt <= maxAge);
+    return selectBestCandidate(eligibleLegacy, period, now);
   }
 
   async saveHistoricalPrices(assetId: string, quoteCurrency: string, period: string, data: HistoricalPriceData[], provider: string): Promise<void> {
-    const incoming = data.map((point) => ({ ...point, source: point.source ?? provider }));
+    const incoming = data.map((point) => ({ ...point, source: provider, confidence: point.confidence ?? confidenceForProvider(provider) }));
     const existing = this.readProviderSeries(assetId, quoteCurrency, period, provider);
-    const normalized = scopeSeries(mergeSeries([existing, incoming]), period);
+    const normalized = scopeSeries(mergeSeries([existing, incoming], provider), period)
+      .map((point) => ({ ...point, source: provider, confidence: point.confidence ?? confidenceForProvider(provider) }));
     if (normalized.length === 0) return;
 
     const fetchedAt = Date.now();
@@ -200,7 +250,7 @@ export class DatabaseMarketCacheRepository implements MarketCacheRepository {
         quoteCurrency,
         timestamp: normalizedPoint.timestamp,
         price: normalizedPoint.price,
-        provider: normalizedPoint.source ?? provider,
+        provider,
         interval: period,
         fetchedAt,
       }] : [];
