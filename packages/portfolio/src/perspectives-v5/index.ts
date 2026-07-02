@@ -1,4 +1,5 @@
 export * from "./data/price-manifest";
+export * from "./data/source-catalog";
 export * from "./domain/types";
 export * from "./ledger/portfolio-ledger";
 export * from "./reports/annual-report";

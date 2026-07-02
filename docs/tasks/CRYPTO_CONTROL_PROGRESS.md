@@ -113,6 +113,30 @@ Pendiente tras Fase 2:
 - Publicar commit y comentario en Issue #5.
 - Fase 3: motor de fuentes y mínimo de 15 fuentes independientes por activo antes de seguir al consenso anual.
 
+Resultado de Fase 3:
+
+`VALIDATED` localmente para el alcance de catálogo de fuentes.
+
+Cambios de Fase 3:
+
+- Creado `packages/portfolio/src/perspectives-v5/data/source-catalog.ts`.
+- Exportado el catálogo desde `packages/portfolio/src/perspectives-v5/index.ts`.
+- Añadido `packages/portfolio/src/perspectives-v5/source-catalog.test.ts`.
+- El catálogo registra fuentes para BTC, ETH y SUI con mínimo 15 fuentes independientes por activo.
+- Cada activo tiene mínimo 5 fuentes de corto plazo, 5 de medio plazo y 5 de largo plazo.
+- Las fuentes quedan en `REGISTERED_ONLY` y `usedInEngine=false`; no se han activado como observaciones ni como consenso.
+
+Pruebas de Fase 3:
+
+- `npm --prefix packages/portfolio run test -- src/perspectives-v5/source-catalog.test.ts` — OK, 1 archivo / 2 tests.
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix packages/portfolio run build` — OK.
+
+Pendiente tras Fase 3:
+
+- Publicar commit y comentario en Issue #5.
+- Fase 4 debe crear observaciones verificadas, consenso anual y caminos mensuales completos. El catálogo por sí solo no debe alimentar precios activos.
+
 Estado general
 
 Integración en curso sobre la versión instalada correcta. Auditoría inicial completada y primeras correcciones arquitectónicas aplicadas en tiempo real, gráficas y Perspectivas.
