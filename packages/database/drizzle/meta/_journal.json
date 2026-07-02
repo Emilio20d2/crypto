@@ -141,6 +141,13 @@
       "when": 1782314800000,
       "tag": "0019_cache_market_automation",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1782401200000,
+      "tag": "0020_perspectives_v5_operations",
+      "breakpoints": true
     }
   ]
 }

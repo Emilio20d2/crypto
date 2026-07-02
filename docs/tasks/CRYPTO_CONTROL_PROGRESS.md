@@ -81,6 +81,38 @@ Pendiente tras Fase 1:
 - Fase 2 debe estabilizar dominio y migraciones versionadas antes de seguir con fuentes/ledger/ventas/recompras.
 - La interfaz V5 definitiva queda reservada para Fase 8; en Fase 1 solo se cambió la fuente productiva a V5.
 
+Resultado de Fase 2:
+
+`VALIDATED` localmente.
+
+Cambios de Fase 2:
+
+- Ampliado dominio V5 con `PerspectivesProgrammableOperation`, estados productivos de operaciones, modo de trading, cantidades congeladas y modos de ejecución.
+- Añadida migración versionada `0020_perspectives_v5_operations.sql`.
+- La migración crea:
+  - `perspectives_v5_trading_settings`;
+  - `perspectives_v5_programmed_operations`;
+  - `perspectives_v5_operation_reservations`;
+  - `perspectives_v5_coinbase_previews`;
+  - `perspectives_v5_coinbase_orders`;
+  - `perspectives_v5_coinbase_fills`;
+  - `perspectives_v5_live_authorizations`.
+- El modo global se inicializa como `REVIEW_ONLY`.
+- Ampliada `migration.test.ts` para verificar tablas, columnas clave e idempotencia de migración repetida.
+
+Pruebas de Fase 2:
+
+- `npm --prefix packages/database run test -- src/migration.test.ts` — OK, 1 archivo / 2 tests.
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix packages/market-data run build` — OK.
+- `npm --prefix packages/database run typecheck` — OK.
+- `npm --prefix packages/database run build` — OK.
+
+Pendiente tras Fase 2:
+
+- Publicar commit y comentario en Issue #5.
+- Fase 3: motor de fuentes y mínimo de 15 fuentes independientes por activo antes de seguir al consenso anual.
+
 Estado general
 
 Integración en curso sobre la versión instalada correcta. Auditoría inicial completada y primeras correcciones arquitectónicas aplicadas en tiempo real, gráficas y Perspectivas.
