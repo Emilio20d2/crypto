@@ -360,7 +360,7 @@ function mapV5ForCurrentPerspectivesView(v5: PerspectivesV5Output): Perspectives
         openCostBasisEur: v5.finalGrossWealthEur - v5.unrealizedGainEur,
         grossWealthEur: v5.finalGrossWealthEur,
         netProfitEur: v5.netProfitEur,
-        totalMarketGain,
+        totalMarketGainEur: totalMarketGain,
         totalSalesEur: v5.realizedGainEur,
         totalRebuysEur: v5.internalRebuyCapitalEur,
         totalCommissionsEur: v5.monthlySnapshots.reduce((sum, snapshot) => sum + snapshot.costsThisMonthEur, 0),
