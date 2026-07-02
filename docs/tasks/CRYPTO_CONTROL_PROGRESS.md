@@ -137,6 +137,32 @@ Pendiente tras Fase 3:
 - Publicar commit y comentario en Issue #5.
 - Fase 4 debe crear observaciones verificadas, consenso anual y caminos mensuales completos. El catálogo por sí solo no debe alimentar precios activos.
 
+Resultado de Fase 4:
+
+`VALIDATED` localmente con fixtures de observaciones verificadas.
+
+Cambios de Fase 4:
+
+- Creado `packages/portfolio/src/perspectives-v5/data/annual-consensus.ts`.
+- Exportado desde `packages/portfolio/src/perspectives-v5/index.ts`.
+- Añadido `packages/portfolio/src/perspectives-v5/annual-consensus.test.ts`.
+- El motor calcula cinco escenarios anuales mediante percentiles ponderados cuando existen al menos tres fuentes independientes.
+- El motor interpola años con anclas válidas y modela años posteriores con crecimiento acotado y confianza decreciente.
+- El constructor mensual genera matriz completa `assetId x month x scenario x pathId`.
+- La validación bloquea activos sin observaciones verificadas suficientes.
+- Los caminos mensuales no usan carry-forward plano.
+
+Pruebas de Fase 4:
+
+- `npm --prefix packages/portfolio run test -- src/perspectives-v5/annual-consensus.test.ts` — OK, 1 archivo / 3 tests.
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix packages/portfolio run build` — OK.
+
+Pendiente tras Fase 4:
+
+- Publicar commit y comentario en Issue #5.
+- Fase 5: ledger, continuidad mensual, patrimonio, TWR y XIRR. Debe demostrar precio constante, capital inicial, compras en unidades y conciliación.
+
 Estado general
 
 Integración en curso sobre la versión instalada correcta. Auditoría inicial completada y primeras correcciones arquitectónicas aplicadas en tiempo real, gráficas y Perspectivas.

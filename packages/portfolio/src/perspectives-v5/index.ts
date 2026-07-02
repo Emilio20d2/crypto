@@ -1,3 +1,4 @@
+export * from "./data/annual-consensus";
 export * from "./data/price-manifest";
 export * from "./data/source-catalog";
 export * from "./domain/types";
