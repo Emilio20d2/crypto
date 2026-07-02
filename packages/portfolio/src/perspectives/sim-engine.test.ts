@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { runPerspectivesSimulation as runPerspectivesSimulationCore } from "./sim-engine";
+import { runLegacyPerspectivesSimulation as runLegacyPerspectivesSimulationCore } from "./sim-engine";
 import { verifyPerspectivesAccounting } from "./accounting-verifier";
 import { buildExternalPriceMap, monthKey, getAssetTier } from "./external-price-builder";
 import { buildMarketRegimePricePath, classifyHistoricalMarketRegimes } from "./market-regime-engine";
@@ -29,8 +29,8 @@ const TEST_FORECAST_DATASET = {
   fxRateAt: NOW,
 };
 
-function runPerspectivesSimulation(input: SimInput) {
-  return runPerspectivesSimulationCore(input, TEST_FORECAST_DATASET);
+function runLegacyPerspectivesSimulation(input: SimInput) {
+  return runLegacyPerspectivesSimulationCore(input, TEST_FORECAST_DATASET);
 }
 
 function horizon(years: number): number {
@@ -105,7 +105,7 @@ describe("motor externo — ausencia del modelo interno de ciclos", () => {
   it("price-model.ts NO se importa en sim-engine.ts (motor no usa ciclos internos)", async () => {
     // Verificación de que los imports de sim-engine no incluyen price-model
     // Importamos el módulo y comprobamos que no hay funciones del modelo interno
-    const { runPerspectivesSimulation: rps } = await import("./sim-engine");
+    const { runLegacyPerspectivesSimulation: rps } = await import("./sim-engine");
     expect(typeof rps).toBe("function");
 
     // buildPriceMap y buildPricePath NO deben existir como exports de perspectives
@@ -121,7 +121,7 @@ describe("motor externo — ausencia del modelo interno de ciclos", () => {
 
   it("AssetPriceInfo.modelType nunca es internal_cycle_model", () => {
     const input = makeInput({ horizonDate: horizon(5) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       for (const info of Object.values(s.assetPriceInfo)) {
         expect(info.modelType).not.toBe("internal_cycle_model");
@@ -133,7 +133,7 @@ describe("motor externo — ausencia del modelo interno de ciclos", () => {
 
   it("diagnostics.source declara el motor de regímenes productivo", () => {
     const input = makeInput({ horizonDate: horizon(5) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     expect(result.diagnostics.source).toBe("market-regime-engine+active-forecast-anchors");
     expect(result.diagnostics.engineVersion).toBe("perspectives-v4.0-market-regimes");
     expect(result.diagnostics.marketRegimeEngine).toBe(true);
@@ -275,7 +275,7 @@ describe("market-regime-engine: trayectorias mensuales no lineales", () => {
 
   it("la simulación expone meses negativos y evita una proyección estrictamente monótona", () => {
     const input = makeInput({ horizonDate: horizon(18) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     const base = result.scenarios.find(s => s.scenario === "base");
 
     expect(base?.marketDiagnostics?.negativeMonths ?? 0).toBeGreaterThan(0);
@@ -286,7 +286,7 @@ describe("market-regime-engine: trayectorias mensuales no lineales", () => {
 
   it("declara inválido cualquier orden de escenarios incoherente", () => {
     const input = makeInput({ horizonDate: horizon(18) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     const order = result.diagnostics.scenarioOrder.map(entry => entry.finalNetWealthEur);
     const isOrdered = order.every((value, index) => index === 0 || value >= order[index - 1]);
     expect(result.diagnostics.scenarioValidationStatus).toBe(isOrdered ? "valid_order" : "invalid_order");
@@ -392,7 +392,7 @@ describe("external-price-builder: cobertura y precios", () => {
 describe("sim-engine: forecastCoverage en AnnualSnapshot", () => {
   it("cada snapshot tiene forecastCoverage definido", () => {
     const input = makeInput({ horizonDate: horizon(5) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       for (const snap of s.annualSnapshots) {
         expect(["covered", "uncovered"]).toContain(snap.forecastCoverage);
@@ -404,7 +404,7 @@ describe("sim-engine: forecastCoverage en AnnualSnapshot", () => {
     const input = makeInput({
       horizonDate: horizon(5), // 2031 → años 2026-2031, BTC tiene hasta 2030
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     const base = result.scenarios.find(s => s.scenario === "base")!;
     const year2028 = base.annualSnapshots.find(s => s.year === 2028);
     if (year2028) {
@@ -414,7 +414,7 @@ describe("sim-engine: forecastCoverage en AnnualSnapshot", () => {
 
   it("años posteriores a cobertura directa se marcan como covered por extensión modelizada", () => {
     const input = makeInput({ horizonDate: horizon(15) }); // hasta 2041
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     const base = result.scenarios.find(s => s.scenario === "base")!;
     const year2040 = base.annualSnapshots.find(s => s.year === 2040);
     if (year2040) {
@@ -428,13 +428,13 @@ describe("sim-engine: forecastCoverage en AnnualSnapshot", () => {
 describe("sim-engine: structure", () => {
   it("produces 5 scenarios", () => {
     const input = makeInput({ horizonDate: horizon(10) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     expect(result.scenarios.length).toBe(5);
   });
 
   it("each scenario has annual snapshots for the full horizon", () => {
     const input = makeInput({ horizonDate: horizon(5) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       expect(s.annualSnapshots.length).toBeGreaterThanOrEqual(4);
     }
@@ -444,7 +444,7 @@ describe("sim-engine: structure", () => {
     // Con precios cuantilados (90 vs 10 percentil), optimista debe superar conservador.
     // El ajuste monotónico artificial fue eliminado — el resultado es el matemático real.
     const input = makeInput({ horizonDate: horizon(5) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     const opt  = result.scenarios.find(s => s.scenario === "optimista")!.summary.finalNetWealthEur;
     const cons = result.scenarios.find(s => s.scenario === "conservador")!.summary.finalNetWealthEur;
     // En estrategia plan_base con precios externos, optimista siempre supera conservador
@@ -478,7 +478,7 @@ describe("sim-engine: sales", () => {
       })],
       options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy", commissionRate: 0 },
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     const base = result.scenarios.find(s => s.scenario === "base")!;
     expect(base.summary.totalSalesEur).toBeGreaterThan(0);
     expect(base.summary.totalRealizedGainEur).toBeGreaterThan(0);
@@ -505,7 +505,7 @@ describe("sim-engine: sales", () => {
         }],
       })],
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     const base = result.scenarios.find(s => s.scenario === "base")!;
     const configuredSales = base.annualSnapshots
       .flatMap(s => s.events)
@@ -522,7 +522,7 @@ describe("sim-engine: sales", () => {
       horizonDate: horizon(5),
       options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy" },
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     const opt = result.scenarios.find(s => s.scenario === "optimista")!;
     if (opt.summary.totalSalesEur > 0) {
       expect(opt.summary.finalEurcFreeEur + opt.summary.finalFiscalReserveEur).toBeGreaterThan(0);
@@ -537,7 +537,7 @@ describe("sim-engine: sales", () => {
       cycles: [makeCycle({ saleRules: [] })], // sin reglas de venta
       options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy", strategyMode: "USER_RULES" },
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       expect(s.summary.realizedSalesEur).toBe(0);
       expect(s.summary.realizedTaxEur).toBe(0);
@@ -558,7 +558,7 @@ describe("sim-engine: sales", () => {
       cycles: [makeCycle({ saleRules: [] })],
       options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy", strategyMode: "INTELLIGENT_STRATEGY" },
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       expect(s.summary.realizedSalesEur).toBe(0);
       expect(s.summary.realizedTaxEur).toBe(0);
@@ -590,7 +590,7 @@ describe("sim-engine: sales", () => {
       })],
       options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy" },
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     const base = result.scenarios.find(s => s.scenario === "base")!;
     expect(base.summary.totalSalesEur).toBeGreaterThan(0);
     expect(base.summary.totalRealizedGainEur).toBeGreaterThan(0);
@@ -603,7 +603,7 @@ describe("sim-engine: sales", () => {
       currentLots: [{ id: "l1", assetId: "BTC", date: NOW - 3 * YEAR_MS, remainingAmount: 1.0, unitAcquisitionPriceEur: 5000 }],
       horizonDate: horizon(5),
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     const opt = result.scenarios.find(s => s.scenario === "optimista")!;
     if (opt.summary.totalSalesEur > 0) {
       const totalTax = opt.summary.totalTaxEur;
@@ -638,7 +638,7 @@ describe("sim-engine: rebuys", () => {
       })],
       options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy", commissionRate: 0 },
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     const base = result.scenarios.find(s => s.scenario === "base")!;
     expect(base.summary.totalRebuysEur).toBeGreaterThan(0);
     expect(base.summary.finalFiscalReserveEur).toBeGreaterThanOrEqual(500);
@@ -683,7 +683,7 @@ describe("sim-engine: rebuys", () => {
         }],
       })],
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       expect(s.summary.totalRebuysEur).toBe(0);
       expect(s.summary.finalFiscalReserveEur).toBeGreaterThanOrEqual(2_000);
@@ -696,7 +696,7 @@ describe("sim-engine: rebuys", () => {
       eurcFiscalReserve: 10000,
       horizonDate: horizon(5),
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       if (s.summary.totalSalesEur === 0) {
         expect(s.summary.totalRebuysEur).toBe(0);
@@ -727,7 +727,7 @@ describe("sim-engine: rebuys", () => {
       options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy", strategyMode: "USER_RULES", commissionRate: 0 },
     });
 
-    const base = runPerspectivesSimulation(input).scenarios.find(s => s.scenario === "base")!;
+    const base = runLegacyPerspectivesSimulation(input).scenarios.find(s => s.scenario === "base")!;
     expect(base.summary.totalSalesEur).toBe(0);
     expect(base.summary.totalRebuysEur).toBeGreaterThan(0);
     expect(base.summary.externalContributionsEur).toBe(base.summary.initialCapitalEur);
@@ -764,7 +764,7 @@ describe("sim-engine: rebuys", () => {
       options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy", strategyMode: "USER_RULES", commissionRate: 0 },
     });
 
-    const base = runPerspectivesSimulation(input).scenarios.find(s => s.scenario === "base")!;
+    const base = runLegacyPerspectivesSimulation(input).scenarios.find(s => s.scenario === "base")!;
     const rebuyEvent = base.annualSnapshots.flatMap(s => s.events).find(e => e.type === "rebuy")!;
 
     expect(base.summary.totalContributionsEur).toBe(0);
@@ -797,7 +797,7 @@ describe("sim-engine: rebuys", () => {
       cycles: [makeCycle({ rebuyTiers: [] })], // sin tiers de recompra
       options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy" },
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       const rebuyDescriptions = s.annualSnapshots
         .flatMap(snap => snap.events)
@@ -824,7 +824,7 @@ describe("sim-engine: rebuys", () => {
       options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy", strategyMode: "INTELLIGENT_STRATEGY", commissionRate: 0 },
     });
 
-    const base = runPerspectivesSimulation(input).scenarios.find(s => s.scenario === "base")!;
+    const base = runLegacyPerspectivesSimulation(input).scenarios.find(s => s.scenario === "base")!;
     const rebuy = base.annualSnapshots.flatMap(s => s.events).find(e => e.type === "rebuy");
 
     expect(rebuy?.amountEur).toBeCloseTo(5_000, 6);
@@ -857,7 +857,7 @@ describe("sim-engine: rebuys", () => {
       options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy", strategyMode: "USER_RULES", commissionRate: 0 },
     });
 
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     const report = verifyPerspectivesAccounting(result, 0.01);
     expect(report.checks.filter(check => check.status === "FAIL")).toEqual([]);
     expect(report.passed).toBe(true);
@@ -1043,7 +1043,7 @@ describe("sim-engine: annual metrics", () => {
       horizonDate: horizon(3),
       options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base" },
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     const base = result.scenarios.find(s => s.scenario === "base")!;
     for (const snap of base.annualSnapshots) {
       const computed = snap.openingWealthEur + snap.contributionsEur + snap.marketGainEur;
@@ -1053,7 +1053,7 @@ describe("sim-engine: annual metrics", () => {
 
   it("annual continuity: closingWealth[year N] ≈ openingWealth[year N+1]", () => {
     const input = makeInput({ horizonDate: horizon(5) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const scenario of result.scenarios) {
       const snaps = scenario.annualSnapshots;
       for (let i = 0; i < snaps.length - 1; i++) {
@@ -1065,7 +1065,7 @@ describe("sim-engine: annual metrics", () => {
 
   it("TWR is computed (not null) for all scenarios", () => {
     const input = makeInput({ horizonDate: horizon(5) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       expect(s.summary.twr).not.toBeNull();
     }
@@ -1073,7 +1073,7 @@ describe("sim-engine: annual metrics", () => {
 
   it("XIRR is computed in scenarios with non-zero wealth", () => {
     const input = makeInput({ horizonDate: horizon(5) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       if (s.summary.finalNetWealthEur > 0) {
         expect(s.summary.xirr).not.toBeNull();
@@ -1087,7 +1087,7 @@ describe("sim-engine: annual metrics", () => {
     // puede implicar mayor DCA cost y menor cantidad comprada).
     // Sí se garantiza: conservador (cuantil 10) ≤ optimista (cuantil 90) para BTC con cobertura.
     const input = makeInput({ horizonDate: horizon(5) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     const getWealth = (sc: string) =>
       result.scenarios.find(s => s.scenario === sc)!.summary.finalNetWealthEur;
     expect(getWealth("conservador")).toBeLessThanOrEqual(getWealth("optimista") + 1);
@@ -1099,7 +1099,7 @@ describe("sim-engine: annual metrics", () => {
 describe("sim-engine: AnnualStrategyReview", () => {
   it("emite una revisión anual por cada snapshot anual", () => {
     const input = makeInput({ horizonDate: horizon(5) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       expect(s.annualStrategyReviews.length).toBe(s.annualSnapshots.length);
       expect(s.annualStrategyReviews.map(r => r.year)).toEqual(s.annualSnapshots.map(a => a.year));
@@ -1108,7 +1108,7 @@ describe("sim-engine: AnnualStrategyReview", () => {
 
   it("registra decisiones mensuales explícitas sin información futura", () => {
     const input = makeInput({ horizonDate: horizon(3) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     const base = result.scenarios.find(s => s.scenario === "base")!;
     for (const review of base.annualStrategyReviews) {
       expect(review.monthCount).toBeGreaterThan(0);
@@ -1126,7 +1126,7 @@ describe("sim-engine: AnnualStrategyReview", () => {
       horizonDate: horizon(3),
       options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base" },
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     const base = result.scenarios.find(s => s.scenario === "base")!;
     for (const review of base.annualStrategyReviews) {
       expect(review.saleEvaluations).toBeGreaterThan(0);
@@ -1137,7 +1137,7 @@ describe("sim-engine: AnnualStrategyReview", () => {
 
   it("mantiene conciliación anual de patrimonio y EURC", () => {
     const input = makeInput({ eurcFree: 250, horizonDate: horizon(4) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       for (const review of s.annualStrategyReviews) {
         expect(Math.abs(review.reconciliation.wealthDiffEur)).toBeLessThanOrEqual(review.reconciliation.toleranceEur + 0.001);
@@ -1153,7 +1153,7 @@ describe("sim-engine: AnnualStrategyReview", () => {
 describe("sim-engine: EURC invariants", () => {
   it("eurcFree never goes negative", () => {
     const input = makeInput({ eurcFree: 100, horizonDate: horizon(5) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       for (const snap of s.annualSnapshots) {
         expect(snap.eurcFreeEur).toBeGreaterThanOrEqual(-0.01);
@@ -1163,7 +1163,7 @@ describe("sim-engine: EURC invariants", () => {
 
   it("totalRebuysEur se financia con ventas + EURC inicial", () => {
     const input = makeInput({ eurcFree: 500, horizonDate: horizon(5) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       const { totalRebuysEur, totalSalesEur } = s.summary;
       expect(totalRebuysEur).toBeLessThanOrEqual(
@@ -1184,7 +1184,7 @@ describe("sim-engine: plan_base vs full_strategy", () => {
       horizonDate: horizon(5),
       options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base" },
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       expect(s.summary.totalSalesEur).toBe(0);
       expect(s.summary.totalRebuysEur).toBe(0);
@@ -1200,8 +1200,8 @@ describe("sim-engine: plan_base vs full_strategy", () => {
     });
     const planBase = makeInput({ ...baseInput, options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base" } });
     const fullStrat = makeInput({ ...baseInput, options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy" } });
-    const rBase = runPerspectivesSimulation(planBase);
-    const rFull = runPerspectivesSimulation(fullStrat);
+    const rBase = runLegacyPerspectivesSimulation(planBase);
+    const rFull = runLegacyPerspectivesSimulation(fullStrat);
     const baseOpt = rBase.scenarios.find(s => s.scenario === "optimista")!;
     const fullOpt = rFull.scenarios.find(s => s.scenario === "optimista")!;
     expect(baseOpt.summary.finalNetWealthEur).toBeGreaterThan(0);
@@ -1214,14 +1214,14 @@ describe("sim-engine: plan_base vs full_strategy", () => {
 describe("sim-engine: built-in validations", () => {
   it("continuity validations always pass", () => {
     const input = makeInput({ horizonDate: horizon(5) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     const continuityFails = result.validations.filter(v => v.rule.includes("continuidad") && !v.passed);
     expect(continuityFails.length).toBe(0);
   });
 
   it("patrimonio final validations pass for all 5 scenarios", () => {
     const input = makeInput({ horizonDate: horizon(5) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     const patrimonioRules = result.validations.filter(v => v.rule.includes("patrimonio_final"));
     expect(patrimonioRules.length).toBe(5);
     for (const v of patrimonioRules) {
@@ -1235,7 +1235,7 @@ describe("sim-engine: built-in validations", () => {
 describe("sim-engine: no commissions (default options)", () => {
   it("commissionsEur is zero in all annual snapshots with default options", () => {
     const input = makeInput({ horizonDate: horizon(5) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       for (const snap of s.annualSnapshots) {
         expect(snap.commissionsEur).toBe(0);
@@ -1251,7 +1251,7 @@ describe("sim-engine: control 2036-2044", () => {
       cycles: [{ ...makeCycle(), monthlyAmountEur: 500 }],
       options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base", commissionRate: 0.004 },
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     const finals = result.scenarios.map(s => Math.round(s.summary.finalNetWealthEur));
     expect(new Set(finals).size).toBeGreaterThan(1);
 
@@ -1297,7 +1297,7 @@ describe("sim-engine: contributions", () => {
       })],
       options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base" },
     });
-    const result = runPerspectivesSimulation(input, { sources: [], candidateId: null, activatedAt: null, usdToEurRate: null, fxSource: null, fxRateAt: null });
+    const result = runLegacyPerspectivesSimulation(input, { sources: [], candidateId: null, activatedAt: null, usdToEurRate: null, fxSource: null, fxRateAt: null });
     const base = result.scenarios.find(s => s.scenario === "base")!;
     expect(base.summary.totalContributionsEur).toBeGreaterThan(0);
     expect(base.summary.finalEurcFreeEur).toBeCloseTo(base.summary.totalContributionsEur, 2);
@@ -1305,7 +1305,7 @@ describe("sim-engine: contributions", () => {
 
   it("totalContributionsEur in summary matches sum of annual contributions", () => {
     const input = makeInput({ horizonDate: horizon(5) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       const sumFromSnapshots = s.annualSnapshots.reduce((acc, snap) => acc + snap.contributionsEur, 0);
       expect(Math.abs(s.summary.totalContributionsEur - sumFromSnapshots)).toBeLessThan(0.01);
@@ -1314,7 +1314,7 @@ describe("sim-engine: contributions", () => {
 
   it("totalContributionsEur > 0 when cycle has monthly contributions", () => {
     const input = makeInput({ horizonDate: horizon(5) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       expect(s.summary.totalContributionsEur).toBeGreaterThan(0);
     }
@@ -1329,7 +1329,7 @@ describe("sim-engine: patrimony net formula", () => {
       eurcFiscalReserve: 1000,
       horizonDate: horizon(3),
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       const firstSnap = s.annualSnapshots[0];
       expect(firstSnap.openingWealthEur).toBeLessThan(1000);
@@ -1338,7 +1338,7 @@ describe("sim-engine: patrimony net formula", () => {
 
   it("continuity: closingWealth[year N] equals openingWealth[year N+1]", () => {
     const input = makeInput({ eurcFiscalReserve: 500, eurcFree: 100, horizonDate: horizon(5) });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       const snaps = s.annualSnapshots;
       for (let i = 0; i < snaps.length - 1; i++) {
@@ -1358,7 +1358,7 @@ describe("sim-engine: XIRR", () => {
       currentLots: [{ id: "l1", assetId: "BTC", date: NOW - 2 * YEAR_MS, remainingAmount: 0.05, unitAcquisitionPriceEur: 30000 }],
       horizonDate: horizon(5),
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     const optimista = result.scenarios.find(s => s.scenario === "optimista")!;
     if (optimista.summary.xirr !== null) {
       expect(optimista.summary.xirr).toBeGreaterThan(-1.0);
@@ -1448,7 +1448,7 @@ describe("motor: correcciones críticas — sin fallback 1€, sin ajuste monot�
       currentLots: [],
       horizonDate: horizon(5),
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       // Sin precio → sin posiciones con valor monstruoso
       const finalWealth = s.summary.finalNetWealthEur;
@@ -1465,7 +1465,7 @@ describe("motor: correcciones críticas — sin fallback 1€, sin ajuste monot�
       cycles: [makeCycle({ saleRules: [], rebuyTiers: [] })],
       options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base", strategyMode: "PASSIVE" },
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       expect(s.summary.totalSalesEur).toBe(0);
       expect(s.summary.totalTaxEur).toBe(0);
@@ -1504,7 +1504,7 @@ describe("motor: correcciones críticas — sin fallback 1€, sin ajuste monot�
       ],
       options: { ...DEFAULT_SIM_OPTIONS, policy: "plan_base" },
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     expect(result.scenarios.map((scenario) => scenario.scenario)).toEqual(["conservador", "moderado", "base", "favorable", "optimista"]);
     for (const s of result.scenarios) {
       const y2036 = s.annualSnapshots.find((snap) => snap.year === 2036)!;
@@ -1522,7 +1522,7 @@ describe("motor: correcciones críticas — sin fallback 1€, sin ajuste monot�
       cycles: [makeCycle({ rebuyTiers: [] })],
       options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy" },
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       const rebuyDescriptions = s.annualSnapshots
         .flatMap(snap => snap.events)
@@ -1539,7 +1539,7 @@ describe("motor: correcciones críticas — sin fallback 1€, sin ajuste monot�
       cycles: [makeCycle({ saleRules: [], rebuyTiers: [] })],
       options: { ...DEFAULT_SIM_OPTIONS, policy: "full_strategy" },
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       const residualEvents = s.annualSnapshots
         .flatMap(snap => snap.events)
@@ -1559,7 +1559,7 @@ describe("motor: correcciones críticas — sin fallback 1€, sin ajuste monot�
       horizonDate: horizon(10),
       cycles: [{ ...makeCycle(), monthlyAmountEur: 500 }],
     });
-    const result = runPerspectivesSimulation(input);
+    const result = runLegacyPerspectivesSimulation(input);
     for (const s of result.scenarios) {
       const w = s.summary.finalNetWealthEur;
       // Capital total: €4.500 + €60.000 = €64.500.

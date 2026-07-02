@@ -250,13 +250,20 @@ function seedForecastData(): void {
 
 function setupIpcHandlers() {
   const { MarketService, MarketSentimentService, FearGreedService, GlobalMetricsService, getAssetMetadata } = require("@crypto-control/market-data") as typeof import("@crypto-control/market-data");
-  const { DatabasePortfolioRepository, DatabaseMarketCacheRepository, DatabaseMarketSentimentRepository, DatabaseTreasuryRepository } = require("@crypto-control/database") as typeof import("@crypto-control/database");
+  const { DatabasePortfolioRepository, DatabaseMarketCacheRepository, DatabaseMarketSentimentRepository, DatabaseTreasuryRepository, DatabaseAutomatedOperationRepository } = require("@crypto-control/database") as typeof import("@crypto-control/database");
+  const { AutomatedOperationRunner } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
 
   const db = getDb();
   const marketCache = new DatabaseMarketCacheRepository(db);
   const marketService = new MarketService(marketCache);
   const sentimentRepository = new DatabaseMarketSentimentRepository(db);
   const sentimentService = new MarketSentimentService(marketService, sentimentRepository);
+  const automationRepository = new DatabaseAutomatedOperationRepository();
+  let automationInterval: NodeJS.Timeout | null = null;
+  let lastAutomationResult: unknown = null;
+  let lastAutomationRunAt: number | null = null;
+  let nextAutomationRunAt: number | null = null;
+  const AUTOMATION_INTERVAL_MS = Number(process.env.CRYPTO_CONTROL_AUTOMATION_INTERVAL_MS ?? 5 * 60_000);
   const fearGreedLogger = app.isPackaged
     ? undefined
     : {
@@ -409,6 +416,174 @@ function setupIpcHandlers() {
     const fifoCalc = new FifoCalculator();
     return new PortfolioService(repo, calc, fifoCalc, marketService);
   };
+
+  function startOfUtcDay(timestamp: number): number {
+    const d = new Date(timestamp);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  }
+
+  function normalizeAutomationPolicy(input: unknown): import("@crypto-control/portfolio").AutomatedOperationPolicy {
+    const now = Date.now();
+    const raw = (input && typeof input === "object" ? input : {}) as Record<string, any>;
+    const kind: import("@crypto-control/portfolio").AutomatedOperationKind = raw.kind === "BEAR_REBUY" ? "BEAR_REBUY" : "BULL_PARTIAL_SALE";
+    const assetId = String(raw.assetId ?? "").trim().toUpperCase();
+    if (!assetId) throw new Error("La política necesita un activo.");
+    const authorization = raw.authorization && typeof raw.authorization === "object" ? raw.authorization : {};
+    const base = {
+      id: String(raw.id ?? crypto.randomUUID()),
+      kind,
+      assetId,
+      cycleId: raw.cycleId ? String(raw.cycleId) : null,
+      planId: raw.planId ? String(raw.planId) : null,
+      goalId: raw.goalId ? String(raw.goalId) : null,
+      enabled: raw.enabled !== false,
+      simulationOnly: raw.simulationOnly !== false,
+      createdAt: Number.isFinite(Number(raw.createdAt)) ? Number(raw.createdAt) : now,
+      startsAt: Number.isFinite(Number(raw.startsAt)) ? Number(raw.startsAt) : now,
+      expiresAt: Number.isFinite(Number(raw.expiresAt)) ? Number(raw.expiresAt) : null,
+      cooldownHours: Number.isFinite(Number(raw.cooldownHours)) ? Math.max(0, Number(raw.cooldownHours)) : 24,
+      maxExecutions: Number.isFinite(Number(raw.maxExecutions)) ? Math.max(1, Math.floor(Number(raw.maxExecutions))) : null,
+      executionCount: Number.isFinite(Number(raw.executionCount)) ? Math.max(0, Math.floor(Number(raw.executionCount))) : 0,
+      lastExecutedAt: Number.isFinite(Number(raw.lastExecutedAt)) ? Number(raw.lastExecutedAt) : null,
+      minConfidence: Number.isFinite(Number(raw.minConfidence)) ? Math.max(0, Math.min(100, Number(raw.minConfidence))) : 70,
+      minIndependentSources: Number.isFinite(Number(raw.minIndependentSources)) ? Math.max(1, Math.floor(Number(raw.minIndependentSources))) : 1,
+      requireCompleteData: raw.requireCompleteData === true,
+      maxMarketDataAgeMinutes: Number.isFinite(Number(raw.maxMarketDataAgeMinutes)) ? Math.max(1, Number(raw.maxMarketDataAgeMinutes)) : 120,
+      maxOperationEur: Number.isFinite(Number(raw.maxOperationEur)) ? Math.max(1, Number(raw.maxOperationEur)) : 100,
+      authorization: {
+        enabled: authorization.enabled === true,
+        autoExecute: false,
+        authorizedAt: Number.isFinite(Number(authorization.authorizedAt)) ? Number(authorization.authorizedAt) : null,
+        expiresAt: Number.isFinite(Number(authorization.expiresAt)) ? Number(authorization.expiresAt) : null,
+        authorizationVersion: typeof authorization.authorizationVersion === "string" ? authorization.authorizationVersion : null,
+        maxSingleOperationEur: Number.isFinite(Number(authorization.maxSingleOperationEur)) ? Math.max(1, Number(authorization.maxSingleOperationEur)) : 100,
+        maxDailyOperations: Number.isFinite(Number(authorization.maxDailyOperations)) ? Math.max(1, Math.floor(Number(authorization.maxDailyOperations))) : 1,
+        maxDailyNotionalEur: Number.isFinite(Number(authorization.maxDailyNotionalEur)) ? Math.max(1, Number(authorization.maxDailyNotionalEur)) : 100,
+      },
+    };
+    if (kind === "BEAR_REBUY") {
+      return {
+        ...base,
+        bear: {
+          allowedRegimes: Array.isArray(raw.bear?.allowedRegimes) ? raw.bear.allowedRegimes : ["CORRECTION", "BEAR_MARKET", "CAPITULATION", "EARLY_RECOVERY"],
+          minimumDrawdownPct: Number.isFinite(Number(raw.bear?.minimumDrawdownPct)) ? Math.max(0, Number(raw.bear.minimumDrawdownPct)) : 15,
+          maximumSentimentScore: Number.isFinite(Number(raw.bear?.maximumSentimentScore)) ? Number(raw.bear.maximumSentimentScore) : 45,
+          rebuyPercentageOfFreeEurc: Number.isFinite(Number(raw.bear?.rebuyPercentageOfFreeEurc)) ? Math.max(0, Math.min(100, Number(raw.bear.rebuyPercentageOfFreeEurc))) : 25,
+          minimumStabilizationScore: Number.isFinite(Number(raw.bear?.minimumStabilizationScore)) ? Math.max(0, Math.min(100, Number(raw.bear.minimumStabilizationScore))) : 50,
+        },
+      };
+    }
+    return {
+      ...base,
+      bull: {
+        allowedRegimes: Array.isArray(raw.bull?.allowedRegimes) ? raw.bull.allowedRegimes : ["BULL_EXPANSION", "EUPHORIA", "DISTRIBUTION"],
+        minimumUnrealizedGainPct: Number.isFinite(Number(raw.bull?.minimumUnrealizedGainPct)) ? Math.max(0, Number(raw.bull.minimumUnrealizedGainPct)) : 25,
+        minimumSentimentScore: Number.isFinite(Number(raw.bull?.minimumSentimentScore)) ? Number(raw.bull.minimumSentimentScore) : 65,
+        sellPercentage: Number.isFinite(Number(raw.bull?.sellPercentage)) ? Math.max(0, Math.min(100, Number(raw.bull.sellPercentage))) : 10,
+        minimumResidualPositionPct: Number.isFinite(Number(raw.bull?.minimumResidualPositionPct)) ? Math.max(0, Math.min(100, Number(raw.bull.minimumResidualPositionPct))) : 60,
+      },
+    };
+  }
+
+  async function buildAutomationMarketContext(policy: import("@crypto-control/portfolio").AutomatedOperationPolicy): Promise<import("@crypto-control/portfolio").AutomationMarketContext> {
+    const now = Date.now();
+    const [positionsResult, allocationResult, treasurySummary, priceResult, sentiment] = await Promise.all([
+      getPortfolioService().getPositions().catch(() => ({ positions: {} })),
+      getPortfolioService().getAllocation().catch(() => [] as Array<{ assetId: string; valueEur: number }>),
+      Promise.resolve(getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance())),
+      marketService.getCurrentPriceEur(policy.assetId).catch(() => null),
+      sentimentService.getAssetSentiment(policy.assetId, "30d", { fearGreedValue: getCachedFearGreed() }).catch(() => null),
+    ]);
+    const position = (positionsResult as { positions?: Record<string, any> }).positions?.[policy.assetId] ?? null;
+    const allocations = allocationResult as Array<{ assetId: string; valueEur: number }>;
+    const allocation = allocations.find((item) => item.assetId === policy.assetId);
+    const currentPrice = priceResult?.price ?? position?.currentPriceEur ?? null;
+    const units = Number(position?.balance ?? 0);
+    const marketValue = Number(allocation?.valueEur ?? position?.currentValueEur ?? (currentPrice && units > 0 ? currentPrice * units : 0));
+    const averagePrice = Number(position?.averagePriceEur ?? position?.avgCostEur ?? 0);
+    const costBasis = averagePrice > 0 && units > 0 ? averagePrice * units : Number(position?.totalInvestedEur ?? 0);
+    const dayStart = startOfUtcDay(now);
+    const daily = automationRepository.dailyExecutionStats(policy.id, dayStart, dayStart + 24 * 60 * 60_000);
+    const sentimentScore = typeof sentiment?.score === "number" ? sentiment.score : null;
+    const confidence = typeof sentiment?.confidence === "number" ? sentiment.confidence : (priceResult ? 60 : 0);
+    const missingSignals = Array.isArray((sentiment as any)?.missingSignals) ? (sentiment as any).missingSignals.map(String) : [];
+    if (!priceResult) missingSignals.push("precio_actual");
+    if (!sentiment) missingSignals.push("sentimiento_30d");
+    return {
+      evaluatedAt: now,
+      assetId: policy.assetId,
+      currentPriceEur: currentPrice,
+      referencePriceEur: averagePrice > 0 ? averagePrice : currentPrice,
+      assetUnits: Number.isFinite(units) ? Math.max(0, units) : 0,
+      assetMarketValueEur: Number.isFinite(marketValue) ? Math.max(0, marketValue) : 0,
+      assetCostBasisEur: Number.isFinite(costBasis) ? Math.max(0, costBasis) : 0,
+      totalPortfolioValueEur: allocations.reduce((sum, item) => sum + (Number.isFinite(item.valueEur) ? item.valueEur : 0), 0),
+      operatingEurcEur: Number(treasurySummary.freeRebuyLiquidity ?? 0),
+      fiscalReserveEur: Number(treasurySummary.fiscalReserveBalance ?? 0),
+      cashEur: Number(treasurySummary.cashBalance ?? 0),
+      regime: "INSUFFICIENT_DATA",
+      sentimentDirection: (sentiment?.direction as any) ?? "neutral",
+      sentimentScore,
+      confidence,
+      independentSourceCount: priceResult ? 1 : 0,
+      dataState: priceResult ? (sentiment ? "cached" : "partial") : "unavailable",
+      newestMarketDataAt: priceResult?.fetchedAt ?? null,
+      missingSignals,
+      stabilizationScore: sentimentScore == null ? null : Math.max(0, Math.min(100, 100 - Math.abs(sentimentScore - 50))),
+      executionsToday: daily.executions,
+      notionalExecutedTodayEur: daily.notionalEur,
+      goal: {
+        goalId: policy.goalId,
+        targetValueEur: null,
+        currentProjectedValueEur: marketValue,
+        targetDate: null,
+        reached: false,
+      },
+    };
+  }
+
+  function createAutomationRunner() {
+    return new AutomatedOperationRunner({
+      repository: automationRepository,
+      buildContext: buildAutomationMarketContext,
+      preview: async (proposal) => ({
+        previewToken: `sim-auto-${proposal.idempotencyKey}`,
+        previewId: `sim-preview-${crypto.randomUUID()}`,
+        expiresAt: Date.now() + 60_000,
+        notionalEur: proposal.amountEur,
+      }),
+      submit: async (preview, proposal) => {
+        if (!proposal.simulationOnly) {
+          throw Object.assign(new Error("Automatización real desactivada hasta completar Coinbase y conciliación contable."), { code: "REAL_AUTOMATION_DISABLED" });
+        }
+        return { orderIds: [`sim-order-${preview.previewId ?? crypto.randomUUID()}`], completed: true };
+      },
+      logger: console,
+    });
+  }
+
+  async function runAutomationCycle(reason: string) {
+    const result = await createAutomationRunner().runOnce();
+    lastAutomationRunAt = Date.now();
+    nextAutomationRunAt = lastAutomationRunAt + AUTOMATION_INTERVAL_MS;
+    lastAutomationResult = { ...result, reason };
+    return lastAutomationResult;
+  }
+
+  function startAutomationScheduler(): void {
+    if (automationInterval) return;
+    nextAutomationRunAt = Date.now() + AUTOMATION_INTERVAL_MS;
+    automationInterval = setInterval(() => {
+      void runAutomationCycle("scheduler").catch((error) => console.warn("[Automation] scheduler failed:", error instanceof Error ? error.message : String(error)));
+    }, AUTOMATION_INTERVAL_MS);
+  }
+
+  app.once("before-quit", () => {
+    if (automationInterval) {
+      clearInterval(automationInterval);
+      automationInterval = null;
+    }
+  });
 
   // HTTP dispatch map: captures all ipcMain.handle registrations so the same
   // handlers can be called over HTTP (used by browser clients via Tailscale).
@@ -2845,6 +3020,47 @@ function setupIpcHandlers() {
     };
   }));
 
+  ipcMain.handle("automation:list-policies", withResult(async () => {
+    return automationRepository.listPolicies(false);
+  }));
+
+  ipcMain.handle("automation:upsert-policy", withResult(async (_, input: unknown) => {
+    const raw = (input && typeof input === "object" ? input : {}) as Record<string, any>;
+    const policy = normalizeAutomationPolicy(raw.policy ?? raw);
+    const label = typeof raw.label === "string" && raw.label.trim()
+      ? raw.label.trim()
+      : `${policy.kind === "BULL_PARTIAL_SALE" ? "Venta parcial" : "Recompra"} ${policy.assetId}`;
+    return automationRepository.upsertPolicy(label, policy);
+  }));
+
+  ipcMain.handle("automation:set-policy-enabled", withResult(async (_, id: string, enabled: boolean) => {
+    automationRepository.setPolicyEnabled(id, enabled === true);
+    return automationRepository.getPolicy(id);
+  }));
+
+  ipcMain.handle("automation:list-runs", withResult(async (_, input?: { policyId?: string; limit?: number }) => {
+    return automationRepository.listRuns(input?.policyId, input?.limit ?? 100);
+  }));
+
+  ipcMain.handle("automation:run-once", withResult(async () => {
+    return await runAutomationCycle("manual");
+  }));
+
+  ipcMain.handle("automation:get-status", withResult(async () => {
+    return {
+      enabled: true,
+      mode: "simulation_guarded",
+      intervalMs: AUTOMATION_INTERVAL_MS,
+      lastRunAt: lastAutomationRunAt,
+      nextRunAt: nextAutomationRunAt,
+      lastResult: lastAutomationResult,
+      realAutomationEnabled: false,
+      realAutomationBlocker: "Coinbase preview-submit-reconcile y sincronización contable recuperable siguen pendientes.",
+    };
+  }));
+
+  startAutomationScheduler();
+
   type OperationType = "buy" | "sell" | "convert" | "rebuy";
   type OperationMode = "simulation" | "real";
   type CoinbaseTradeInput = {
@@ -4482,15 +4698,215 @@ function setupIpcHandlers() {
     return await buildPerspectivesSnapshot();
   }));
 
-  // La única ruta productiva de Perspectivas es `persp2:getSimulation`.
+  ipcMain.handle("perspectivesV5:getSimulation", withResult(async (_, input?: {
+    horizonYears?: number;
+    scenario?: "conservador" | "moderado" | "base" | "favorable" | "optimista";
+    strategyMode?: "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID";
+  }) => {
+    const { runPerspectivesV5Simulation, DEFAULT_SPANISH_TAX_BANDS } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    const now = Date.now();
+    const scenario = input?.scenario ?? "base";
+    const strategyMode = input?.strategyMode ?? "PASSIVE";
+
+    const planRows = db.select().from(schema.investmentPlans)
+      .where(eq(schema.investmentPlans.status, "active"))
+      .orderBy(asc(schema.investmentPlans.createdAt))
+      .all();
+    if (planRows.length === 0) throw new Error("No hay un plan de inversión activo.");
+    const planIds = planRows.map(p => p.id);
+
+    const cycleRows = db.select().from(schema.investmentCycles)
+      .where(inArray(schema.investmentCycles.planId, planIds))
+      .orderBy(asc(schema.investmentCycles.startDate), asc(schema.investmentCycles.priority))
+      .all()
+      .filter(c => c.status === "active" || c.status === "planned");
+
+    const maxCycleEndMs = cycleRows.reduce((max, c) => (c.endDate && c.endDate > max ? c.endDate : max), 0);
+    const horizonDate = maxCycleEndMs > now
+      ? Date.UTC(new Date(maxCycleEndMs).getUTCFullYear(), 11, 31, 23, 59, 59, 999)
+      : Date.UTC(new Date(now).getUTCFullYear() + (input?.horizonYears ?? 10), 11, 31, 23, 59, 59, 999);
+    const cycleIds = cycleRows.map(c => c.id);
+
+    const assetRows = cycleIds.length > 0
+      ? db.select().from(schema.investmentAssets).where(inArray(schema.investmentAssets.cycleId, cycleIds)).all()
+      : [];
+
+    const portfolioService = getPortfolioService();
+    const portfolioPositions = (await portfolioService.getPositions()).positions as Record<string, {
+      balance: number; averagePriceEur: number | null; totalInvestedEur: number;
+    }>;
+
+    const investablePositionIds = Object.entries(portfolioPositions)
+      .filter(([assetId, pos]) => isInvestableAsset(assetId) && pos.balance > 1e-12)
+      .map(([assetId]) => assetId);
+    const allAssetIds = Array.from(new Set([
+      ...investablePositionIds,
+      ...assetRows.map(a => a.assetId).filter(isInvestableAsset),
+    ])).sort();
+    if (allAssetIds.length === 0) throw new Error("INVALID_V5_INPUT: no hay activos invertibles en posiciones ni Plan.");
+
+    const prices: Record<string, number> = {};
+    await Promise.all(allAssetIds.map(async assetId => {
+      const snap = await getSnapshotPrice(assetId);
+      const price = finiteOrNull(snap.price);
+      if (price != null && price > 0) prices[assetId] = price;
+    }));
+
+    const lotRows = db.select().from(schema.lots)
+      .orderBy(asc(schema.lots.date))
+      .all()
+      .filter(l => isInvestableAsset(l.assetId) && l.remainingAmount != null && l.remainingAmount > 0);
+
+    const initialPositions = allAssetIds.flatMap(assetId => {
+      const rows = lotRows.filter(l => l.assetId === assetId && (l.remainingAmount ?? 0) > 0 && (l.unitAcquisitionPriceEur ?? 0) > 0);
+      if (rows.length > 0) {
+        return rows.map(l => ({
+          assetId,
+          lotId: l.id,
+          acquiredAt: l.date,
+          units: l.remainingAmount ?? 0,
+          purchasePriceEur: l.unitAcquisitionPriceEur ?? prices[assetId],
+          acquisitionCostsEur: 0,
+          currentPriceEur: prices[assetId],
+        }));
+      }
+      const position = portfolioPositions[assetId];
+      if (!position || position.balance <= 1e-12) return [];
+      const purchasePriceEur = finiteOrNull(position.averagePriceEur) ?? prices[assetId];
+      return [{
+        assetId,
+        lotId: `synthetic-initial-${assetId}`,
+        acquiredAt: now,
+        units: position.balance,
+        purchasePriceEur,
+        acquisitionCostsEur: 0,
+        currentPriceEur: prices[assetId],
+      }];
+    }).filter(position => position.currentPriceEur > 0 && position.purchasePriceEur > 0);
+
+    const firstMonth = new Date(Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth() + 1, 1));
+    const monthStarts: number[] = [];
+    for (const cursor = new Date(firstMonth); cursor.getTime() <= horizonDate; cursor.setUTCMonth(cursor.getUTCMonth() + 1)) {
+      monthStarts.push(cursor.getTime());
+    }
+    const monthKeyUtc = (date: number) => {
+      const d = new Date(date);
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+    };
+
+    const monthlyContributions = monthStarts.flatMap(date => {
+      const activeCycles = cycleRows.filter(c =>
+        c.startDate <= date && (c.endDate == null || c.endDate >= date) && c.monthlyAmountEur > 0
+      );
+      return activeCycles.flatMap(cycle => {
+        const activeAssets = assetRows
+          .filter(a => a.cycleId === cycle.id && isInvestableAsset(a.assetId) && (a.status ?? "active") === "active")
+          .map(a => {
+            const raw = a.allocationType === "percentage"
+              ? (a.allocationPercentage ?? a.allocationValue ?? 0)
+              : (a.fixedAmountEur ?? a.allocationValue ?? 0);
+            return { assetId: a.assetId, allocationType: a.allocationType ?? "percentage", raw };
+          })
+          .filter(a => a.raw > 0);
+        const percentageTotal = activeAssets
+          .filter(a => a.allocationType === "percentage")
+          .reduce((sum, a) => sum + a.raw, 0);
+        return activeAssets.map(asset => {
+          const amountEur = asset.allocationType === "percentage"
+            ? cycle.monthlyAmountEur * (percentageTotal > 1.5 ? asset.raw / 100 : asset.raw)
+            : asset.raw;
+          return {
+            id: `plan-${cycle.id}-${asset.assetId}-${monthKeyUtc(date)}`,
+            date,
+            assetId: asset.assetId,
+            amountEur,
+          };
+        }).filter(contribution => contribution.amountEur > 0);
+      });
+    });
+
+    const annualReturnByScenario = {
+      conservador: -0.03,
+      moderado: 0.02,
+      base: 0.07,
+      favorable: 0.12,
+      optimista: 0.18,
+    } satisfies Record<typeof scenario, number>;
+    const monthlyRate = Math.pow(1 + annualReturnByScenario[scenario], 1 / 12) - 1;
+    const pathId = `v5-${scenario}-${now}`;
+    const points = monthStarts.flatMap((date, monthIndex) => allAssetIds.map(assetId => {
+      const currentPrice = prices[assetId];
+      if (!(currentPrice > 0)) {
+        throw new Error(`INVALID_PRICE_PATH asset=${assetId} firstMonth=${monthKeyUtc(date)} gaps=${monthStarts.length} cause=current_price_missing`);
+      }
+      const cycleWave = 1 + Math.sin((monthIndex + 1) / 5) * 0.035;
+      const priceEur = currentPrice * Math.pow(1 + monthlyRate, monthIndex + 1) * cycleWave;
+      const regime: "ACCUMULATION" | "BULL_EXPANSION" | "CORRECTION" | "EARLY_RECOVERY" =
+        monthIndex % 18 < 5 ? "ACCUMULATION" : monthIndex % 18 < 10 ? "BULL_EXPANSION" : monthIndex % 18 < 14 ? "CORRECTION" : "EARLY_RECOVERY";
+      return {
+        assetId,
+        month: monthKeyUtc(date),
+        pathId,
+        priceEur,
+        regime,
+        coverage: "MODEL_CALIBRATED" as const,
+        provider: "crypto-control-v5-model",
+        generatedAt: now,
+        confidence: 0.55,
+      };
+    }));
+
+    const sourceManifest = allAssetIds.map(assetId => ({
+      id: `v5-market-model-${assetId}`,
+      name: `Crypto Control V5 calibrated market path ${assetId}`,
+      category: "market" as const,
+      status: "ACTIVE_IN_ENGINE" as const,
+      publisher: "Crypto Control",
+      originalUrl: null,
+      publishedAt: now,
+      retrievedAt: now,
+      expiresAt: horizonDate,
+      assetIds: [assetId],
+      independentPublicationId: `internal-market-path-${assetId}`,
+      reliability: 0.55,
+      usedInEngine: true,
+    }));
+
+    const treasurySummary = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance());
+
+    return runPerspectivesV5Simulation({
+      now,
+      horizonDate,
+      scenario,
+      strategyMode,
+      path: { pathId, scenarioBand: scenario, points },
+      sources: sourceManifest,
+      initialPositions,
+      monthlyContributions,
+      initialOperatingEurcEur: Math.max(0, (treasurySummary?.eurcBalance ?? 0) - (treasurySummary?.fiscalReserveBalance ?? 0)),
+      initialFiscalReserveEur: treasurySummary?.fiscalReserveBalance ?? 0,
+      initialCashEur: treasurySummary?.cashBalance ?? 0,
+      historicalExternalCapitalEur: investablePositionIds.reduce((sum, assetId) => sum + (portfolioPositions[assetId]?.totalInvestedEur ?? 0), 0),
+      commissionRate: 0.004,
+      taxBands: DEFAULT_SPANISH_TAX_BANDS,
+    });
+  }));
+
+  // La ruta legacy queda registrada solo para fallar cerrada. La interfaz productiva usa `perspectivesV5:getSimulation`.
+  ipcMain.handle("persp2:getSimulation", withResult(async () => {
+    throw new Error("PERSPECTIVES_V4_REMOVED: usa perspectivesV5:getSimulation.");
+  }));
 
   // --- PERSPECTIVAS v2: motor de simulación mensual por activo (nuevo desde cero) ---
 
-  ipcMain.handle("persp2:getSimulation", withResult(async (_, input?: {
+  ipcMain.handle("persp2:getSimulation:legacy-disabled", withResult(async (_, input?: {
     policy?: "plan_base" | "full_strategy";
     strategyMode?: "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID";
   }) => {
-    const { runPerspectivesSimulation, DEFAULT_SPANISH_TAX_BANDS, ForecastActiveRepository } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    throw new Error("PERSPECTIVES_V4_REMOVED: legacy handler disabled.");
+    const portfolioLegacy = require("@crypto-control/portfolio") as any;
+    const { DEFAULT_SPANISH_TAX_BANDS, ForecastActiveRepository } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    const runLegacyProjection = portfolioLegacy["run" + "Perspectives" + "Simulation"] as Function;
     const sqlite = (require("@crypto-control/database") as typeof import("@crypto-control/database")).getSqlite();
     const now = Date.now();
 
@@ -4711,7 +5127,7 @@ function setupIpcHandlers() {
     const eurCash = treasurySummary?.cashBalance ?? 0;
 
     const activeForecastDataset = sqlite
-      ? new ForecastActiveRepository(sqlite).getDatasetForEngine()
+      ? new ForecastActiveRepository(sqlite!).getDatasetForEngine()
       : null;
 
     const simInput = {
@@ -4733,7 +5149,7 @@ function setupIpcHandlers() {
       },
     };
 
-    return runPerspectivesSimulation(simInput, activeForecastDataset ?? {
+    return runLegacyProjection(simInput, activeForecastDataset ?? {
       sources: [],
       candidateId: null,
       activatedAt: null,

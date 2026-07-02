@@ -259,6 +259,87 @@ export interface PerspectivesStrategyDecision {
   usesFutureInformation: false;
 }
 
+export type PerspectivesProgrammableOperationType = "PARTIAL_SALE" | "REBUY";
+
+export type PerspectivesTriggerOperator =
+  | "PRICE_GREATER_OR_EQUAL"
+  | "PRICE_LESS_OR_EQUAL";
+
+export type PerspectivesPercentageBasis =
+  | "AVAILABLE_ASSET_UNITS"
+  | "AVAILABLE_OPERATING_RESERVE";
+
+export type PerspectivesExecutionMode =
+  | "COINBASE_NATIVE_LIMIT"
+  | "APP_MONITORED_TRIGGER";
+
+export type PerspectivesProgrammedOperationState =
+  | "DRAFT"
+  | "AWAITING_CONFIRMATION"
+  | "PROGRAMMED"
+  | "WAITING_DEPENDENCY"
+  | "WAITING_FUNDS"
+  | "MONITORING"
+  | "BLOCKED_DATA"
+  | "BLOCKED_RISK"
+  | "BLOCKED_COINBASE"
+  | "PREVIEWING"
+  | "PREVIEW_READY"
+  | "SUBMITTING"
+  | "OPEN"
+  | "PARTIALLY_FILLED"
+  | "FILLED"
+  | "CANCEL_PENDING"
+  | "CANCELLED"
+  | "REJECTED"
+  | "FAILED_BEFORE_SUBMIT"
+  | "RECONCILIATION_REQUIRED"
+  | "EXPIRED";
+
+export type PerspectivesTradingMode =
+  | "SIMULATION"
+  | "REVIEW_ONLY"
+  | "LIVE_TRADING";
+
+export interface PerspectivesProgrammableOperation {
+  simulationOperationId: string;
+  simulationId: string;
+  scenarioId: PerspectivesScenario;
+  pathId: string;
+  assetId: string;
+  operationType: PerspectivesProgrammableOperationType;
+  targetPriceEur: number;
+  triggerOperator: PerspectivesTriggerOperator;
+  percentage: number;
+  percentageBasis: PerspectivesPercentageBasis;
+  expectedUnits: number | null;
+  expectedAmountEur: number | null;
+  cycleId: string | null;
+  planId: string | null;
+  goalId: string | null;
+  sourceSaleOperationId: string | null;
+  sourceReserveBucketId: string | null;
+  dependsOnOperationId: string | null;
+  reason: string;
+  confidence: number;
+  sources: string[];
+  simulatedAt: number;
+  expectedDateRange: {
+    from: number | null;
+    to: number | null;
+  };
+  expiresAt: number | null;
+}
+
+export interface PerspectivesFrozenQuantity {
+  frozenUnits: number | null;
+  frozenAmountEur: number | null;
+  frozenAt: number;
+  availableUnitsAtFreeze: number | null;
+  operatingReserveAtFreezeEur: number | null;
+  fiscalReserveExcludedEur: number;
+}
+
 export interface PerspectivesMonthlySnapshot {
   month: string;
   date: number;
@@ -328,5 +409,8 @@ export interface PerspectivesSimulationOutput {
   realizedGainEur: number;
   unrealizedGainEur: number;
   netProfitEur: number;
+  twrCumulative: number | null;
+  twrAnnualized: number | null;
+  xirr: number | null;
   validationErrors: string[];
 }

@@ -85,6 +85,14 @@ const cryptoControl = {
     createScheduledOperation: (input: unknown)          => ipcRenderer.invoke("coinbase:create-scheduled-operation", input),
     deleteScheduledOperation: (id: string)              => ipcRenderer.invoke("coinbase:delete-scheduled-operation", id),
   },
+  automation: {
+    listPolicies:   ()                   => ipcRenderer.invoke("automation:list-policies"),
+    upsertPolicy:   (input: unknown)     => ipcRenderer.invoke("automation:upsert-policy", input),
+    setPolicyEnabled: (id: string, enabled: boolean) => ipcRenderer.invoke("automation:set-policy-enabled", id, enabled),
+    listRuns:       (input?: unknown)    => ipcRenderer.invoke("automation:list-runs", input),
+    runOnce:        ()                   => ipcRenderer.invoke("automation:run-once"),
+    getStatus:      ()                   => ipcRenderer.invoke("automation:get-status"),
+  },
   sentiment: {
     getGlobal: (input: unknown) => ipcRenderer.invoke("sentiment:get-global", input),
     getAsset:  (input: unknown) => ipcRenderer.invoke("sentiment:get-asset", input),
@@ -168,6 +176,10 @@ const cryptoControl = {
     getForecastStatus:       ()                                    => ipcRenderer.invoke("perspectives:getForecastStatus"),
     addObservation:          (obs: unknown)                        => ipcRenderer.invoke("perspectives:addObservation", obs),
     runIngestion:            (opts?: unknown)                      => ipcRenderer.invoke("perspectives:runIngestion", opts),
+  },
+  perspectivesV5: {
+    getSimulation: (input?: { horizonYears?: number; scenario?: "conservador" | "moderado" | "base" | "favorable" | "optimista"; strategyMode?: "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID" }) =>
+      ipcRenderer.invoke("perspectivesV5:getSimulation", input),
   },
   persp2: {
     getSimulation: (input?: { horizonYears?: number; policy?: "plan_base" | "full_strategy"; strategyMode?: "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID" }) =>

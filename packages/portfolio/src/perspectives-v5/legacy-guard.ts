@@ -7,10 +7,3 @@ export const DEFAULT_SPANISH_TAX_BANDS: PerspectivesTaxBand[] = [
   { upToEur: 300_000, rate: 0.27 },
   { upToEur: null, rate: 0.28 },
 ];
-
-export function runPerspectivesSimulation(): never {
-  throw new Error(
-    "PERSPECTIVES_V4_REMOVED: usa runPerspectivesV5Simulation desde @crypto-control/portfolio/perspectives-v5. " +
-    "La ruta legacy persp2 debe migrarse antes de publicar un nuevo DMG.",
-  );
-}

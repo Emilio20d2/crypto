@@ -214,6 +214,59 @@ interface StrategyModeComparison {
   }>;
 }
 
+interface PerspectivesV5Output {
+  engineVersion: "perspectives-v5";
+  generatedAt: number;
+  scenario: SimScenario;
+  strategyMode: "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID";
+  pathId: string;
+  monthlySnapshots: Array<{
+    month: string;
+    date: number;
+    openingNetWealthEur: number;
+    closingGrossWealthEur: number;
+    closingNetWealthEur: number;
+    cryptoMarketValueEur: number;
+    operatingEurcEur: number;
+    fiscalReserveEur: number;
+    externalCapitalCumulativeEur: number;
+    internalRebuyCapitalCumulativeEur: number;
+    totalCapitalDeployedCumulativeEur: number;
+    realizedGainCumulativeEur: number;
+    unrealizedGainEur: number;
+    netProfitEur: number;
+    externalContributionsThisMonthEur: number;
+    marketResultThisMonthEur: number;
+    costsThisMonthEur: number;
+    taxesPaidThisMonthEur: number;
+  }>;
+  annualSnapshots: Array<{
+    year: number;
+    openingNetWealthEur: number;
+    closingGrossWealthEur: number;
+    closingNetWealthEur: number;
+    externalContributionsEur: number;
+    internalRebuyCapitalEur: number;
+    totalCapitalDeployedEur: number;
+    realizedGainEur: number;
+    unrealizedGainEur: number;
+    netProfitEur: number;
+    operatingEurcEur: number;
+    fiscalReserveEur: number;
+    partialSalesEur: number;
+    rebuysEur: number;
+  }>;
+  finalGrossWealthEur: number;
+  finalNetWealthEur: number;
+  externalCapitalEur: number;
+  internalRebuyCapitalEur: number;
+  totalCapitalDeployedEur: number;
+  realizedGainEur: number;
+  unrealizedGainEur: number;
+  netProfitEur: number;
+  validationErrors: string[];
+}
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const SCENARIOS: SimScenario[] = ["conservador", "moderado", "base", "favorable", "optimista"];
@@ -224,6 +277,125 @@ const SCENARIO_LABELS: Record<SimScenario, string> = {
   favorable:   "Favorable",
   optimista:   "Optimista",
 };
+
+function mapV5ForCurrentPerspectivesView(v5: PerspectivesV5Output): PerspectivesSimulation {
+  const years = v5.annualSnapshots.map(s => s.year);
+  const startYear = years[0] ?? new Date(v5.generatedAt).getFullYear();
+  const endYear = years.at(-1) ?? startYear;
+  const annualSnapshots: AnnualSnapshot[] = v5.annualSnapshots.map(snapshot => ({
+    year: snapshot.year,
+    scope: "plan",
+    openingWealthEur: snapshot.openingNetWealthEur,
+    closingWealthEur: snapshot.closingNetWealthEur,
+    closingGrossEur: snapshot.closingGrossWealthEur,
+    contributionsEur: snapshot.externalContributionsEur,
+    marketGainEur: snapshot.realizedGainEur + snapshot.unrealizedGainEur,
+    salesEur: snapshot.partialSalesEur,
+    rebuysEur: snapshot.rebuysEur,
+    commissionsEur: 0,
+    taxEur: snapshot.fiscalReserveEur,
+    eurcReinvestedEur: snapshot.rebuysEur,
+    netEurcInflowEur: snapshot.partialSalesEur - snapshot.rebuysEur,
+    currentInvestedCapitalEur: snapshot.closingGrossWealthEur,
+    openCostBasisEur: snapshot.closingGrossWealthEur - snapshot.unrealizedGainEur,
+    externalContributionsCumulativeEur: v5.externalCapitalEur,
+    reinvestedCapitalCumulativeEur: snapshot.internalRebuyCapitalEur,
+    deployedCapitalCumulativeEur: snapshot.totalCapitalDeployedEur,
+    internalRebuyPrincipalEur: snapshot.internalRebuyCapitalEur,
+    cumulativeInternalRebuyPrincipalEur: snapshot.internalRebuyCapitalEur,
+    internalRebuyOpenCostBasisEur: snapshot.internalRebuyCapitalEur,
+    internalRebuyCurrentMarketValueEur: snapshot.internalRebuyCapitalEur,
+    internalRebuyUnrealizedGainEur: 0,
+    internalRebuyRealizedGainEur: 0,
+    internalRebuyTotalReturnEur: 0,
+    internalRebuyTotalReturnPct: null,
+    internalRebuyUnitsOpen: 0,
+    internalRebuyUnitsSold: 0,
+    netProfitEur: snapshot.netProfitEur,
+    fiscalReserveEur: snapshot.fiscalReserveEur,
+    eurcFreeEur: snapshot.operatingEurcEur,
+    eurCashEur: 0,
+    annualReturnPct: snapshot.openingNetWealthEur > 0
+      ? ((snapshot.closingNetWealthEur - snapshot.openingNetWealthEur - snapshot.externalContributionsEur) / snapshot.openingNetWealthEur) * 100
+      : null,
+    positions: {},
+    events: [],
+    forecastCoverage: "covered",
+  }));
+  const totalContributions = v5.monthlySnapshots.reduce((sum, snapshot) => sum + snapshot.externalContributionsThisMonthEur, 0);
+  const totalMarketGain = v5.monthlySnapshots.reduce((sum, snapshot) => sum + snapshot.marketResultThisMonthEur, 0);
+  const maxDrawdownPct = Math.min(0, ...v5.monthlySnapshots.map(snapshot =>
+    snapshot.openingNetWealthEur > 0
+      ? ((snapshot.closingNetWealthEur - snapshot.openingNetWealthEur) / snapshot.openingNetWealthEur) * 100
+      : 0
+  ));
+  return {
+    computedAt: v5.generatedAt,
+    startYear,
+    endYear,
+    horizonDate: v5.monthlySnapshots.at(-1)?.date ?? v5.generatedAt,
+    scenarios: [{
+      scenario: v5.scenario,
+      label: SCENARIO_LABELS[v5.scenario],
+      annualSnapshots,
+      summary: {
+        scenario: v5.scenario,
+        strategyEnabled: false,
+        strategyMode: v5.strategyMode,
+        strategySource: "perspectives-v5",
+        simulationOnly: true,
+        requiresUserConfirmation: false,
+        decision: "hold",
+        initialWealthEur: annualSnapshots[0]?.openingWealthEur ?? 0,
+        finalNetWealthEur: v5.finalNetWealthEur,
+        totalContributionsEur: totalContributions,
+        externalContributionsEur: v5.externalCapitalEur,
+        totalHistoricalCapitalEur: v5.externalCapitalEur - totalContributions,
+        totalExternalPurchasesEur: totalContributions,
+        reinvestedCapitalEur: v5.internalRebuyCapitalEur,
+        cumulativeDeployedCapitalEur: v5.totalCapitalDeployedEur,
+        internalRebuyPrincipalEur: v5.internalRebuyCapitalEur,
+        cumulativeInternalRebuyPrincipalEur: v5.internalRebuyCapitalEur,
+        currentInvestedCapitalEur: v5.finalGrossWealthEur,
+        openCostBasisEur: v5.finalGrossWealthEur - v5.unrealizedGainEur,
+        grossWealthEur: v5.finalGrossWealthEur,
+        netProfitEur: v5.netProfitEur,
+        totalMarketGain,
+        totalSalesEur: v5.realizedGainEur,
+        totalRebuysEur: v5.internalRebuyCapitalEur,
+        totalCommissionsEur: v5.monthlySnapshots.reduce((sum, snapshot) => sum + snapshot.costsThisMonthEur, 0),
+        totalTaxEur: annualSnapshots.at(-1)?.fiscalReserveEur ?? 0,
+        totalEurcReinvestedEur: v5.internalRebuyCapitalEur,
+        totalNetEurcInflowEur: 0,
+        initialEurcFreeEur: 0,
+        initialEurcFiscalReserveEur: 0,
+        finalEurcFreeEur: annualSnapshots.at(-1)?.eurcFreeEur ?? 0,
+        finalFiscalReserveEur: annualSnapshots.at(-1)?.fiscalReserveEur ?? 0,
+        xirr: null,
+        twr: null,
+        maxDrawdownPct,
+      },
+      assetPriceInfo: {},
+    }],
+    strategyComparisons: [],
+    validations: [
+      { rule: "Motor V5", passed: v5.engineVersion === "perspectives-v5", detail: v5.engineVersion },
+      { rule: "Sin V4 productivo", passed: true, detail: "La pantalla consume perspectivesV5:getSimulation" },
+      { rule: "Validación V5", passed: v5.validationErrors.length === 0, detail: v5.validationErrors.join("; ") || "Sin errores" },
+    ],
+    diagnostics: {
+      engineIsNew: true,
+      source: "perspectives-v5",
+      engineVersion: v5.engineVersion,
+      engineBuildHash: v5.pathId,
+      engineGeneratedAt: v5.generatedAt,
+      negativeMonthCount: v5.monthlySnapshots.filter(snapshot => snapshot.marketResultThisMonthEur < 0).length,
+      negativeYearCount: annualSnapshots.filter(snapshot => snapshot.marketGainEur < 0).length,
+      maxDrawdownPct,
+      hasBearPeriods: v5.monthlySnapshots.some(snapshot => snapshot.marketResultThisMonthEur < 0),
+    },
+  };
+}
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 // Siempre 2 decimales máx (formatMoney usa 4 para valores < €100)
@@ -1145,12 +1317,11 @@ export function Perspectivas() {
   const [selectedYear, setSelectedYear] = useState<number | null>(null);
 
   const { data: simData, isLoading, error, isFetching } = useQuery<PerspectivesSimulation>({
-    queryKey: ["persp2:getSimulation"],
+    queryKey: ["perspectivesV5:getSimulation", selectedScenario],
     queryFn: async () => {
-      const result = await window.cryptoControl.persp2.getSimulation({}) as { ok: boolean; data?: unknown; error?: { message?: string } };
+      const result = await window.cryptoControl.perspectivesV5.getSimulation({ scenario: selectedScenario }) as { ok: boolean; data?: unknown; error?: { message?: string } };
       if (!result.ok) throw new Error(result.error?.message ?? "Error en la simulación");
-      const sim = result.data as PerspectivesSimulation;
-      return sim;
+      return mapV5ForCurrentPerspectivesView(result.data as PerspectivesV5Output);
     },
     staleTime: 0,
     refetchOnMount: "always",

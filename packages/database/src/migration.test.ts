@@ -50,6 +50,17 @@ describe("Database Migration & Integrity", () => {
     expect(tableNames).toContain("fiscal_reserve_movements");
     expect(tableNames).toContain("cycle_liquidity_allocations");
     expect(tableNames).toContain("profit_harvest_cycles");
+    expect(tableNames).toContain("market_series_cache_v2");
+    expect(tableNames).toContain("portfolio_transaction_cache_v2");
+    expect(tableNames).toContain("automated_operation_policies_v1");
+    expect(tableNames).toContain("automated_operation_runs_v1");
+    expect(tableNames).toContain("perspectives_v5_trading_settings");
+    expect(tableNames).toContain("perspectives_v5_programmed_operations");
+    expect(tableNames).toContain("perspectives_v5_operation_reservations");
+    expect(tableNames).toContain("perspectives_v5_coinbase_previews");
+    expect(tableNames).toContain("perspectives_v5_coinbase_orders");
+    expect(tableNames).toContain("perspectives_v5_coinbase_fills");
+    expect(tableNames).toContain("perspectives_v5_live_authorizations");
 
     // Verificamos las nuevas columnas en transaction_legs
     const columnsInfo = sqlite.pragma("table_info('transaction_legs')") as { name: string }[];
@@ -77,6 +88,46 @@ describe("Database Migration & Integrity", () => {
     expect(harvestColumns).toContain("requires_user_confirmation");
     expect(harvestColumns).toContain("eurc_fiscal_reserve_eur");
     expect(harvestColumns).toContain("eurc_operational_eur");
+
+    const automationRunColumns = (sqlite.pragma("table_info('automated_operation_runs_v1')") as { name: string }[]).map(c => c.name);
+    expect(automationRunColumns).toContain("idempotency_key");
+    expect(automationRunColumns).toContain("preview_token");
+    expect(automationRunColumns).toContain("preview_id");
+    expect(automationRunColumns).toContain("order_ids_json");
+    expect(automationRunColumns).toContain("error_code");
+    expect(automationRunColumns).toContain("error_message");
+
+    const programmedColumns = (sqlite.pragma("table_info('perspectives_v5_programmed_operations')") as { name: string }[]).map(c => c.name);
+    expect(programmedColumns).toContain("simulation_operation_id");
+    expect(programmedColumns).toContain("frozen_units");
+    expect(programmedColumns).toContain("frozen_amount_eur");
+    expect(programmedColumns).toContain("source_reserve_bucket_id");
+    expect(programmedColumns).toContain("depends_on_operation_id");
+    expect(programmedColumns).toContain("planned_json");
+    expect(programmedColumns).toContain("actual_json");
+
+    const reservationColumns = (sqlite.pragma("table_info('perspectives_v5_operation_reservations')") as { name: string }[]).map(c => c.name);
+    expect(reservationColumns).toContain("reserved_units");
+    expect(reservationColumns).toContain("reserved_amount_eur");
+    expect(reservationColumns).toContain("source_reserve_bucket_id");
+
+    const fillColumns = (sqlite.pragma("table_info('perspectives_v5_coinbase_fills')") as { name: string }[]).map(c => c.name);
+    expect(fillColumns).toContain("fill_id");
+    expect(fillColumns).toContain("client_order_id");
+    expect(fillColumns).toContain("net_value_eur");
+
+    const settings = sqlite.prepare("SELECT trading_mode FROM perspectives_v5_trading_settings WHERE id = 'global'").get() as { trading_mode: string } | undefined;
+    expect(settings?.trading_mode).toBe("REVIEW_ONLY");
+
+    const triggers = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='trigger'").all() as { name: string }[];
+    const triggerNames = triggers.map(t => t.name);
+    expect(triggerNames).toContain("invalidate_portfolio_tx_cache_v2_after_transaction_insert");
+    expect(triggerNames).toContain("invalidate_portfolio_tx_cache_v2_after_leg_update");
+    expect(triggerNames).toContain("invalidate_portfolio_tx_cache_v2_after_fee_delete");
+
+    expect(() => runMigrations(migrationsFolder)).not.toThrow();
+    const settingsAfterRepeat = sqlite.prepare("SELECT COUNT(*) AS c FROM perspectives_v5_trading_settings WHERE id = 'global'").get() as { c: number };
+    expect(settingsAfterRepeat.c).toBe(1);
     
     closeDatabase();
   });

@@ -438,6 +438,14 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
     createScheduledOperation: (input: any) => Promise<Result<any>>;
     deleteScheduledOperation: (id: string) => Promise<Result<null>>;
   };
+  automation?: {
+    listPolicies: () => Promise<Result<any[]>>;
+    upsertPolicy: (input: any) => Promise<Result<any>>;
+    setPolicyEnabled: (id: string, enabled: boolean) => Promise<Result<any>>;
+    listRuns: (input?: { policyId?: string; limit?: number }) => Promise<Result<any[]>>;
+    runOnce: () => Promise<Result<any>>;
+    getStatus: () => Promise<Result<any>>;
+  };
   sentiment: {
     getGlobal: (input: { timeframe: MarketSentimentTimeframe }) => Promise<Result<MarketSentiment>>;
     getAsset: (input: { assetId: string; timeframe: MarketSentimentTimeframe }) => Promise<Result<MarketSentiment>>;
@@ -518,6 +526,9 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
     deleteGoal: (id: string) => Promise<Result<null>>;
     getConsolidatedSnapshot: () => Promise<Result<PlanConsolidatedSnapshot>>;
     getAnalystForecasts: () => Promise<Result<unknown>>;
+  };
+  perspectivesV5: {
+    getSimulation: (input?: { horizonYears?: number; scenario?: "conservador" | "moderado" | "base" | "favorable" | "optimista"; strategyMode?: "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID" }) => Promise<Result<unknown>>;
   };
   persp2: {
     getSimulation: (input?: { horizonYears?: number; policy?: "plan_base" | "full_strategy"; strategyMode?: "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID" }) => Promise<Result<unknown>>;

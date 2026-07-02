@@ -6,7 +6,7 @@ import { validateStagingObservations, validateMonotonicity } from "./forecast-va
 import { ForecastCandidateRepository } from "./forecast-candidate-repository";
 import { ForecastActiveRepository, PERSPECTIVES_EXTERNAL_FORECASTS_ENABLED } from "./forecast-active-repository";
 import { KNOWN_FORECASTS } from "./known-forecasts";
-import { runPerspectivesSimulation } from "./sim-engine";
+import { runLegacyPerspectivesSimulation } from "./sim-engine";
 import type { SimInput, SimCycle } from "./types";
 import { DEFAULT_SPANISH_TAX_BANDS } from "./types";
 import type { StagingRow } from "./forecast-validation";
@@ -156,8 +156,8 @@ describe("arquitectura: feature flag", () => {
 describe("arquitectura: regresión — motor produce resultados estables", () => {
   it("dos ejecuciones con KNOWN_FORECASTS producen resultados idénticos", () => {
     const input = makeSimInput();
-    const r1 = runPerspectivesSimulation(input);
-    const r2 = runPerspectivesSimulation(input);
+    const r1 = runLegacyPerspectivesSimulation(input);
+    const r2 = runLegacyPerspectivesSimulation(input);
     for (const sc of ["conservador", "base", "optimista"] as const) {
       const w1 = r1.scenarios.find(s => s.scenario === sc)!.summary.finalNetWealthEur;
       const w2 = r2.scenarios.find(s => s.scenario === sc)!.summary.finalNetWealthEur;
@@ -166,7 +166,7 @@ describe("arquitectura: regresión — motor produce resultados estables", () =>
   });
 
   it("motor no produce NaN ni Infinity en ningún escenario", () => {
-    const result = runPerspectivesSimulation(makeSimInput());
+    const result = runLegacyPerspectivesSimulation(makeSimInput());
     for (const scenario of result.scenarios) {
       expect(Number.isFinite(scenario.summary.finalNetWealthEur)).toBe(true);
       expect(Number.isNaN(scenario.summary.finalNetWealthEur)).toBe(false);
@@ -175,7 +175,7 @@ describe("arquitectura: regresión — motor produce resultados estables", () =>
   });
 
   it("los cinco escenarios son finitos, trazables y no se corrigen manualmente", () => {
-    const result = runPerspectivesSimulation(makeSimInput());
+    const result = runLegacyPerspectivesSimulation(makeSimInput());
     expect(result.scenarios.map(s => s.scenario)).toEqual([
       "conservador",
       "moderado",
@@ -210,8 +210,8 @@ describe("arquitectura: aislamiento por activo", () => {
         saleRules: [], rebuyTiers: [], substitutions: [], revisions: [],
       }],
     });
-    const r1 = runPerspectivesSimulation(btcOnly);
-    const r2 = runPerspectivesSimulation(btcOnly);
+    const r1 = runLegacyPerspectivesSimulation(btcOnly);
+    const r2 = runLegacyPerspectivesSimulation(btcOnly);
     const w1 = r1.scenarios.find(s => s.scenario === "base")!.summary.finalNetWealthEur;
     const w2 = r2.scenarios.find(s => s.scenario === "base")!.summary.finalNetWealthEur;
     expect(w1).toBeCloseTo(w2, 2);
@@ -235,7 +235,7 @@ describe("arquitectura: aislamiento por activo", () => {
         saleRules: [], rebuyTiers: [], substitutions: [], revisions: [],
       }],
     });
-    const result = runPerspectivesSimulation(ethOnly);
+    const result = runLegacyPerspectivesSimulation(ethOnly);
     const baseW = result.scenarios.find(s => s.scenario === "base")!.summary.finalNetWealthEur;
     expect(baseW).toBeGreaterThan(0);
     const optW = result.scenarios.find(s => s.scenario === "optimista")!.summary.finalNetWealthEur;
@@ -258,7 +258,7 @@ describe("arquitectura: aislamiento por activo", () => {
         saleRules: [], rebuyTiers: [], substitutions: [], revisions: [],
       }],
     });
-    const result = runPerspectivesSimulation(suiOnly);
+    const result = runLegacyPerspectivesSimulation(suiOnly);
     for (const scenario of result.scenarios) {
       expect(Number.isFinite(scenario.summary.finalNetWealthEur)).toBe(true);
       const suiInfo = scenario.assetPriceInfo.SUI;

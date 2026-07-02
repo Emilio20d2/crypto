@@ -1,4 +1,4 @@
-import { MarketDataProvider, HistoricalPriceData, MarketCacheRepository } from "./interfaces";
+import { HistoricalPriceData, MarketCacheRepository } from "./interfaces";
 import { CoinbaseProvider } from "./coinbase";
 import { CoinGeckoProvider } from "./coingecko";
 import { CryptoCompareProvider } from "./cryptocompare";
@@ -66,6 +66,14 @@ function confidenceForProvider(provider: string): number {
   return 0.6;
 }
 
+function positiveFinite(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function nonNegativeFinite(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 export class MarketService {
   private coinbase = new CoinbaseProvider();
   private coingecko = new CoinGeckoProvider();
@@ -93,7 +101,7 @@ export class MarketService {
     const meta = getAssetMetadata(assetId);
     if (!meta) return { price: null, state: "unavailable", reason: "Asset metadata not found", provider: "none", fetchedAt: Date.now() };
 
-    let cached: { price: number, fetchedAt: number, provider: string } | null = null;
+    let cached: { price: number; fetchedAt: number; provider: string } | null = null;
     if (this.cache) {
       cached = await this.cache.getCurrentPrice(assetId, meta.quoteCurrency);
       if (cached && Date.now() - cached.fetchedAt < CURRENT_PRICE_CACHE_MS) {
@@ -108,10 +116,10 @@ export class MarketService {
         const price = await retryWithBackoff(() => this.coinbase.getCurrentPrice(meta, signal), 3, 1000, signal);
         if (this.cache) await this.cache.saveCurrentPrice(assetId, meta.quoteCurrency, price, "coinbase");
         return { price, state: "live", provider: "coinbase", fetchedAt: Date.now() };
-      } catch (e: unknown) {
-        if (e instanceof DOMException && e.name === "AbortError") throw e;
-        if (e instanceof Error && e.name === "AbortError") throw e;
-        lastError = e instanceof Error ? e.message : String(e);
+      } catch (error: unknown) {
+        if (error instanceof DOMException && error.name === "AbortError") throw error;
+        if (error instanceof Error && error.name === "AbortError") throw error;
+        lastError = error instanceof Error ? error.message : String(error);
         console.warn(`Coinbase getCurrentPrice failed for ${assetId}:`, lastError, "- Fallback to CoinGecko");
       }
     }
@@ -121,10 +129,10 @@ export class MarketService {
         const price = await retryWithBackoff(() => this.coingecko.getCurrentPrice(meta, signal), 3, 1000, signal);
         if (this.cache) await this.cache.saveCurrentPrice(assetId, meta.quoteCurrency, price, "coingecko");
         return { price, state: "live", provider: "coingecko", fetchedAt: Date.now() };
-      } catch (e: unknown) {
-        if (e instanceof DOMException && e.name === "AbortError") throw e;
-        if (e instanceof Error && e.name === "AbortError") throw e;
-        lastError = e instanceof Error ? e.message : String(e);
+      } catch (error: unknown) {
+        if (error instanceof DOMException && error.name === "AbortError") throw error;
+        if (error instanceof Error && error.name === "AbortError") throw error;
+        lastError = error instanceof Error ? error.message : String(error);
         console.warn(`CoinGecko getCurrentPrice failed for ${assetId}:`, lastError);
       }
     }
@@ -134,10 +142,10 @@ export class MarketService {
         const price = await retryWithBackoff(() => this.cryptocompare.getCurrentPrice(meta, signal), 2, 750, signal);
         if (this.cache) await this.cache.saveCurrentPrice(assetId, meta.quoteCurrency, price, "cryptocompare");
         return { price, state: "live", provider: "cryptocompare", fetchedAt: Date.now() };
-      } catch (e: unknown) {
-        if (e instanceof DOMException && e.name === "AbortError") throw e;
-        if (e instanceof Error && e.name === "AbortError") throw e;
-        lastError = e instanceof Error ? e.message : String(e);
+      } catch (error: unknown) {
+        if (error instanceof DOMException && error.name === "AbortError") throw error;
+        if (error instanceof Error && error.name === "AbortError") throw error;
+        lastError = error instanceof Error ? error.message : String(error);
         console.warn(`CryptoCompare getCurrentPrice failed for ${assetId}:`, lastError);
       }
     }
@@ -160,8 +168,7 @@ export class MarketService {
     return { price: null, state: "unavailable", reason: lastError || "All providers failed", provider: "none", fetchedAt: Date.now() };
   }
 
-  // Adapter for PortfolioService
-  async getCurrentPriceEur(assetId: string): Promise<{ price: number | null; state: "live" | "cached" | "unavailable"; provider: string; fetchedAt: number; reason?: string }> {
+  async getCurrentPriceEur(assetId: string): Promise<CurrentPriceResult> {
     return this.getCurrentPrice(assetId);
   }
 
@@ -195,7 +202,7 @@ export class MarketService {
           actualInterval: "auto",
           fetchedAt: Date.now(),
           isCached: true,
-          cacheStatus: "fresh"
+          cacheStatus: "fresh",
         };
       }
     }
@@ -207,11 +214,9 @@ export class MarketService {
         const data = this.prepareHistoricalData(
           await retryWithBackoff(() => this.coinbase.getHistoricalPrices(meta, period, signal), 3, 1000, signal),
           "coinbase",
-          period
+          period,
         );
-        if (!this.hasUsableHistoricalData(data)) {
-          throw new MarketInvalidResponseError(`Coinbase returned insufficient historical data for ${assetId}`);
-        }
+        this.assertUsableHistory(data, assetId, period, "Coinbase");
         if (this.cache) await this.cache.saveHistoricalPrices(assetId, meta.quoteCurrency, period, data, "coinbase");
         return {
           provider: "coinbase",
@@ -220,12 +225,12 @@ export class MarketService {
           actualInterval: "auto",
           fetchedAt: Date.now(),
           isCached: false,
-          cacheStatus: "miss"
+          cacheStatus: "miss",
         };
-      } catch (e: unknown) {
-        if (e instanceof DOMException && e.name === "AbortError") throw e;
-        if (e instanceof Error && e.name === "AbortError") throw e;
-        lastError = e instanceof Error ? e.message : String(e);
+      } catch (error: unknown) {
+        if (error instanceof DOMException && error.name === "AbortError") throw error;
+        if (error instanceof Error && error.name === "AbortError") throw error;
+        lastError = error instanceof Error ? error.message : String(error);
         console.warn(`Coinbase getHistoricalPrices failed for ${assetId}:`, lastError, "- Fallback to CoinGecko");
       }
     }
@@ -235,11 +240,9 @@ export class MarketService {
         const data = this.prepareHistoricalData(
           await retryWithBackoff(() => this.coingecko.getHistoricalPrices(meta, period, signal), 3, 1000, signal),
           "coingecko",
-          period
+          period,
         );
-        if (!this.hasUsableHistoricalData(data)) {
-          throw new MarketInvalidResponseError(`CoinGecko returned insufficient historical data for ${assetId}`);
-        }
+        this.assertUsableHistory(data, assetId, period, "CoinGecko");
         if (this.cache) await this.cache.saveHistoricalPrices(assetId, meta.quoteCurrency, period, data, "coingecko");
         return {
           provider: "coingecko",
@@ -248,12 +251,12 @@ export class MarketService {
           actualInterval: "auto",
           fetchedAt: Date.now(),
           isCached: false,
-          cacheStatus: "miss"
+          cacheStatus: "miss",
         };
-      } catch (e: unknown) {
-        if (e instanceof DOMException && e.name === "AbortError") throw e;
-        if (e instanceof Error && e.name === "AbortError") throw e;
-        lastError = e instanceof Error ? e.message : String(e);
+      } catch (error: unknown) {
+        if (error instanceof DOMException && error.name === "AbortError") throw error;
+        if (error instanceof Error && error.name === "AbortError") throw error;
+        lastError = error instanceof Error ? error.message : String(error);
         console.warn(`CoinGecko getHistoricalPrices failed for ${assetId}:`, lastError);
       }
     }
@@ -263,11 +266,9 @@ export class MarketService {
         const data = this.prepareHistoricalData(
           await retryWithBackoff(() => this.cryptocompare.getHistoricalPrices(meta, period, signal), 2, 750, signal),
           "cryptocompare",
-          period
+          period,
         );
-        if (!this.hasUsableHistoricalData(data)) {
-          throw new MarketInvalidResponseError(`CryptoCompare returned insufficient historical data for ${assetId}`);
-        }
+        this.assertUsableHistory(data, assetId, period, "CryptoCompare");
         if (this.cache) await this.cache.saveHistoricalPrices(assetId, meta.quoteCurrency, period, data, "cryptocompare");
         return {
           provider: "cryptocompare",
@@ -276,12 +277,12 @@ export class MarketService {
           actualInterval: "auto",
           fetchedAt: Date.now(),
           isCached: false,
-          cacheStatus: "miss"
+          cacheStatus: "miss",
         };
-      } catch (e: unknown) {
-        if (e instanceof DOMException && e.name === "AbortError") throw e;
-        if (e instanceof Error && e.name === "AbortError") throw e;
-        lastError = e instanceof Error ? e.message : String(e);
+      } catch (error: unknown) {
+        if (error instanceof DOMException && error.name === "AbortError") throw error;
+        if (error instanceof Error && error.name === "AbortError") throw error;
+        lastError = error instanceof Error ? error.message : String(error);
         console.warn(`CryptoCompare getHistoricalPrices failed for ${assetId}:`, lastError);
       }
     }
@@ -308,21 +309,35 @@ export class MarketService {
     throw new MarketNotFoundError(lastError || `No providers available for ${assetId} historical data`);
   }
 
+  private assertUsableHistory(data: HistoricalPriceData[], assetId: string, period: string, provider: string): void {
+    if (!this.hasUsableHistoricalData(data)) {
+      throw new MarketInvalidResponseError(`${provider} returned insufficient historical data for ${assetId}`);
+    }
+    if (!this.hasExpectedResolution(data, period)) {
+      throw new MarketInvalidResponseError(`${provider} returned incomplete historical coverage for ${assetId} ${period}`);
+    }
+  }
+
   private normalizeHistoricalData(data: HistoricalPriceData[], provider: string): HistoricalPriceData[] {
-    return data
-      .map((point) => ({
+    const byTimestamp = new Map<number, HistoricalPriceData>();
+    for (const point of data) {
+      if (!Number.isFinite(point.timestamp) || !Number.isFinite(point.price) || point.timestamp <= 0 || point.price <= 0) continue;
+      const normalized: HistoricalPriceData = {
         timestamp: point.timestamp,
         price: point.price,
+        open: positiveFinite(point.open),
+        high: positiveFinite(point.high),
+        low: positiveFinite(point.low),
+        volume: nonNegativeFinite(point.volume),
         source: point.source ?? provider,
-        confidence: point.confidence ?? confidenceForProvider(provider)
-      }))
-      .filter((point) =>
-        Number.isFinite(point.timestamp) &&
-        Number.isFinite(point.price) &&
-        point.timestamp > 0 &&
-        point.price > 0
-      )
-      .sort((a, b) => a.timestamp - b.timestamp);
+        confidence: point.confidence ?? confidenceForProvider(provider),
+      };
+      const current = byTimestamp.get(normalized.timestamp);
+      const currentQuality = current ? (current.volume != null ? 1 : 0) + (current.open != null ? 1 : 0) + (current.confidence ?? 0) : -1;
+      const nextQuality = (normalized.volume != null ? 1 : 0) + (normalized.open != null ? 1 : 0) + (normalized.confidence ?? 0);
+      if (!current || nextQuality >= currentQuality) byTimestamp.set(normalized.timestamp, normalized);
+    }
+    return [...byTimestamp.values()].sort((a, b) => a.timestamp - b.timestamp);
   }
 
   private prepareHistoricalData(data: HistoricalPriceData[], provider: string, period: string): HistoricalPriceData[] {
@@ -341,15 +356,19 @@ export class MarketService {
   private hasExpectedResolution(data: HistoricalPriceData[], period: string): boolean {
     const maxGap = maxExpectedGapMs(period);
     if (maxGap === null || data.length < 3) return true;
+    const sorted = [...data].sort((a, b) => a.timestamp - b.timestamp);
+    const latest = sorted.at(-1)?.timestamp ?? 0;
+    if (latest <= 0 || Date.now() - latest > maxGap * 2) return false;
+
     const gaps: number[] = [];
-    for (let i = 1; i < data.length; i += 1) {
-      const gap = data[i].timestamp - data[i - 1].timestamp;
+    for (let index = 1; index < sorted.length; index += 1) {
+      const gap = sorted[index].timestamp - sorted[index - 1].timestamp;
       if (Number.isFinite(gap) && gap > 0) gaps.push(gap);
     }
     if (gaps.length === 0) return false;
-    gaps.sort((a, b) => a - b);
-    const medianGap = gaps[Math.floor(gaps.length / 2)];
-    return medianGap <= maxGap;
+    const oversized = gaps.filter((gap) => gap > maxGap).length;
+    const allowedOversized = Math.max(1, Math.floor(gaps.length * 0.02));
+    return oversized <= allowedOversized;
   }
 
   private providerFromPoints(points: HistoricalPriceData[]): string {

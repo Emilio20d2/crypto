@@ -1,5 +1,194 @@
 Estado de Crypto Control
 
+Actualización 2026-07-02 — Issue #5 como fuente de verdad
+
+Se recibió instrucción nueva para ejecutar íntegramente la Issue #5 — Perspectivas V5: previsiones por activo, recuperación de capital, ventas y recompras — en orden canónico y fase por fase.
+
+Fuente de verdad leída:
+
+- Issue #5 completa: `https://github.com/Emilio20d2/crypto/issues/5`.
+- Comentario de Issue #5: `ORDEN CANÓNICO DE EJECUCIÓN — PERSPECTIVAS V5 Y OPERACIONES REALES`.
+- PR #4: `https://github.com/Emilio20d2/crypto/pull/4`.
+
+Plan local creado:
+
+- `docs/PERSPECTIVES_V5_EXECUTION_PLAN.md`.
+
+Estado de Fase 0:
+
+`VALIDATED` localmente tras crear rama de ejecución desde PR #4, verificar backup de base real y ejecutar `npm --prefix packages/portfolio run typecheck`.
+
+Evidencia de línea base:
+
+- Rama local actual: `codex/perspectives-v5-clean-rebuild`.
+- Commit local actual: `1203e93dfa32d121298878dfc2b6071dbce24083`.
+- PR #4: rama `codex/cache-market-automation`, head `3cf1354c4afd4de0410cc4233c46798078183436`, `draft=true`, checks visibles en GitHub `success`.
+- `origin/main`: `bc5a3ddb6a8f8f3ef003e8b7841763c63a04486e`.
+- `origin/codex/perspectives-v5-clean-rebuild`: `0627f414739449e904983152f368a95ee413e81d`.
+- App instalada: `/Applications/Crypto Control.app`, commit embebido `1203e93dfa32d121298878dfc2b6071dbce24083`, rama `codex/perspectives-v5-clean-rebuild`, build `2026-07-02T04:53:16.297Z`.
+- Copia de base real creada: `/private/tmp/crypto-control-backups/phase0-issue5-20260702-113642.sqlite`.
+- Integridad de la copia: `PRAGMA integrity_check = ok`.
+
+Bloqueos de Fase 0:
+
+- La rama local instalada no coincide con la rama del PR #4.
+- El commit instalado/local `1203e93` no está publicado en la rama remota equivalente, que está en `0627f414`.
+- La búsqueda requerida por Issue #5 para `runPerspectivesSimulation` no devuelve cero porque quedan artefactos compilados en `packages/portfolio/dist/perspectives/sim-engine.*`.
+- Existe `commissionRate: 0` en `packages/portfolio/src/perspectives/types.ts`; debe auditarse en Fase 1 antes de declarar V5 productivo completo.
+- No hay `gh` instalado; la lectura por API pública funciona, pero publicar comentarios en Issue #5 o hacer push requiere credenciales de escritura verificadas.
+- El DMG instalado anterior no puede considerarse final bajo la Issue #5 porque se generó antes de validar fases 0-14.
+
+Acción de alineación:
+
+- Creada rama local de ejecución `codex/issue5-execution` desde `origin/codex/cache-market-automation` (`3cf1354c4afd4de0410cc4233c46798078183436`) para continuar sobre la base canónica del PR #4.
+- Creada rama de respaldo `codex/perspectives-v5-clean-rebuild-backup-20260702` apuntando al estado instalado/local `1203e93dfa32d121298878dfc2b6071dbce24083`.
+- Intento de cherry-pick directo de la línea V5 instalada sobre PR #4 abortado por conflictos en `packages/portfolio/src/perspectives-v5/*`; se continuará por fases desde PR #4, validando y portando solo lo necesario según Issue #5.
+
+Inicio de Fase 1:
+
+- La búsqueda canónica confirma que la base del PR #4 todavía no tiene migración productiva V5 completa.
+- `apps/desktop/src/main.ts` invoca todavía `runPerspectivesSimulation`.
+- `packages/portfolio/src/perspectives/*` y `packages/portfolio/dist/perspectives/*` conservan símbolos V4.
+- Objetivo inmediato de Fase 1: conectar la ruta productiva de Electron a `runPerspectivesV5Simulation`, eliminar fallback productivo V4, añadir/ajustar test de guardia legacy y dejar el grep canónico sin resultados productivos.
+
+Resultado de Fase 1:
+
+`VALIDATED` localmente.
+
+Cambios de Fase 1:
+
+- Añadido canal productivo `perspectivesV5:getSimulation` en Electron.
+- Añadido `perspectivesV5.getSimulation` en preload, puente web y tipos IPC compartidos.
+- La página Perspectivas consume `window.cryptoControl.perspectivesV5.getSimulation`.
+- `persp2:getSimulation` queda registrado solo como ruta legacy cerrada que lanza `PERSPECTIVES_V4_REMOVED`.
+- `apps/desktop/src/main.ts` construye un input nativo V5 con posiciones, lotes, aportaciones mensuales, path de precios completo y fuentes de motor explícitas.
+- Eliminado el export productivo del símbolo V4 `runPerspectivesSimulation`.
+- Renombrado el símbolo interno antiguo a `runLegacyPerspectivesSimulation`.
+- Añadida prueba `packages/portfolio/src/perspectives-v5/productive-route.test.ts` para impedir reconectar V4 o `persp2` desde la pantalla.
+
+Pruebas de Fase 1:
+
+- `grep -R "runPerspectivesSimulation" apps packages --exclude="legacy-guard.ts" --exclude="*.test.ts"` — sin resultados.
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix apps/desktop run typecheck` — OK.
+- `npm --prefix apps/web run typecheck` — OK.
+- `npm --prefix packages/portfolio run test -- src/perspectives-v5/productive-route.test.ts src/perspectives-v5/perspectives-v5.test.ts` — OK, 2 archivos / 4 tests.
+- `npm --prefix packages/portfolio run build` — OK.
+
+Pendiente tras Fase 1:
+
+- Publicar commit y comentario en Issue #5 si las credenciales GitHub lo permiten.
+- Fase 2 debe estabilizar dominio y migraciones versionadas antes de seguir con fuentes/ledger/ventas/recompras.
+- La interfaz V5 definitiva queda reservada para Fase 8; en Fase 1 solo se cambió la fuente productiva a V5.
+
+Resultado de Fase 2:
+
+`VALIDATED` localmente.
+
+Cambios de Fase 2:
+
+- Ampliado dominio V5 con `PerspectivesProgrammableOperation`, estados productivos de operaciones, modo de trading, cantidades congeladas y modos de ejecución.
+- Añadida migración versionada `0020_perspectives_v5_operations.sql`.
+- La migración crea:
+  - `perspectives_v5_trading_settings`;
+  - `perspectives_v5_programmed_operations`;
+  - `perspectives_v5_operation_reservations`;
+  - `perspectives_v5_coinbase_previews`;
+  - `perspectives_v5_coinbase_orders`;
+  - `perspectives_v5_coinbase_fills`;
+  - `perspectives_v5_live_authorizations`.
+- El modo global se inicializa como `REVIEW_ONLY`.
+- Ampliada `migration.test.ts` para verificar tablas, columnas clave e idempotencia de migración repetida.
+
+Pruebas de Fase 2:
+
+- `npm --prefix packages/database run test -- src/migration.test.ts` — OK, 1 archivo / 2 tests.
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix packages/market-data run build` — OK.
+- `npm --prefix packages/database run typecheck` — OK.
+- `npm --prefix packages/database run build` — OK.
+
+Pendiente tras Fase 2:
+
+- Publicar commit y comentario en Issue #5.
+- Fase 3: motor de fuentes y mínimo de 15 fuentes independientes por activo antes de seguir al consenso anual.
+
+Resultado de Fase 3:
+
+`VALIDATED` localmente para el alcance de catálogo de fuentes.
+
+Cambios de Fase 3:
+
+- Creado `packages/portfolio/src/perspectives-v5/data/source-catalog.ts`.
+- Exportado el catálogo desde `packages/portfolio/src/perspectives-v5/index.ts`.
+- Añadido `packages/portfolio/src/perspectives-v5/source-catalog.test.ts`.
+- El catálogo registra fuentes para BTC, ETH y SUI con mínimo 15 fuentes independientes por activo.
+- Cada activo tiene mínimo 5 fuentes de corto plazo, 5 de medio plazo y 5 de largo plazo.
+- Las fuentes quedan en `REGISTERED_ONLY` y `usedInEngine=false`; no se han activado como observaciones ni como consenso.
+
+Pruebas de Fase 3:
+
+- `npm --prefix packages/portfolio run test -- src/perspectives-v5/source-catalog.test.ts` — OK, 1 archivo / 2 tests.
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix packages/portfolio run build` — OK.
+
+Pendiente tras Fase 3:
+
+- Publicar commit y comentario en Issue #5.
+- Fase 4 debe crear observaciones verificadas, consenso anual y caminos mensuales completos. El catálogo por sí solo no debe alimentar precios activos.
+
+Resultado de Fase 4:
+
+`VALIDATED` localmente con fixtures de observaciones verificadas.
+
+Cambios de Fase 4:
+
+- Creado `packages/portfolio/src/perspectives-v5/data/annual-consensus.ts`.
+- Exportado desde `packages/portfolio/src/perspectives-v5/index.ts`.
+- Añadido `packages/portfolio/src/perspectives-v5/annual-consensus.test.ts`.
+- El motor calcula cinco escenarios anuales mediante percentiles ponderados cuando existen al menos tres fuentes independientes.
+- El motor interpola años con anclas válidas y modela años posteriores con crecimiento acotado y confianza decreciente.
+- El constructor mensual genera matriz completa `assetId x month x scenario x pathId`.
+- La validación bloquea activos sin observaciones verificadas suficientes.
+- Los caminos mensuales no usan carry-forward plano.
+
+Pruebas de Fase 4:
+
+- `npm --prefix packages/portfolio run test -- src/perspectives-v5/annual-consensus.test.ts` — OK, 1 archivo / 3 tests.
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix packages/portfolio run build` — OK.
+
+Pendiente tras Fase 4:
+
+- Publicar commit y comentario en Issue #5.
+- Fase 5: ledger, continuidad mensual, patrimonio, TWR y XIRR. Debe demostrar precio constante, capital inicial, compras en unidades y conciliación.
+
+Resultado de Fase 5:
+
+`VALIDATED` localmente.
+
+Cambios de Fase 5:
+
+- El cierre mensual de `runPerspectivesV5Simulation` usa ahora `PerspectivesPortfolioLedger.closeMonth`.
+- Las aportaciones mensuales compran unidades reales del activo con el precio mensual del path.
+- El resultado de mercado mensual se calcula separando aportaciones, costes y variación patrimonial.
+- La continuidad `opening[n+1] = closing[n]` queda validada por el ledger.
+- Añadidas métricas `twrCumulative`, `twrAnnualized` y `xirr` al DTO V5.
+- Añadido módulo `packages/portfolio/src/perspectives-v5/metrics/returns.ts`.
+- Añadidas pruebas productivas de precio constante, creciente y decreciente que ejecutan `runPerspectivesV5Simulation` y leen lotes reales creados por el motor.
+
+Pruebas de Fase 5:
+
+- `npm --prefix packages/portfolio run test -- src/perspectives-v5/ledger-metrics.test.ts src/perspectives-v5/annual-consensus.test.ts src/perspectives-v5/productive-route.test.ts src/perspectives-v5/perspectives-v5.test.ts` — OK, 4 archivos / 10 tests.
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix packages/portfolio run build` — OK.
+- `grep -R "runPerspectivesSimulation" apps packages --exclude="legacy-guard.ts" --exclude="*.test.ts"` — sin resultados.
+
+Pendiente tras Fase 5:
+
+- Publicar commit y comentario en Issue #5.
+- Fase 6: ventas parciales y recuperación de capital por activo. No se han implementado recompras ni Coinbase en esta fase.
+
 Estado general
 
 Integración en curso sobre la versión instalada correcta. Auditoría inicial completada y primeras correcciones arquitectónicas aplicadas en tiempo real, gráficas y Perspectivas.

@@ -2,17 +2,16 @@ import { MarketDataProvider, HistoricalPriceData } from "./interfaces";
 import { MarketTimeoutError, MarketRateLimitError, MarketInvalidResponseError, MarketNotFoundError } from "./errors";
 import { AssetMetadata } from "./mapping";
 import { parseRetryAfter } from "./utils";
-
 import { z } from "zod";
 
 const COINBASE_API_URL = "https://api.exchange.coinbase.com";
 
 const CoinbaseTickerSchema = z.object({
-  price: z.string()
+  price: z.string(),
 }).passthrough();
 
 const CoinbaseCandlesSchema = z.array(
-  z.tuple([z.number(), z.number(), z.number(), z.number(), z.number(), z.number()])
+  z.tuple([z.number(), z.number(), z.number(), z.number(), z.number(), z.number()]),
 );
 
 export class CoinbaseProvider implements MarketDataProvider {
@@ -20,115 +19,101 @@ export class CoinbaseProvider implements MarketDataProvider {
 
   private async fetchWithTimeout(url: string, signal?: AbortSignal) {
     const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 5000);
-    
-    // If external signal aborts, also abort our controller
-    if (signal) {
-      signal.addEventListener("abort", () => controller.abort());
-    }
+    let timedOut = false;
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 5_000);
+    const abortFromCaller = () => controller.abort();
+
+    if (signal?.aborted) controller.abort();
+    else signal?.addEventListener("abort", abortFromCaller, { once: true });
 
     try {
       const response = await fetch(url, { signal: controller.signal });
-      clearTimeout(id);
-
       if (response.status === 404) throw new MarketNotFoundError(`Asset not found at ${url}`);
       if (response.status === 429) {
         const retryAfter = parseRetryAfter(response.headers.get("Retry-After"));
-        throw new MarketRateLimitError(retryAfter, `Rate limit exceeded for Coinbase`);
+        throw new MarketRateLimitError(retryAfter, "Rate limit exceeded for Coinbase");
       }
       if (!response.ok) throw new MarketInvalidResponseError(`Coinbase API error: ${response.status} ${response.statusText}`);
-
       return await response.json();
     } catch (error: unknown) {
-      clearTimeout(id);
-      if (error instanceof DOMException && error.name === "AbortError") {
-        throw error;
-      }
-      if (error instanceof Error && (error.name === "AbortError" || error.message?.includes("timeout"))) {
-        throw new MarketTimeoutError("Coinbase API timed out");
-      }
+      const aborted = error instanceof DOMException && error.name === "AbortError"
+        || error instanceof Error && error.name === "AbortError";
+      if (aborted && signal?.aborted) throw error;
+      if (aborted && timedOut) throw new MarketTimeoutError("Coinbase API timed out");
       throw error;
+    } finally {
+      clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", abortFromCaller);
     }
   }
 
   async getCurrentPrice(meta: AssetMetadata, signal?: AbortSignal): Promise<number> {
     const rawData = await this.fetchWithTimeout(`${COINBASE_API_URL}/products/${meta.coinbaseProductId}/ticker`, signal);
-    
     const parsed = CoinbaseTickerSchema.safeParse(rawData);
-    if (parsed.success && parsed.data.price) {
-      const price = parseFloat(parsed.data.price);
-      if (!isNaN(price)) return price;
+    if (parsed.success) {
+      const price = Number(parsed.data.price);
+      if (Number.isFinite(price) && price > 0) return price;
     }
     throw new MarketInvalidResponseError("Invalid current price data from Coinbase");
   }
 
   async getHistoricalPrices(meta: AssetMetadata, period: string, signal?: AbortSignal): Promise<HistoricalPriceData[]> {
-    let granularity = 86400; // default 1 day
+    let granularity = 86_400;
     const end = new Date();
     const start = new Date(end.getTime());
 
     if (period === "1h") {
-      granularity = 60; // 1 minute
+      granularity = 60;
       start.setHours(start.getHours() - 1);
     } else if (period === "24h") {
-      granularity = 900; // 15 minutes
+      granularity = 900;
       start.setDate(start.getDate() - 1);
     } else if (period === "7d") {
-      granularity = 3600; // 1 hour
+      granularity = 3_600;
       start.setDate(start.getDate() - 7);
     } else if (period === "30d") {
-      granularity = 21600; // 6 hours
+      granularity = 21_600;
       start.setDate(start.getDate() - 30);
     } else if (period === "1y") {
-      granularity = 86400;
+      granularity = 86_400;
       start.setFullYear(start.getFullYear() - 1);
     } else {
-      // all time
-      granularity = 86400;
-      start.setFullYear(start.getFullYear() - 10); // max 10 years for simplicity
+      granularity = 86_400;
+      start.setFullYear(start.getFullYear() - 10);
     }
 
     const allCandles: HistoricalPriceData[] = [];
     let currentEnd = new Date(end.getTime());
-    let currentStart = new Date(currentEnd.getTime());
-
-    // Coinbase limit is 300 candles per request
     const maxCandlesPerRequest = 300;
-    const chunkMs = maxCandlesPerRequest * granularity * 1000;
+    const chunkMs = (maxCandlesPerRequest - 1) * granularity * 1_000;
 
     while (currentEnd > start) {
-      currentStart = new Date(Math.max(currentEnd.getTime() - chunkMs, start.getTime()));
-
-      const startIso = currentStart.toISOString();
-      const endIso = currentEnd.toISOString();
-      const url = `${COINBASE_API_URL}/products/${meta.coinbaseProductId}/candles?granularity=${granularity}&start=${startIso}&end=${endIso}`;
-
+      const currentStart = new Date(Math.max(currentEnd.getTime() - chunkMs, start.getTime()));
+      const url = `${COINBASE_API_URL}/products/${meta.coinbaseProductId}/candles?granularity=${granularity}&start=${currentStart.toISOString()}&end=${currentEnd.toISOString()}`;
       const rawData = await this.fetchWithTimeout(url, signal);
-
       const parsed = CoinbaseCandlesSchema.safeParse(rawData);
-      if (!parsed.success) {
-        throw new MarketInvalidResponseError("Invalid historical data format from Coinbase");
-      }
+      if (!parsed.success) throw new MarketInvalidResponseError("Invalid historical data format from Coinbase");
 
-      const chunk = parsed.data.map((candle: [number, number, number, number, number, number]) => ({
-        timestamp: candle[0] * 1000,
-        price: candle[4], // close price
+      allCandles.push(...parsed.data.map((candle) => ({
+        timestamp: candle[0] * 1_000,
+        low: candle[1],
+        high: candle[2],
+        open: candle[3],
+        price: candle[4],
+        volume: candle[5],
         source: this.name,
-        confidence: 1
-      }));
+        confidence: 1,
+      })));
 
-      allCandles.push(...chunk);
-
-      // If we got less than requested, we might have hit the earliest available data
-      if (parsed.data.length === 0) {
-        break;
-      }
-
-      // Move the end to the start of this chunk, minus one millisecond
-      currentEnd = new Date(currentStart.getTime() - 1);
+      if (parsed.data.length === 0 || currentStart.getTime() <= start.getTime()) break;
+      currentEnd = currentStart;
     }
 
-    // Sort ascending by timestamp
-    return allCandles.sort((a, b) => a.timestamp - b.timestamp);
+    const byTimestamp = new Map<number, HistoricalPriceData>();
+    for (const point of allCandles) byTimestamp.set(point.timestamp, point);
+    return [...byTimestamp.values()].sort((a, b) => a.timestamp - b.timestamp);
   }
 }

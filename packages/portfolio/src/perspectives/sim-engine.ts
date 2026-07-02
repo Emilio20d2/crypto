@@ -2174,7 +2174,7 @@ declare module "./types" {
 
 // ─── Punto de entrada principal ───────────────────────────────────────────────
 
-export function runPerspectivesSimulation(
+export function runLegacyPerspectivesSimulation(
   input: SimInput,
   forecastDataset: ForecastDataset = EMPTY_FORECAST_DATASET,
 ): PerspectivesSimulation {

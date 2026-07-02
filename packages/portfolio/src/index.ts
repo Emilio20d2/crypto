@@ -16,25 +16,26 @@ export * from "./partial-sale-engine";
 export * from "./rebuy-engine";
 export * from "./plan-monitoring";
 export * from "./smart-buy-engine";
+export * from "./automated-operations";
+export * from "./automated-operation-runner";
 export * from "./fiscal-config";
 export * from "./plan-snapshot";
-export * from "./profit-harvest-cycle";
-
-export * from "./perspectives-v5";
-export { DEFAULT_SPANISH_TAX_BANDS, runPerspectivesSimulation } from "./perspectives-v5/legacy-guard";
-
-export type {
-  ForecastSource, ForecastDirection, ForecastSourceType,
-  ValidationReport, ValidationError, RegressionReport, StagingRow,
-  CandidateVersion, CandidateRow, SqliteDb, ActiveVersion,
-  ExternalPriceResult, ObservationRow, SourceRow, IngestionLogRow,
-  AssetYearCoverage, IngestableSource, IngestResult, SeedSource, SeedObservation,
-} from "./perspectives";
 export {
-  buildExternalPriceMap,
-  observationToForecastSources, normalizeForecastSourceType, computeCoverageMatrix, computeFinalWeight,
-  MIN_SOURCES_FOR_QUANTILE, ingestSource, ingestRssSource, ingestHttpSource, verifyUrl,
-  SEED_FORECAST_SOURCES, SEED_FORECAST_OBSERVATIONS,
-  validateStagingObservations, validateMonotonicity, runRegressionTest,
-  ForecastCandidateRepository, ForecastActiveRepository, PERSPECTIVES_EXTERNAL_FORECASTS_ENABLED,
-} from "./perspectives";
+  addSimulatedRebuy,
+  buildProfitHarvestCycle,
+  calculateBreakEvenRebuyPrice,
+  calculateMinimumDropPct,
+  strategySourceForHarvest,
+} from "./profit-harvest-cycle";
+export type {
+  BuildProfitHarvestCycleInput,
+  ProfitHarvestCycle,
+  ProfitHarvestRebuy,
+  ProfitHarvestSignalSnapshot,
+  ProfitHarvestStrategyMode,
+  ProfitHarvestCycleStatus as LegacyProfitHarvestCycleStatus,
+} from "./profit-harvest-cycle";
+export * from "./perspectives-v5";
+export { DEFAULT_SPANISH_TAX_BANDS } from "./perspectives-v5/legacy-guard";
+export type { ForecastSource, ForecastDirection, ForecastSourceType, ValidationReport, ValidationError, RegressionReport, StagingRow, CandidateVersion, CandidateRow, SqliteDb, ActiveVersion, ExternalPriceResult, ObservationRow, SourceRow, IngestionLogRow, AssetYearCoverage, IngestableSource, IngestResult, SeedSource, SeedObservation } from "./perspectives";
+export { buildExternalPriceMap, observationToForecastSources, normalizeForecastSourceType, computeCoverageMatrix, computeFinalWeight, MIN_SOURCES_FOR_QUANTILE, ingestSource, ingestRssSource, ingestHttpSource, verifyUrl, SEED_FORECAST_SOURCES, SEED_FORECAST_OBSERVATIONS, validateStagingObservations, validateMonotonicity, runRegressionTest, ForecastCandidateRepository, ForecastActiveRepository, PERSPECTIVES_EXTERNAL_FORECASTS_ENABLED } from "./perspectives";

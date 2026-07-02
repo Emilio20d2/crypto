@@ -1,5 +1,5 @@
 export * from "./types";
-export { runPerspectivesSimulation } from "./sim-engine";
+export { runLegacyPerspectivesSimulation } from "./sim-engine";
 export { verifyPerspectivesAccounting, type AccountingCheck, type AccountingVerificationReport } from "./accounting-verifier";
 export * from "./forecast-sources";
 export { KNOWN_FORECASTS, FORECAST_ASSET_IDS } from "./known-forecasts";
