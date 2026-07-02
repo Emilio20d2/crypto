@@ -50,6 +50,7 @@ export interface RebuyCommand {
   eurcBucketId: string;
   fraction: number;
   priceEur: number;
+  maximumPriceEur: number;
   description: string;
 }
 
@@ -358,6 +359,10 @@ export class PerspectivesPortfolioLedger {
 
   executeRebuy(command: RebuyCommand): PerspectivesLot {
     if (!(command.priceEur > 0)) throw new Error(`INVALID_REBUY_PRICE:${command.eurcBucketId}`);
+    if (!(command.maximumPriceEur > 0)) throw new Error(`INVALID_REBUY_MAX_PRICE:${command.eurcBucketId}`);
+    if (command.priceEur >= command.maximumPriceEur) {
+      throw new Error(`REBUY_PRICE_NOT_BELOW_THRESHOLD:${command.eurcBucketId}:${command.priceEur}:${command.maximumPriceEur}`);
+    }
     if (!(command.fraction > 0 && command.fraction <= 1)) throw new Error(`INVALID_REBUY_FRACTION:${command.fraction}`);
 
     const bucket = this.eurcBuckets.find((candidate) => candidate.id === command.eurcBucketId);

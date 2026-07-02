@@ -220,6 +220,37 @@ Pendiente tras Fase 6:
 - Publicar commit y comentario en Issue #5.
 - Fase 7: buckets separados y recompras por debajo del coste medio. No se debe iniciar Coinbase antes de completar Fase 9.
 
+Resultado de Fase 7:
+
+`VALIDATED` localmente.
+
+Cambios de Fase 7:
+
+- La simulación V5 evalúa recompras después de existir una venta parcial recuperada del mismo activo.
+- Una recompra solo puede usar un bucket EURC operativo del mismo activo y no utiliza la reserva fiscal.
+- La recompra se bloquea si el precio actual no está por debajo del coste medio abierto y del precio de venta de origen.
+- `PerspectivesPortfolioLedger.executeRebuy` valida `maximumPriceEur` antes de crear un lote.
+- Cada recompra crea un lote `INTERNAL_REBUY` vinculado al bucket y al ciclo.
+- El capital externo permanece sin cambios y `internalRebuyCapitalEur` aumenta con el principal recomprado.
+
+Pruebas de Fase 7:
+
+- `npm --prefix packages/portfolio run test -- src/perspectives-v5/rebuys.test.ts src/perspectives-v5/partial-sales.test.ts src/perspectives-v5/ledger-metrics.test.ts src/perspectives-v5/annual-consensus.test.ts src/perspectives-v5/productive-route.test.ts src/perspectives-v5/perspectives-v5.test.ts` — OK, 6 archivos / 14 tests.
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix packages/portfolio run build` — OK.
+- `grep -R "runPerspectivesSimulation" apps packages --exclude="legacy-guard.ts" --exclude="*.test.ts"` — sin resultados.
+
+Evidencia de Fase 7:
+
+- Recompra bloqueada: tras una venta parcial, si BTC cotiza a 12.000 € y el coste medio abierto es 10.000 €, no se crea `INTERNAL_REBUY`; el bucket conserva 6.500 € disponibles.
+- Recompra productiva: venta previa de 0,25 BTC genera 6.500 € operativos y 1.000 € de reserva fiscal; con BTC a 8.000 €, el motor usa 3.250 € del bucket, crea 0,40625 BTC como lote `INTERNAL_REBUY`, mantiene el capital externo en 10.000 € y aumenta `internalRebuyCapitalEur` a 3.250 €.
+- Valor posterior del lote recomprado a 15.000 €: 6.093,75 €, plusvalía no realizada atribuible 2.843,75 €.
+
+Pendiente tras Fase 7:
+
+- Publicar commit y comentario en Issue #5.
+- Fase 8: salida V5 programable e interfaz de Perspectivas. Todavía no se debe llamar a Coinbase ni crear órdenes.
+
 Estado general
 
 Integración en curso sobre la versión instalada correcta. Auditoría inicial completada y primeras correcciones arquitectónicas aplicadas en tiempo real, gráficas y Perspectivas.

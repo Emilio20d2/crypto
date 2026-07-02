@@ -11,6 +11,8 @@ import { calculateTwr, calculateXirr } from "./metrics/returns";
 import { buildAnnualSnapshots } from "./reports/annual-report";
 import {
   evaluatePartialSaleAlternatives,
+  evaluateRebuyAlternatives,
+  rebuyFractionFromAction,
   saleFractionFromAction,
   type MonthlyMarketDecisionSignal,
 } from "./strategy/decision-engine";
@@ -77,6 +79,17 @@ function costsForMonth(ledger: PerspectivesPortfolioLedger, month: string): numb
     .reduce((sum, entry) => sum + entry.costsEur, 0);
 }
 
+function openAverageCostForAsset(ledger: PerspectivesPortfolioLedger, assetId: string): number | null {
+  const lots = ledger.openLots.filter((lot) => lot.assetId === assetId);
+  const units = lots.reduce((sum, lot) => sum + lot.unitsOpen, 0);
+  if (units <= 1e-12) return null;
+  const costBasis = lots.reduce((sum, lot) => {
+    const ratio = lot.unitsAcquired > 0 ? lot.unitsOpen / lot.unitsAcquired : 0;
+    return sum + lot.costBasisEur * ratio;
+  }, 0);
+  return costBasis / units;
+}
+
 function signalForPoint(input: PerspectivesSimulationInput, point: PerspectivesPricePoint): MonthlyMarketDecisionSignal {
   const activeSources = input.sources.filter(
     (source) => source.usedInEngine && source.assetIds.includes(point.assetId),
@@ -95,6 +108,8 @@ function signalForPoint(input: PerspectivesSimulationInput, point: PerspectivesP
       case "BEAR_MARKET":
       case "CAPITULATION":
         return { expectedReturn12m: 0.08, downsideProbability12m: 0.44, expectedDownsideDepth: 0.24, stabilizationProbability: 0.34, volatility12m: 0.68 };
+      case "EARLY_RECOVERY":
+        return { expectedReturn12m: 0.16, downsideProbability12m: 0.24, expectedDownsideDepth: 0.12, stabilizationProbability: 0.64, volatility12m: 0.52 };
       default:
         return { expectedReturn12m: 0.05, downsideProbability12m: 0.30, expectedDownsideDepth: 0.12, stabilizationProbability: 0.34, volatility12m: 0.42 };
     }
@@ -167,6 +182,36 @@ export function runPerspectivesV5Simulation(input: PerspectivesSimulationInput):
             assetId,
             fraction,
             priceEur: point.priceEur,
+            description: decision.selectedReason,
+          });
+        }
+      }
+
+      for (const bucket of ledger.openBuckets) {
+        const cycle = ledger.profitHarvestCycles.find((candidate) => candidate.id === bucket.profitHarvestCycleId);
+        if (!cycle || !cycle.capitalRecovered || bucket.sourceAssetId !== cycle.assetId) continue;
+        const point = pricePointForMonth(input, month, bucket.sourceAssetId);
+        const openAverageCost = openAverageCostForAsset(ledger, bucket.sourceAssetId);
+        if (openAverageCost == null) continue;
+        const maximumRebuyPrice = Math.min(openAverageCost, cycle.salePriceEur);
+        if (point.priceEur >= maximumRebuyPrice) continue;
+        const decision = evaluateRebuyAlternatives({
+          id: `rebuy-decision-${input.path.pathId}-${bucket.id}-${month}`,
+          date: cursor,
+          bucket,
+          currentPriceEur: point.priceEur,
+          commissionRate: input.commissionRate,
+          signal: signalForPoint(input, point),
+        });
+        decisions.push(decision);
+        const fraction = rebuyFractionFromAction(decision.selectedAction);
+        if (fraction != null) {
+          ledger.executeRebuy({
+            date: cursor,
+            eurcBucketId: bucket.id,
+            fraction,
+            priceEur: point.priceEur,
+            maximumPriceEur: maximumRebuyPrice,
             description: decision.selectedReason,
           });
         }
