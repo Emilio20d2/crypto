@@ -1,5 +1,56 @@
 Estado de Crypto Control
 
+Actualización 2026-07-02 — Issue #5 como fuente de verdad
+
+Se recibió instrucción nueva para ejecutar íntegramente la Issue #5 — Perspectivas V5: previsiones por activo, recuperación de capital, ventas y recompras — en orden canónico y fase por fase.
+
+Fuente de verdad leída:
+
+- Issue #5 completa: `https://github.com/Emilio20d2/crypto/issues/5`.
+- Comentario de Issue #5: `ORDEN CANÓNICO DE EJECUCIÓN — PERSPECTIVAS V5 Y OPERACIONES REALES`.
+- PR #4: `https://github.com/Emilio20d2/crypto/pull/4`.
+
+Plan local creado:
+
+- `docs/PERSPECTIVES_V5_EXECUTION_PLAN.md`.
+
+Estado de Fase 0:
+
+`VALIDATED` localmente tras crear rama de ejecución desde PR #4, verificar backup de base real y ejecutar `npm --prefix packages/portfolio run typecheck`.
+
+Evidencia de línea base:
+
+- Rama local actual: `codex/perspectives-v5-clean-rebuild`.
+- Commit local actual: `1203e93dfa32d121298878dfc2b6071dbce24083`.
+- PR #4: rama `codex/cache-market-automation`, head `3cf1354c4afd4de0410cc4233c46798078183436`, `draft=true`, checks visibles en GitHub `success`.
+- `origin/main`: `bc5a3ddb6a8f8f3ef003e8b7841763c63a04486e`.
+- `origin/codex/perspectives-v5-clean-rebuild`: `0627f414739449e904983152f368a95ee413e81d`.
+- App instalada: `/Applications/Crypto Control.app`, commit embebido `1203e93dfa32d121298878dfc2b6071dbce24083`, rama `codex/perspectives-v5-clean-rebuild`, build `2026-07-02T04:53:16.297Z`.
+- Copia de base real creada: `/private/tmp/crypto-control-backups/phase0-issue5-20260702-113642.sqlite`.
+- Integridad de la copia: `PRAGMA integrity_check = ok`.
+
+Bloqueos de Fase 0:
+
+- La rama local instalada no coincide con la rama del PR #4.
+- El commit instalado/local `1203e93` no está publicado en la rama remota equivalente, que está en `0627f414`.
+- La búsqueda requerida por Issue #5 para `runPerspectivesSimulation` no devuelve cero porque quedan artefactos compilados en `packages/portfolio/dist/perspectives/sim-engine.*`.
+- Existe `commissionRate: 0` en `packages/portfolio/src/perspectives/types.ts`; debe auditarse en Fase 1 antes de declarar V5 productivo completo.
+- No hay `gh` instalado; la lectura por API pública funciona, pero publicar comentarios en Issue #5 o hacer push requiere credenciales de escritura verificadas.
+- El DMG instalado anterior no puede considerarse final bajo la Issue #5 porque se generó antes de validar fases 0-14.
+
+Acción de alineación:
+
+- Creada rama local de ejecución `codex/issue5-execution` desde `origin/codex/cache-market-automation` (`3cf1354c4afd4de0410cc4233c46798078183436`) para continuar sobre la base canónica del PR #4.
+- Creada rama de respaldo `codex/perspectives-v5-clean-rebuild-backup-20260702` apuntando al estado instalado/local `1203e93dfa32d121298878dfc2b6071dbce24083`.
+- Intento de cherry-pick directo de la línea V5 instalada sobre PR #4 abortado por conflictos en `packages/portfolio/src/perspectives-v5/*`; se continuará por fases desde PR #4, validando y portando solo lo necesario según Issue #5.
+
+Inicio de Fase 1:
+
+- La búsqueda canónica confirma que la base del PR #4 todavía no tiene migración productiva V5 completa.
+- `apps/desktop/src/main.ts` invoca todavía `runPerspectivesSimulation`.
+- `packages/portfolio/src/perspectives/*` y `packages/portfolio/dist/perspectives/*` conservan símbolos V4.
+- Objetivo inmediato de Fase 1: conectar la ruta productiva de Electron a `runPerspectivesV5Simulation`, eliminar fallback productivo V4, añadir/ajustar test de guardia legacy y dejar el grep canónico sin resultados productivos.
+
 Estado general
 
 Integración en curso sobre la versión instalada correcta. Auditoría inicial completada y primeras correcciones arquitectónicas aplicadas en tiempo real, gráficas y Perspectivas.
