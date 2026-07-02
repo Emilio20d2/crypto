@@ -177,6 +177,10 @@ const cryptoControl = {
     addObservation:          (obs: unknown)                        => ipcRenderer.invoke("perspectives:addObservation", obs),
     runIngestion:            (opts?: unknown)                      => ipcRenderer.invoke("perspectives:runIngestion", opts),
   },
+  perspectivesV5: {
+    getSimulation: (input?: { horizonYears?: number; scenario?: "conservador" | "moderado" | "base" | "favorable" | "optimista"; strategyMode?: "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID" }) =>
+      ipcRenderer.invoke("perspectivesV5:getSimulation", input),
+  },
   persp2: {
     getSimulation: (input?: { horizonYears?: number; policy?: "plan_base" | "full_strategy"; strategyMode?: "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID" }) =>
       ipcRenderer.invoke("persp2:getSimulation", input),

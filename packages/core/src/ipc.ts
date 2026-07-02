@@ -527,6 +527,9 @@ export interface FullCryptoControlAPI extends CryptoControlAPI {
     getConsolidatedSnapshot: () => Promise<Result<PlanConsolidatedSnapshot>>;
     getAnalystForecasts: () => Promise<Result<unknown>>;
   };
+  perspectivesV5: {
+    getSimulation: (input?: { horizonYears?: number; scenario?: "conservador" | "moderado" | "base" | "favorable" | "optimista"; strategyMode?: "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID" }) => Promise<Result<unknown>>;
+  };
   persp2: {
     getSimulation: (input?: { horizonYears?: number; policy?: "plan_base" | "full_strategy"; strategyMode?: "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID" }) => Promise<Result<unknown>>;
   };

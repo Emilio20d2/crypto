@@ -6,7 +6,7 @@ import type { ForecastSource } from "./forecast-sources";
 import type { ObservationRow } from "./forecast-repository";
 import { observationToForecastSources } from "./forecast-repository";
 import { buildExternalPriceMap } from "./external-price-builder";
-import { runPerspectivesSimulation } from "./sim-engine";
+import { runLegacyPerspectivesSimulation } from "./sim-engine";
 import type { ForecastDataset, SimScenario } from "./types";
 
 const SCENARIOS: SimScenario[] = ["conservador", "moderado", "base", "favorable", "optimista"];
@@ -265,7 +265,7 @@ const REGRESSION_MAX_DIFF_PCT = 50;
 
 export function runRegressionTest(
   candidateSources: ForecastSource[],
-  referenceInput: Parameters<typeof runPerspectivesSimulation>[0],
+  referenceInput: Parameters<typeof runLegacyPerspectivesSimulation>[0],
   activeSources: ForecastSource[] = [],
   options: Pick<ForecastDataset, "usdToEurRate" | "fxSource" | "fxRateAt"> = {
     usdToEurRate: null,
@@ -273,13 +273,13 @@ export function runRegressionTest(
     fxRateAt: null,
   },
 ): RegressionReport {
-  const stableResult = runPerspectivesSimulation(referenceInput, {
+  const stableResult = runLegacyPerspectivesSimulation(referenceInput, {
     sources: activeSources,
     candidateId: "active",
     activatedAt: null,
     ...options,
   });
-  const candidateResult = runPerspectivesSimulation(referenceInput, {
+  const candidateResult = runLegacyPerspectivesSimulation(referenceInput, {
     sources: candidateSources,
     candidateId: "candidate",
     activatedAt: null,

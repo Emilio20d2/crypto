@@ -184,6 +184,10 @@ if (typeof window !== "undefined" && !window.cryptoControl) {
       acknowledge: (id: unknown)                              => ipc("signals:acknowledge", id),
       dismiss:     (id: unknown)                              => ipc("signals:dismiss", id),
     },
+    perspectivesV5: {
+      getSimulation: (input?: { horizonYears?: number; scenario?: "conservador" | "moderado" | "base" | "favorable" | "optimista"; strategyMode?: "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID" }) =>
+        ipc("perspectivesV5:getSimulation", input),
+    },
     persp2: {
       getSimulation: (input?: { horizonYears?: number; policy?: string; strategyMode?: "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID" }) =>
         ipc("persp2:getSimulation", input),

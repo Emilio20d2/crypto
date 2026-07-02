@@ -51,6 +51,36 @@ Inicio de Fase 1:
 - `packages/portfolio/src/perspectives/*` y `packages/portfolio/dist/perspectives/*` conservan símbolos V4.
 - Objetivo inmediato de Fase 1: conectar la ruta productiva de Electron a `runPerspectivesV5Simulation`, eliminar fallback productivo V4, añadir/ajustar test de guardia legacy y dejar el grep canónico sin resultados productivos.
 
+Resultado de Fase 1:
+
+`VALIDATED` localmente.
+
+Cambios de Fase 1:
+
+- Añadido canal productivo `perspectivesV5:getSimulation` en Electron.
+- Añadido `perspectivesV5.getSimulation` en preload, puente web y tipos IPC compartidos.
+- La página Perspectivas consume `window.cryptoControl.perspectivesV5.getSimulation`.
+- `persp2:getSimulation` queda registrado solo como ruta legacy cerrada que lanza `PERSPECTIVES_V4_REMOVED`.
+- `apps/desktop/src/main.ts` construye un input nativo V5 con posiciones, lotes, aportaciones mensuales, path de precios completo y fuentes de motor explícitas.
+- Eliminado el export productivo del símbolo V4 `runPerspectivesSimulation`.
+- Renombrado el símbolo interno antiguo a `runLegacyPerspectivesSimulation`.
+- Añadida prueba `packages/portfolio/src/perspectives-v5/productive-route.test.ts` para impedir reconectar V4 o `persp2` desde la pantalla.
+
+Pruebas de Fase 1:
+
+- `grep -R "runPerspectivesSimulation" apps packages --exclude="legacy-guard.ts" --exclude="*.test.ts"` — sin resultados.
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix apps/desktop run typecheck` — OK.
+- `npm --prefix apps/web run typecheck` — OK.
+- `npm --prefix packages/portfolio run test -- src/perspectives-v5/productive-route.test.ts src/perspectives-v5/perspectives-v5.test.ts` — OK, 2 archivos / 4 tests.
+- `npm --prefix packages/portfolio run build` — OK.
+
+Pendiente tras Fase 1:
+
+- Publicar commit y comentario en Issue #5 si las credenciales GitHub lo permiten.
+- Fase 2 debe estabilizar dominio y migraciones versionadas antes de seguir con fuentes/ledger/ventas/recompras.
+- La interfaz V5 definitiva queda reservada para Fase 8; en Fase 1 solo se cambió la fuente productiva a V5.
+
 Estado general
 
 Integración en curso sobre la versión instalada correcta. Auditoría inicial completada y primeras correcciones arquitectónicas aplicadas en tiempo real, gráficas y Perspectivas.

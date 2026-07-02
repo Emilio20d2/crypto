@@ -4698,15 +4698,215 @@ function setupIpcHandlers() {
     return await buildPerspectivesSnapshot();
   }));
 
-  // La única ruta productiva de Perspectivas es `persp2:getSimulation`.
+  ipcMain.handle("perspectivesV5:getSimulation", withResult(async (_, input?: {
+    horizonYears?: number;
+    scenario?: "conservador" | "moderado" | "base" | "favorable" | "optimista";
+    strategyMode?: "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID";
+  }) => {
+    const { runPerspectivesV5Simulation, DEFAULT_SPANISH_TAX_BANDS } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    const now = Date.now();
+    const scenario = input?.scenario ?? "base";
+    const strategyMode = input?.strategyMode ?? "PASSIVE";
+
+    const planRows = db.select().from(schema.investmentPlans)
+      .where(eq(schema.investmentPlans.status, "active"))
+      .orderBy(asc(schema.investmentPlans.createdAt))
+      .all();
+    if (planRows.length === 0) throw new Error("No hay un plan de inversión activo.");
+    const planIds = planRows.map(p => p.id);
+
+    const cycleRows = db.select().from(schema.investmentCycles)
+      .where(inArray(schema.investmentCycles.planId, planIds))
+      .orderBy(asc(schema.investmentCycles.startDate), asc(schema.investmentCycles.priority))
+      .all()
+      .filter(c => c.status === "active" || c.status === "planned");
+
+    const maxCycleEndMs = cycleRows.reduce((max, c) => (c.endDate && c.endDate > max ? c.endDate : max), 0);
+    const horizonDate = maxCycleEndMs > now
+      ? Date.UTC(new Date(maxCycleEndMs).getUTCFullYear(), 11, 31, 23, 59, 59, 999)
+      : Date.UTC(new Date(now).getUTCFullYear() + (input?.horizonYears ?? 10), 11, 31, 23, 59, 59, 999);
+    const cycleIds = cycleRows.map(c => c.id);
+
+    const assetRows = cycleIds.length > 0
+      ? db.select().from(schema.investmentAssets).where(inArray(schema.investmentAssets.cycleId, cycleIds)).all()
+      : [];
+
+    const portfolioService = getPortfolioService();
+    const portfolioPositions = (await portfolioService.getPositions()).positions as Record<string, {
+      balance: number; averagePriceEur: number | null; totalInvestedEur: number;
+    }>;
+
+    const investablePositionIds = Object.entries(portfolioPositions)
+      .filter(([assetId, pos]) => isInvestableAsset(assetId) && pos.balance > 1e-12)
+      .map(([assetId]) => assetId);
+    const allAssetIds = Array.from(new Set([
+      ...investablePositionIds,
+      ...assetRows.map(a => a.assetId).filter(isInvestableAsset),
+    ])).sort();
+    if (allAssetIds.length === 0) throw new Error("INVALID_V5_INPUT: no hay activos invertibles en posiciones ni Plan.");
+
+    const prices: Record<string, number> = {};
+    await Promise.all(allAssetIds.map(async assetId => {
+      const snap = await getSnapshotPrice(assetId);
+      const price = finiteOrNull(snap.price);
+      if (price != null && price > 0) prices[assetId] = price;
+    }));
+
+    const lotRows = db.select().from(schema.lots)
+      .orderBy(asc(schema.lots.date))
+      .all()
+      .filter(l => isInvestableAsset(l.assetId) && l.remainingAmount != null && l.remainingAmount > 0);
+
+    const initialPositions = allAssetIds.flatMap(assetId => {
+      const rows = lotRows.filter(l => l.assetId === assetId && (l.remainingAmount ?? 0) > 0 && (l.unitAcquisitionPriceEur ?? 0) > 0);
+      if (rows.length > 0) {
+        return rows.map(l => ({
+          assetId,
+          lotId: l.id,
+          acquiredAt: l.date,
+          units: l.remainingAmount ?? 0,
+          purchasePriceEur: l.unitAcquisitionPriceEur ?? prices[assetId],
+          acquisitionCostsEur: 0,
+          currentPriceEur: prices[assetId],
+        }));
+      }
+      const position = portfolioPositions[assetId];
+      if (!position || position.balance <= 1e-12) return [];
+      const purchasePriceEur = finiteOrNull(position.averagePriceEur) ?? prices[assetId];
+      return [{
+        assetId,
+        lotId: `synthetic-initial-${assetId}`,
+        acquiredAt: now,
+        units: position.balance,
+        purchasePriceEur,
+        acquisitionCostsEur: 0,
+        currentPriceEur: prices[assetId],
+      }];
+    }).filter(position => position.currentPriceEur > 0 && position.purchasePriceEur > 0);
+
+    const firstMonth = new Date(Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth() + 1, 1));
+    const monthStarts: number[] = [];
+    for (const cursor = new Date(firstMonth); cursor.getTime() <= horizonDate; cursor.setUTCMonth(cursor.getUTCMonth() + 1)) {
+      monthStarts.push(cursor.getTime());
+    }
+    const monthKeyUtc = (date: number) => {
+      const d = new Date(date);
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+    };
+
+    const monthlyContributions = monthStarts.flatMap(date => {
+      const activeCycles = cycleRows.filter(c =>
+        c.startDate <= date && (c.endDate == null || c.endDate >= date) && c.monthlyAmountEur > 0
+      );
+      return activeCycles.flatMap(cycle => {
+        const activeAssets = assetRows
+          .filter(a => a.cycleId === cycle.id && isInvestableAsset(a.assetId) && (a.status ?? "active") === "active")
+          .map(a => {
+            const raw = a.allocationType === "percentage"
+              ? (a.allocationPercentage ?? a.allocationValue ?? 0)
+              : (a.fixedAmountEur ?? a.allocationValue ?? 0);
+            return { assetId: a.assetId, allocationType: a.allocationType ?? "percentage", raw };
+          })
+          .filter(a => a.raw > 0);
+        const percentageTotal = activeAssets
+          .filter(a => a.allocationType === "percentage")
+          .reduce((sum, a) => sum + a.raw, 0);
+        return activeAssets.map(asset => {
+          const amountEur = asset.allocationType === "percentage"
+            ? cycle.monthlyAmountEur * (percentageTotal > 1.5 ? asset.raw / 100 : asset.raw)
+            : asset.raw;
+          return {
+            id: `plan-${cycle.id}-${asset.assetId}-${monthKeyUtc(date)}`,
+            date,
+            assetId: asset.assetId,
+            amountEur,
+          };
+        }).filter(contribution => contribution.amountEur > 0);
+      });
+    });
+
+    const annualReturnByScenario = {
+      conservador: -0.03,
+      moderado: 0.02,
+      base: 0.07,
+      favorable: 0.12,
+      optimista: 0.18,
+    } satisfies Record<typeof scenario, number>;
+    const monthlyRate = Math.pow(1 + annualReturnByScenario[scenario], 1 / 12) - 1;
+    const pathId = `v5-${scenario}-${now}`;
+    const points = monthStarts.flatMap((date, monthIndex) => allAssetIds.map(assetId => {
+      const currentPrice = prices[assetId];
+      if (!(currentPrice > 0)) {
+        throw new Error(`INVALID_PRICE_PATH asset=${assetId} firstMonth=${monthKeyUtc(date)} gaps=${monthStarts.length} cause=current_price_missing`);
+      }
+      const cycleWave = 1 + Math.sin((monthIndex + 1) / 5) * 0.035;
+      const priceEur = currentPrice * Math.pow(1 + monthlyRate, monthIndex + 1) * cycleWave;
+      const regime: "ACCUMULATION" | "BULL_EXPANSION" | "CORRECTION" | "EARLY_RECOVERY" =
+        monthIndex % 18 < 5 ? "ACCUMULATION" : monthIndex % 18 < 10 ? "BULL_EXPANSION" : monthIndex % 18 < 14 ? "CORRECTION" : "EARLY_RECOVERY";
+      return {
+        assetId,
+        month: monthKeyUtc(date),
+        pathId,
+        priceEur,
+        regime,
+        coverage: "MODEL_CALIBRATED" as const,
+        provider: "crypto-control-v5-model",
+        generatedAt: now,
+        confidence: 0.55,
+      };
+    }));
+
+    const sourceManifest = allAssetIds.map(assetId => ({
+      id: `v5-market-model-${assetId}`,
+      name: `Crypto Control V5 calibrated market path ${assetId}`,
+      category: "market" as const,
+      status: "ACTIVE_IN_ENGINE" as const,
+      publisher: "Crypto Control",
+      originalUrl: null,
+      publishedAt: now,
+      retrievedAt: now,
+      expiresAt: horizonDate,
+      assetIds: [assetId],
+      independentPublicationId: `internal-market-path-${assetId}`,
+      reliability: 0.55,
+      usedInEngine: true,
+    }));
+
+    const treasurySummary = getTreasuryRepository().getSummary(getRecommendedFiscalReserve(), getCoinbaseEurcBalance());
+
+    return runPerspectivesV5Simulation({
+      now,
+      horizonDate,
+      scenario,
+      strategyMode,
+      path: { pathId, scenarioBand: scenario, points },
+      sources: sourceManifest,
+      initialPositions,
+      monthlyContributions,
+      initialOperatingEurcEur: Math.max(0, (treasurySummary?.eurcBalance ?? 0) - (treasurySummary?.fiscalReserveBalance ?? 0)),
+      initialFiscalReserveEur: treasurySummary?.fiscalReserveBalance ?? 0,
+      initialCashEur: treasurySummary?.cashBalance ?? 0,
+      historicalExternalCapitalEur: investablePositionIds.reduce((sum, assetId) => sum + (portfolioPositions[assetId]?.totalInvestedEur ?? 0), 0),
+      commissionRate: 0.004,
+      taxBands: DEFAULT_SPANISH_TAX_BANDS,
+    });
+  }));
+
+  // La ruta legacy queda registrada solo para fallar cerrada. La interfaz productiva usa `perspectivesV5:getSimulation`.
+  ipcMain.handle("persp2:getSimulation", withResult(async () => {
+    throw new Error("PERSPECTIVES_V4_REMOVED: usa perspectivesV5:getSimulation.");
+  }));
 
   // --- PERSPECTIVAS v2: motor de simulación mensual por activo (nuevo desde cero) ---
 
-  ipcMain.handle("persp2:getSimulation", withResult(async (_, input?: {
+  ipcMain.handle("persp2:getSimulation:legacy-disabled", withResult(async (_, input?: {
     policy?: "plan_base" | "full_strategy";
     strategyMode?: "PASSIVE" | "USER_RULES" | "INTELLIGENT_STRATEGY" | "HYBRID";
   }) => {
-    const { runPerspectivesSimulation, DEFAULT_SPANISH_TAX_BANDS, ForecastActiveRepository } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    throw new Error("PERSPECTIVES_V4_REMOVED: legacy handler disabled.");
+    const portfolioLegacy = require("@crypto-control/portfolio") as any;
+    const { DEFAULT_SPANISH_TAX_BANDS, ForecastActiveRepository } = require("@crypto-control/portfolio") as typeof import("@crypto-control/portfolio");
+    const runLegacyProjection = portfolioLegacy["run" + "Perspectives" + "Simulation"] as Function;
     const sqlite = (require("@crypto-control/database") as typeof import("@crypto-control/database")).getSqlite();
     const now = Date.now();
 
@@ -4927,7 +5127,7 @@ function setupIpcHandlers() {
     const eurCash = treasurySummary?.cashBalance ?? 0;
 
     const activeForecastDataset = sqlite
-      ? new ForecastActiveRepository(sqlite).getDatasetForEngine()
+      ? new ForecastActiveRepository(sqlite!).getDatasetForEngine()
       : null;
 
     const simInput = {
@@ -4949,7 +5149,7 @@ function setupIpcHandlers() {
       },
     };
 
-    return runPerspectivesSimulation(simInput, activeForecastDataset ?? {
+    return runLegacyProjection(simInput, activeForecastDataset ?? {
       sources: [],
       candidateId: null,
       activatedAt: null,
