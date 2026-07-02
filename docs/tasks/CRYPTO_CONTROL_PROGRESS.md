@@ -189,6 +189,37 @@ Pendiente tras Fase 5:
 - Publicar commit y comentario en Issue #5.
 - Fase 6: ventas parciales y recuperación de capital por activo. No se han implementado recompras ni Coinbase en esta fase.
 
+Resultado de Fase 6:
+
+`VALIDATED` localmente.
+
+Cambios de Fase 6:
+
+- La simulación V5 evalúa ventas parciales mensuales en modos no pasivos antes de añadir nuevas aportaciones.
+- Cada decisión de venta queda registrada en `decisions`, incluyendo rechazos por plusvalía insuficiente.
+- Las ventas ejecutadas usan FIFO mediante `PerspectivesPortfolioLedger.executePartialSale`.
+- Cada venta crea un `PARTIAL_SALE`, bucket EURC operativo, reserva fiscal incremental y `ProfitHarvestCycle`.
+- Cada ciclo registra `capitalRecovered`.
+- Se evita abrir una segunda venta del mismo activo mientras exista un ciclo abierto.
+- La fase no implementa recompras; quedan reservadas para Fase 7.
+
+Pruebas de Fase 6:
+
+- `npm --prefix packages/portfolio run test -- src/perspectives-v5/partial-sales.test.ts src/perspectives-v5/ledger-metrics.test.ts src/perspectives-v5/annual-consensus.test.ts src/perspectives-v5/productive-route.test.ts src/perspectives-v5/perspectives-v5.test.ts` — OK, 5 archivos / 12 tests.
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix packages/portfolio run build` — OK.
+- `grep -R "runPerspectivesSimulation" apps packages --exclude="legacy-guard.ts" --exclude="*.test.ts"` — sin resultados.
+
+Evidencia de Fase 6:
+
+- Venta prematura bloqueada: con plusvalía inferior al umbral, no se crea `PARTIAL_SALE`, no se crea bucket y las unidades abiertas permanecen intactas.
+- Venta con recuperación: posición inicial 1 BTC a 10.000 €, precio 30.000 €, régimen euforia. El motor ejecuta una venta productiva del 25 %, vende 0,25 BTC, realiza 5.000 € de plusvalía, crea 1.000 € de reserva fiscal y 6.500 € de EURC operativo.
+
+Pendiente tras Fase 6:
+
+- Publicar commit y comentario en Issue #5.
+- Fase 7: buckets separados y recompras por debajo del coste medio. No se debe iniciar Coinbase antes de completar Fase 9.
+
 Estado general
 
 Integración en curso sobre la versión instalada correcta. Auditoría inicial completada y primeras correcciones arquitectónicas aplicadas en tiempo real, gráficas y Perspectivas.

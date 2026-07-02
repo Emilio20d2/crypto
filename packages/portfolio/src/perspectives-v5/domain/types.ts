@@ -150,6 +150,7 @@ export interface PerspectivesProfitHarvestCycle {
   saleCostsEur: number;
   fiscalReserveEur: number;
   eurcBucketId: string;
+  capitalRecovered: boolean;
   rebuyLotIds: string[];
   reboughtUnits: number;
   additionalUnits: number;

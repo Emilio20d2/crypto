@@ -1,12 +1,19 @@
 import { validatePriceAndSourceManifest } from "./data/price-manifest";
 import type {
+  PerspectivesPricePoint,
   PerspectivesMonthlySnapshot,
   PerspectivesSimulationInput,
   PerspectivesSimulationOutput,
+  PerspectivesStrategyDecision,
 } from "./domain/types";
 import { PerspectivesPortfolioLedger } from "./ledger/portfolio-ledger";
 import { calculateTwr, calculateXirr } from "./metrics/returns";
 import { buildAnnualSnapshots } from "./reports/annual-report";
+import {
+  evaluatePartialSaleAlternatives,
+  saleFractionFromAction,
+  type MonthlyMarketDecisionSignal,
+} from "./strategy/decision-engine";
 
 function monthKey(date: number): string {
   const d = new Date(date);
@@ -33,6 +40,14 @@ function priceMapForMonth(input: PerspectivesSimulationInput, month: string): Re
     prices[point.assetId] = point.priceEur;
   }
   return prices;
+}
+
+function pricePointForMonth(input: PerspectivesSimulationInput, month: string, assetId: string): PerspectivesPricePoint {
+  const point = input.path.points.find((candidate) => candidate.month === month && candidate.assetId === assetId);
+  if (!point || !(point.priceEur > 0) || point.coverage === "INVALID") {
+    throw new Error(`INVALID_PRICE_PATH:${assetId}:${month}`);
+  }
+  return point;
 }
 
 function requiredAssetIds(input: PerspectivesSimulationInput): string[] {
@@ -62,6 +77,39 @@ function costsForMonth(ledger: PerspectivesPortfolioLedger, month: string): numb
     .reduce((sum, entry) => sum + entry.costsEur, 0);
 }
 
+function signalForPoint(input: PerspectivesSimulationInput, point: PerspectivesPricePoint): MonthlyMarketDecisionSignal {
+  const activeSources = input.sources.filter(
+    (source) => source.usedInEngine && source.assetIds.includes(point.assetId),
+  );
+  const independentPublisherCount = new Set(activeSources.map((source) => source.independentPublicationId ?? source.publisher)).size;
+  const profile = (() => {
+    switch (point.regime) {
+      case "EUPHORIA":
+        return { expectedReturn12m: -0.18, downsideProbability12m: 0.74, expectedDownsideDepth: 0.34, stabilizationProbability: 0.58, volatility12m: 0.72 };
+      case "DISTRIBUTION":
+        return { expectedReturn12m: -0.10, downsideProbability12m: 0.66, expectedDownsideDepth: 0.28, stabilizationProbability: 0.52, volatility12m: 0.64 };
+      case "CORRECTION":
+        return { expectedReturn12m: -0.03, downsideProbability12m: 0.58, expectedDownsideDepth: 0.22, stabilizationProbability: 0.42, volatility12m: 0.56 };
+      case "BULL_EXPANSION":
+        return { expectedReturn12m: 0.18, downsideProbability12m: 0.36, expectedDownsideDepth: 0.16, stabilizationProbability: 0.38, volatility12m: 0.48 };
+      case "BEAR_MARKET":
+      case "CAPITULATION":
+        return { expectedReturn12m: 0.08, downsideProbability12m: 0.44, expectedDownsideDepth: 0.24, stabilizationProbability: 0.34, volatility12m: 0.68 };
+      default:
+        return { expectedReturn12m: 0.05, downsideProbability12m: 0.30, expectedDownsideDepth: 0.12, stabilizationProbability: 0.34, volatility12m: 0.42 };
+    }
+  })();
+  return {
+    assetId: point.assetId,
+    month: point.month,
+    regime: point.regime,
+    ...profile,
+    confidence: Math.min(1, point.confidence),
+    sourceCount: activeSources.length,
+    independentPublisherCount,
+  };
+}
+
 export function runPerspectivesV5Simulation(input: PerspectivesSimulationInput): PerspectivesSimulationOutput {
   const assets = requiredAssetIds(input);
   const validation = validatePriceAndSourceManifest({
@@ -77,6 +125,7 @@ export function runPerspectivesV5Simulation(input: PerspectivesSimulationInput):
 
   const ledger = new PerspectivesPortfolioLedger(input);
   const monthlySnapshots: PerspectivesMonthlySnapshot[] = [];
+  const decisions: PerspectivesStrategyDecision[] = [];
   let cursor = firstDayOfNextUtcMonth(input.now);
   let openingNetWealthEur =
     ledger.marketValue(priceMapForMonth(input, monthKey(cursor))) +
@@ -86,6 +135,44 @@ export function runPerspectivesV5Simulation(input: PerspectivesSimulationInput):
   while (cursor <= input.horizonDate) {
     const month = monthKey(cursor);
     const pricesByAsset = priceMapForMonth(input, month);
+
+    if (input.strategyMode !== "PASSIVE") {
+      for (const assetId of requiredAssetIds(input)) {
+        const openLots = ledger.openLots.filter((lot) => lot.assetId === assetId);
+        if (openLots.length === 0) continue;
+        if (ledger.profitHarvestCycles.some((cycle) => cycle.assetId === assetId && cycle.status === "OPEN")) {
+          continue;
+        }
+        const point = pricePointForMonth(input, month, assetId);
+        const totalPortfolioValueEur = ledger.marketValue(pricesByAsset) + ledger.operatingEurc + ledger.cash;
+        const portfolioAssetValueEur = openLots.reduce((sum, lot) => sum + lot.unitsOpen * point.priceEur, 0);
+        const decision = evaluatePartialSaleAlternatives({
+          id: `sale-decision-${input.path.pathId}-${assetId}-${month}`,
+          date: cursor,
+          assetId,
+          currentPriceEur: point.priceEur,
+          openLots,
+          portfolioAssetValueEur,
+          totalPortfolioValueEur,
+          commissionRate: input.commissionRate,
+          estimatedTaxRate: input.taxBands[0]?.rate ?? 0,
+          minimumUnrealizedGainPct: 0.25,
+          signal: signalForPoint(input, point),
+        });
+        decisions.push(decision);
+        const fraction = saleFractionFromAction(decision.selectedAction);
+        if (fraction != null) {
+          ledger.executePartialSale({
+            date: cursor,
+            assetId,
+            fraction,
+            priceEur: point.priceEur,
+            description: decision.selectedReason,
+          });
+        }
+      }
+    }
+
     const contributions = input.monthlyContributions.filter((contribution) => monthKey(contribution.date) === month);
     for (const contribution of contributions) {
       ledger.buyFromExternalContribution(contribution, pricesByAsset[contribution.assetId]);
@@ -139,7 +226,7 @@ export function runPerspectivesV5Simulation(input: PerspectivesSimulationInput):
     lots: ledger.lots,
     eurcBuckets: ledger.eurcBuckets,
     profitHarvestCycles: ledger.profitHarvestCycles,
-    decisions: [],
+    decisions,
     monthlySnapshots,
     annualSnapshots,
     finalGrossWealthEur: final?.closingGrossWealthEur ?? 0,

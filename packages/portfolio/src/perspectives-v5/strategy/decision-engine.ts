@@ -30,6 +30,7 @@ export interface SaleDecisionContext {
   totalPortfolioValueEur: number;
   commissionRate: number;
   estimatedTaxRate: number;
+  minimumUnrealizedGainPct: number;
   signal: MonthlyMarketDecisionSignal;
 }
 
@@ -75,6 +76,7 @@ export function evaluatePartialSaleAlternatives(context: SaleDecisionContext): P
   const units = openUnits(context.openLots);
   const costBasis = openCostBasis(context.openLots);
   const currentValue = units * context.currentPriceEur;
+  const unrealizedGainPct = costBasis > 0 ? (currentValue - costBasis) / costBasis : 0;
   const expectedReturn = context.signal.expectedReturn12m;
   const downsideProbability = clamp(context.signal.downsideProbability12m, 0, 1);
   const expectedDownsideDepth = clamp(context.signal.expectedDownsideDepth, 0, 0.95);
@@ -91,6 +93,19 @@ export function evaluatePartialSaleAlternatives(context: SaleDecisionContext): P
     confidence: context.signal.confidence,
     reason: `Mantener: retorno esperado 12m ${(expectedReturn * 100).toFixed(1)}%, concentración ${(concentration * 100).toFixed(1)}%`,
   }];
+
+  if (unrealizedGainPct < context.minimumUnrealizedGainPct) {
+    return {
+      id: context.id,
+      date: context.date,
+      assetId: context.assetId,
+      profitHarvestCycleId: null,
+      alternatives,
+      selectedAction: "HOLD",
+      selectedReason: `Mantener: plusvalía ${(unrealizedGainPct * 100).toFixed(1)}% inferior al mínimo ${(context.minimumUnrealizedGainPct * 100).toFixed(1)}% para recuperar capital`,
+      usesFutureInformation: false,
+    };
+  }
 
   for (const fraction of [0.05, 0.10, 0.15, 0.20, 0.25]) {
     const soldValue = currentValue * fraction;

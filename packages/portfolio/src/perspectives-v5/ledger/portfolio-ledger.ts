@@ -323,6 +323,7 @@ export class PerspectivesPortfolioLedger {
       saleCostsEur,
       fiscalReserveEur: incrementalTaxEur,
       eurcBucketId: bucketId,
+      capitalRecovered: operatingPrincipalEur >= soldCostBasisEur,
       rebuyLotIds: [],
       reboughtUnits: 0,
       additionalUnits: 0,
@@ -451,7 +452,7 @@ export class PerspectivesPortfolioLedger {
       close.openingNetWealthEur +
       close.externalContributionsThisMonthEur +
       close.marketResultThisMonthEur -
-      close.taxesPaidThisMonthEur! -
+      (close.taxesPaidThisMonthEur ?? 0) -
       externalWithdrawalsThisMonthEur;
     const costsThisMonthEur = this.entries
       .filter((entry) => monthKey(entry.date) === monthKey(close.date))
