@@ -5,6 +5,7 @@ import type {
   PerspectivesSimulationOutput,
 } from "./domain/types";
 import { PerspectivesPortfolioLedger } from "./ledger/portfolio-ledger";
+import { calculateTwr, calculateXirr } from "./metrics/returns";
 import { buildAnnualSnapshots } from "./reports/annual-report";
 
 function monthKey(date: number): string {
@@ -49,57 +50,16 @@ function sumContributions(input: PerspectivesSimulationInput, month: string): nu
     .reduce((sum, contribution) => sum + contribution.amountEur, 0);
 }
 
-function buildSnapshot(params: {
-  ledger: PerspectivesPortfolioLedger;
-  month: string;
-  date: number;
-  openingNetWealthEur: number;
-  pricesByAsset: Record<string, number>;
-  externalContributionsThisMonthEur: number;
-  previousCryptoMarketValueEur: number;
-}): PerspectivesMonthlySnapshot {
-  const cryptoMarketValueEur = params.ledger.marketValue(params.pricesByAsset);
-  const openCostBasisEur = params.ledger.openCostBasis();
-  const unrealizedGainEur = cryptoMarketValueEur - openCostBasisEur;
-  const operatingEurcEur = params.ledger.operatingEurc;
-  const fiscalReserveEur = params.ledger.fiscalReserve;
-  const cashEur = params.ledger.cash;
-  const outstandingTaxLiabilityEur = Math.max(0, fiscalReserveEur);
-  const closingGrossWealthEur = cryptoMarketValueEur + operatingEurcEur + fiscalReserveEur + cashEur;
-  const closingNetWealthEur = closingGrossWealthEur - outstandingTaxLiabilityEur;
-  const costsThisMonthEur = params.ledger.entries
-    .filter((entry) => monthKey(entry.date) === params.month)
-    .reduce((sum, entry) => sum + entry.costsEur, 0);
-  const marketResultThisMonthEur = cryptoMarketValueEur - params.previousCryptoMarketValueEur;
-  const netProfitEur = closingNetWealthEur - params.ledger.externalCapital;
+function netWealth(ledger: PerspectivesPortfolioLedger, pricesByAsset: Record<string, number>): number {
+  const cryptoMarketValueEur = ledger.marketValue(pricesByAsset);
+  const closingGrossWealthEur = cryptoMarketValueEur + ledger.operatingEurc + ledger.fiscalReserve + ledger.cash;
+  return closingGrossWealthEur - Math.max(0, ledger.fiscalReserve);
+}
 
-  return {
-    month: params.month,
-    date: params.date,
-    openingNetWealthEur: params.openingNetWealthEur,
-    closingGrossWealthEur,
-    closingNetWealthEur,
-    cryptoMarketValueEur,
-    operatingEurcEur,
-    fiscalReserveEur,
-    cashEur,
-    outstandingTaxLiabilityEur,
-    externalCapitalCumulativeEur: params.ledger.externalCapital,
-    internalRebuyCapitalCumulativeEur: params.ledger.internalRebuyCapital,
-    internalReallocationCapitalCumulativeEur: params.ledger.internalReallocationCapital,
-    totalCapitalDeployedCumulativeEur: params.ledger.totalCapitalDeployed,
-    realizedGainCumulativeEur: params.ledger.realizedGain,
-    unrealizedGainEur,
-    netProfitEur,
-    externalContributionsThisMonthEur: params.externalContributionsThisMonthEur,
-    marketResultThisMonthEur,
-    costsThisMonthEur,
-    taxesPaidThisMonthEur: 0,
-    externalWithdrawalsThisMonthEur: 0,
-    reconciliationDiffEur: 0,
-    lotIdsOpen: params.ledger.openLots.map((lot) => lot.id),
-    eurcBucketIdsOpen: params.ledger.openBuckets.map((bucket) => bucket.id),
-  };
+function costsForMonth(ledger: PerspectivesPortfolioLedger, month: string): number {
+  return ledger.entries
+    .filter((entry) => monthKey(entry.date) === month)
+    .reduce((sum, entry) => sum + entry.costsEur, 0);
 }
 
 export function runPerspectivesV5Simulation(input: PerspectivesSimulationInput): PerspectivesSimulationOutput {
@@ -122,7 +82,6 @@ export function runPerspectivesV5Simulation(input: PerspectivesSimulationInput):
     ledger.marketValue(priceMapForMonth(input, monthKey(cursor))) +
     ledger.operatingEurc +
     ledger.cash;
-  let previousCryptoMarketValueEur = ledger.marketValue(priceMapForMonth(input, monthKey(cursor)));
 
   while (cursor <= input.horizonDate) {
     const month = monthKey(cursor);
@@ -132,19 +91,23 @@ export function runPerspectivesV5Simulation(input: PerspectivesSimulationInput):
       ledger.buyFromExternalContribution(contribution, pricesByAsset[contribution.assetId]);
     }
 
-    const snapshot = buildSnapshot({
-      ledger,
-      month,
+    const externalContributionsThisMonthEur = sumContributions(input, month);
+    const costsThisMonthEur = costsForMonth(ledger, month);
+    const closingNetWealthEur = netWealth(ledger, pricesByAsset);
+    const marketResultThisMonthEur =
+      closingNetWealthEur - openingNetWealthEur - externalContributionsThisMonthEur + costsThisMonthEur;
+
+    const snapshot = ledger.closeMonth({
       date: cursor,
-      openingNetWealthEur,
       pricesByAsset,
-      externalContributionsThisMonthEur: sumContributions(input, month),
-      previousCryptoMarketValueEur,
+      openingNetWealthEur,
+      externalContributionsThisMonthEur,
+      marketResultThisMonthEur,
+      taxesPaidThisMonthEur: 0,
+      externalWithdrawalsThisMonthEur: 0,
     });
     monthlySnapshots.push(snapshot);
-    ledger.monthlySnapshots.push(snapshot);
     openingNetWealthEur = snapshot.closingNetWealthEur;
-    previousCryptoMarketValueEur = snapshot.cryptoMarketValueEur;
     ledger.incrementUndeployedBuckets();
     cursor = addUtcMonths(cursor, 1);
   }
@@ -152,6 +115,18 @@ export function runPerspectivesV5Simulation(input: PerspectivesSimulationInput):
   const annualSnapshots = buildAnnualSnapshots({ monthlySnapshots, ledger: ledger.entries });
   const final = monthlySnapshots.at(-1);
   const validationErrors = ledger.validate();
+  const twr = calculateTwr({ monthlySnapshots });
+  const externalFlows = [
+    ...input.initialPositions.map((position) => ({
+      date: position.acquiredAt,
+      amountEur: -(position.units * position.purchasePriceEur + position.acquisitionCostsEur),
+    })),
+    ...ledger.entries
+      .filter((entry) => entry.type === "EXTERNAL_CONTRIBUTION")
+      .map((entry) => ({ date: entry.date, amountEur: -entry.grossAmountEur })),
+    final ? { date: final.date, amountEur: final.closingNetWealthEur } : null,
+  ].filter((flow): flow is { date: number; amountEur: number } => flow !== null);
+  const xirr = calculateXirr(externalFlows);
 
   return {
     engineVersion: "perspectives-v5",
@@ -176,6 +151,9 @@ export function runPerspectivesV5Simulation(input: PerspectivesSimulationInput):
     realizedGainEur: ledger.realizedGain,
     unrealizedGainEur: final?.unrealizedGainEur ?? 0,
     netProfitEur: final?.netProfitEur ?? 0,
+    twrCumulative: twr.cumulative,
+    twrAnnualized: twr.annualized,
+    xirr,
     validationErrors,
   };
 }

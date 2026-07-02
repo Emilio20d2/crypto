@@ -163,6 +163,32 @@ Pendiente tras Fase 4:
 - Publicar commit y comentario en Issue #5.
 - Fase 5: ledger, continuidad mensual, patrimonio, TWR y XIRR. Debe demostrar precio constante, capital inicial, compras en unidades y conciliación.
 
+Resultado de Fase 5:
+
+`VALIDATED` localmente.
+
+Cambios de Fase 5:
+
+- El cierre mensual de `runPerspectivesV5Simulation` usa ahora `PerspectivesPortfolioLedger.closeMonth`.
+- Las aportaciones mensuales compran unidades reales del activo con el precio mensual del path.
+- El resultado de mercado mensual se calcula separando aportaciones, costes y variación patrimonial.
+- La continuidad `opening[n+1] = closing[n]` queda validada por el ledger.
+- Añadidas métricas `twrCumulative`, `twrAnnualized` y `xirr` al DTO V5.
+- Añadido módulo `packages/portfolio/src/perspectives-v5/metrics/returns.ts`.
+- Añadidas pruebas productivas de precio constante, creciente y decreciente que ejecutan `runPerspectivesV5Simulation` y leen lotes reales creados por el motor.
+
+Pruebas de Fase 5:
+
+- `npm --prefix packages/portfolio run test -- src/perspectives-v5/ledger-metrics.test.ts src/perspectives-v5/annual-consensus.test.ts src/perspectives-v5/productive-route.test.ts src/perspectives-v5/perspectives-v5.test.ts` — OK, 4 archivos / 10 tests.
+- `npm --prefix packages/portfolio run typecheck` — OK.
+- `npm --prefix packages/portfolio run build` — OK.
+- `grep -R "runPerspectivesSimulation" apps packages --exclude="legacy-guard.ts" --exclude="*.test.ts"` — sin resultados.
+
+Pendiente tras Fase 5:
+
+- Publicar commit y comentario en Issue #5.
+- Fase 6: ventas parciales y recuperación de capital por activo. No se han implementado recompras ni Coinbase en esta fase.
+
 Estado general
 
 Integración en curso sobre la versión instalada correcta. Auditoría inicial completada y primeras correcciones arquitectónicas aplicadas en tiempo real, gráficas y Perspectivas.

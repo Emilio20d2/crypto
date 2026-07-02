@@ -409,5 +409,8 @@ export interface PerspectivesSimulationOutput {
   realizedGainEur: number;
   unrealizedGainEur: number;
   netProfitEur: number;
+  twrCumulative: number | null;
+  twrAnnualized: number | null;
+  xirr: number | null;
   validationErrors: string[];
 }
